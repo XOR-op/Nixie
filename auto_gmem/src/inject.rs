@@ -1,6 +1,6 @@
-use std::{fmt::Display, io, path::Path};
+use std::{fmt::Display, path::Path};
 
-use nix::libc::{self, waitpid, PTRACE_ATTACH, SIGSTOP};
+use nix::libc::{self, waitpid, PTRACE_ATTACH, SIGSTOP, SIGTRAP};
 
 #[derive(Debug, Clone, Copy)]
 pub enum InjectErrorStage {
@@ -8,6 +8,7 @@ pub enum InjectErrorStage {
     WaitAttach(i32),
     BackupCtx,
     InjectCode,
+    WaitExec(i32),
     RecoverCtx,
 }
 
@@ -36,9 +37,9 @@ impl Display for InjectError {
     }
 }
 
-macro_rules! check_zero {
+macro_rules! check_err {
     ($e:expr,$stage:expr) => {
-        if $e != 0 {
+        if $e == -1 {
             return Err(InjectError {
                 stage: $stage,
                 errno: nix::errno::Errno::last(),
@@ -48,45 +49,65 @@ macro_rules! check_zero {
 }
 
 pub fn inject_process(pid: i32, func_offset: u64) -> Result<(), InjectError> {
-    // Attach to the process
-    check_zero!(
-        unsafe { libc::ptrace(PTRACE_ATTACH, pid, 0, 0) },
-        InjectErrorStage::Attach
-    );
     unsafe {
+        // Attach to the process
+        check_err!(
+            libc::ptrace(PTRACE_ATTACH, pid, 0, 0),
+            InjectErrorStage::Attach
+        );
         let mut status = 0;
         waitpid(pid, &mut status as *mut _, 0);
-        if status != SIGSTOP {
+        if !(libc::WIFSTOPPED(status) && libc::WSTOPSIG(status) == SIGSTOP) {
             return Err(InjectError::new(InjectErrorStage::WaitAttach(status)));
         }
-    };
-    // Backup the context
-    let mut user_regs: libc::user_regs_struct = unsafe { std::mem::zeroed() };
-    check_zero!(
-        unsafe { libc::ptrace(libc::PTRACE_GETREGS, pid, 0, &mut user_regs as *mut _) },
-        InjectErrorStage::BackupCtx
-    );
-    let regs_bak = user_regs.clone();
-    let text_bak = unsafe { libc::ptrace(libc::PTRACE_PEEKTEXT, pid, user_regs.rip, 0) };
-    check_zero!(text_bak, InjectErrorStage::BackupCtx);
-    // Inject the code
-    /*
-     *  ff d0 => call rax
-     *  cc => int3
-     */
-    let code: usize = 0xccd0ff;
-    user_regs.rax = func_offset as u64;
-    check_zero!(
-        unsafe { libc::ptrace(libc::PTRACE_POKETEXT, pid, user_regs.rip, code) },
-        InjectErrorStage::InjectCode
-    );
-    check_zero!(
-        unsafe { libc::ptrace(libc::PTRACE_CONT, pid, 0, 0) },
-        InjectErrorStage::InjectCode
-    );
-    // Recover the context
-    todo!("Recover the context");
-    Ok(())
+        // Backup the context
+        let mut user_regs: libc::user_regs_struct = std::mem::zeroed();
+        check_err!(
+            libc::ptrace(libc::PTRACE_GETREGS, pid, 0, &mut user_regs as *mut _),
+            InjectErrorStage::BackupCtx
+        );
+        let regs_bak = user_regs.clone();
+        let text_bak: i64 = libc::ptrace(libc::PTRACE_PEEKTEXT, pid, regs_bak.rip, 0);
+        check_err!(text_bak, InjectErrorStage::BackupCtx);
+        // Inject the code
+        /*
+         *  ff d0 => call rax
+         *  cc => int3
+         */
+        let code: u64 = 0xccd0ff;
+        user_regs.rax = func_offset as u64;
+        check_err!(
+            libc::ptrace(libc::PTRACE_SETREGS, pid, 0, &user_regs as *const _),
+            InjectErrorStage::InjectCode
+        );
+        check_err!(
+            libc::ptrace(libc::PTRACE_POKETEXT, pid, regs_bak.rip, code),
+            InjectErrorStage::InjectCode
+        );
+        check_err!(
+            libc::ptrace(libc::PTRACE_CONT, pid, 0, 0),
+            InjectErrorStage::InjectCode
+        );
+        // Recover the context
+        let mut status = 0;
+        waitpid(pid, &mut status as *mut _, 0);
+        if !(libc::WSTOPSIG(status) == SIGTRAP) {
+            return Err(InjectError::new(InjectErrorStage::WaitExec(status)));
+        }
+        check_err!(
+            libc::ptrace(libc::PTRACE_POKETEXT, pid, regs_bak.rip, text_bak),
+            InjectErrorStage::RecoverCtx
+        );
+        check_err!(
+            libc::ptrace(libc::PTRACE_SETREGS, pid, 0, &regs_bak as *const _),
+            InjectErrorStage::RecoverCtx
+        );
+        check_err!(
+            libc::ptrace(libc::PTRACE_CONT, pid, 0, 0),
+            InjectErrorStage::RecoverCtx
+        );
+        Ok(())
+    }
 }
 
 pub fn locate_dylib_base(pid: i32, so_name: &str) -> Option<u64> {
@@ -95,8 +116,9 @@ pub fn locate_dylib_base(pid: i32, so_name: &str) -> Option<u64> {
     for line in maps.lines() {
         if line.contains(so_name) && line.contains("r-xp") {
             let addr = line.split("-").next()?;
-            dbg!(addr);
-            return u64::from_str_radix(addr, 16).ok();
+            let in_lib_offset =
+                u64::from_str_radix(line.split_ascii_whitespace().skip(2).next()?, 16).ok()?;
+            return Some(u64::from_str_radix(addr, 16).ok()? - in_lib_offset);
         }
     }
     None
