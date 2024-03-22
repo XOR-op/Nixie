@@ -19,3 +19,8 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     });
     return malloc_func(dev_ptr, size, 0x01);
 }
+
+#[no_mangle]
+pub extern "C" fn _auto_gmem_prefetch() {
+    println!("Hello from cuda_hook!")
+}
