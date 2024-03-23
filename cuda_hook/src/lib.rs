@@ -1,5 +1,6 @@
+use std::sync::Mutex;
+
 use cudarc::driver::sys::{cuMemPrefetchAsync, cuStreamCreate, cudaError_enum, CUdevice, CUstream};
-use dashmap::DashMap;
 use nix;
 use nix::libc::{self, dlsym, RTLD_NEXT};
 use once_cell::sync::OnceCell;
@@ -16,7 +17,7 @@ static FREE_FN: OnceCell<CudaFreeType> = OnceCell::new();
 
 static STREAM_VEC: OnceCell<Vec<CuStreamWrapper>> = OnceCell::new();
 
-static PTR_MAPPING: OnceCell<DashMap<u64, usize>> = OnceCell::new();
+static PTR_MAPPING: OnceCell<Mutex<Vec<(u64, usize)>>> = OnceCell::new();
 
 #[allow(non_snake_case)]
 #[no_mangle]
@@ -31,19 +32,23 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     let res = malloc_func(dev_ptr, size, 0x01);
     if res == cudaError_enum::CUDA_SUCCESS {
         PTR_MAPPING
-            .get_or_init(|| DashMap::new())
-            .insert(unsafe { *dev_ptr as u64 }, size);
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap()
+            .push((unsafe { *dev_ptr as u64 }, size));
         let total_size = PTR_MAPPING
             .get()
             .unwrap()
+            .lock()
+            .unwrap()
             .iter()
-            .map(|re| *re.value())
+            .map(|pr| pr.1)
             .sum();
         println!(
             "cudaMalloc: size={}, total_size={}, count={}",
             size_to_string(size),
             size_to_string(total_size),
-            PTR_MAPPING.get().unwrap().len()
+            PTR_MAPPING.get().unwrap().lock().unwrap().len()
         );
     }
     return res;
@@ -59,9 +64,13 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         }
         std::mem::transmute(func)
     });
-    PTR_MAPPING
-        .get_or_init(|| DashMap::new())
-        .remove(&(dev_ptr as u64));
+    let mut mapping = PTR_MAPPING
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap();
+    if let Some(idx) = mapping.iter().position(|pr| pr.0 == dev_ptr as u64) {
+        mapping.remove(idx);
+    }
     return free_func(dev_ptr);
 }
 
@@ -82,12 +91,12 @@ pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) {
     });
     let mut prefetch_cnt = 0;
     let mut stream_idx = 0;
-    for re in PTR_MAPPING.get().unwrap().iter() {
+    for pair in PTR_MAPPING.get().unwrap().lock().unwrap().iter() {
         if prefetch_cnt > streams.len() * 40 {
             break;
         }
-        let ptr = *re.key();
-        let size = *re.value();
+        let ptr = pair.0;
+        let size = pair.1;
         if size >= 1024 * 1024 * size_mb as usize {
             let start = std::time::Instant::now();
             let res =
