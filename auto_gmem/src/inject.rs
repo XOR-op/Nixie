@@ -48,7 +48,7 @@ macro_rules! check_err {
     };
 }
 
-pub fn inject_process(pid: i32, func_offset: u64, prefetch_size: u64) -> Result<(), InjectError> {
+pub fn inject_process(pid: i32, func_offset: u64, rdi: u64) -> Result<(), InjectError> {
     unsafe {
         // Attach to the process
         check_err!(
@@ -76,7 +76,7 @@ pub fn inject_process(pid: i32, func_offset: u64, prefetch_size: u64) -> Result<
          */
         let code: u64 = 0xccd0ff;
         user_regs.rax = func_offset as u64;
-        user_regs.rdi = prefetch_size;
+        user_regs.rdi = rdi;
         check_err!(
             libc::ptrace(libc::PTRACE_SETREGS, pid, 0, &user_regs as *const _),
             InjectErrorStage::InjectCode
