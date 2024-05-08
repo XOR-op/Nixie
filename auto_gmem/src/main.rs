@@ -11,9 +11,9 @@ struct PrefetchArgs {
 
 #[derive(Debug, Parser)]
 struct AttributeArgs {
-    // set read-mostly attribute
-    #[arg(short, long)]
-    pub read_mostly: bool,
+    // set read duplicatoin attribute
+    #[arg(short, long, alias = "read-dup")]
+    pub read_dup: Option<bool>,
 }
 
 #[derive(Debug, Parser)]
@@ -46,18 +46,20 @@ fn main() {
             ))
             .ok();
         }
-        ProgramArgs::Attribute(AttributeArgs { read_mostly }) => {
-            let func_offset = resolve_func_offset(
-                "_auto_gmem_advise_read_mostly",
-                "./target/release/libcuda_hook.so",
-            )
-            .unwrap();
-            dbg!(inject_process(
-                args.pid as i32,
-                dylib_base + func_offset,
-                read_mostly as u64
-            ))
-            .ok();
+        ProgramArgs::Attribute(AttributeArgs { read_dup }) => {
+            if let Some(read_dup) = read_dup {
+                let func_offset = resolve_func_offset(
+                    "_auto_gmem_advise_read_mostly",
+                    "./target/release/libcuda_hook.so",
+                )
+                .unwrap();
+                dbg!(inject_process(
+                    args.pid as i32,
+                    dylib_base + func_offset,
+                    read_dup as u64
+                ))
+                .ok();
+            }
         }
     }
 }
