@@ -1,6 +1,21 @@
-/target
+# IDE files
 .vscode
 .idea
 .DS_Store
+
+# Private files
 _private/
+
+# Compiled files
+*.o
+*.mod
+*.ko
+*.cmd
+*.symvers
+*.order
+*.markers
+*.dwo
+*.dwo-*
 output/
+build/
+/target
