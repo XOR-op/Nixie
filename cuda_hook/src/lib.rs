@@ -15,10 +15,14 @@ unsafe impl Sync for CuStreamWrapper {}
 static MALLOC_FN: OnceCell<CudaMallocType> = OnceCell::new();
 static FREE_FN: OnceCell<CudaFreeType> = OnceCell::new();
 
+/// All streams used for prefetching
 static STREAM_VEC: OnceCell<Vec<CuStreamWrapper>> = OnceCell::new();
 
+/// Global mapping of device pointers and their sizes
 static PTR_MAPPING: OnceCell<Mutex<Vec<(u64, usize)>>> = OnceCell::new();
 
+/// For some reasons, cudaMemPrefetchAsync exhibits blocking behavior.
+/// Use a separate thread to prefetch.
 static PREFETCH_REQ_QUEUE: OnceCell<mpsc::Sender<u64>> = OnceCell::new();
 
 #[allow(non_snake_case)]
@@ -156,6 +160,9 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool) {
             return;
         }
         for (dev_ptr, size) in mapping.iter() {
+            if false && *size < 1024 * 1024 * 512 {
+                continue;
+            }
             let res = cudarc::driver::sys::cuMemAdvise(
                 *dev_ptr as u64,
                 *size,
