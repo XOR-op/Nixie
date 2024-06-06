@@ -160,7 +160,7 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool) {
             return;
         }
         for (dev_ptr, size) in mapping.iter() {
-            if false && *size < 1024 * 1024 * 512 {
+            if true && *size < 1024 * 1024 * 512 {
                 continue;
             }
             let res = cudarc::driver::sys::cuMemAdvise(

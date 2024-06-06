@@ -9,3 +9,5 @@ edition = "2021"
 clap = { version = "4.5.4", features = ["derive"] }
 goblin = "0.8.0"
 nix = "0.28.0"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "std", "fmt", "json"] }
