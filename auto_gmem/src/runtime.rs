@@ -4,10 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use syscalls::{syscall, Sysno};
-
 use tokio::{io::AsyncReadExt, net::UnixListener};
 
-use crate::error::AutoGMemError;
+use crate::{error::AutoGMemError, uvm::event_queue::EventQueue};
 use auto_gmem_ipc::Message;
 
 pub struct Runtime {
@@ -46,12 +45,19 @@ impl Runtime {
         loop {
             let (stream, _) = controller.get_listener().accept().await?;
             tokio::spawn(async move {
-                let _ = Self::serve_conn(stream).await;
+                match Self::serve_conn(stream).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!("Client[pid={}] {}", e.1.unwrap_or(-1), e.0);
+                    }
+                }
             });
         }
     }
 
-    async fn serve_conn(mut stream: tokio::net::UnixStream) -> Result<(), AutoGMemError> {
+    async fn serve_conn(
+        mut stream: tokio::net::UnixStream,
+    ) -> Result<(), (AutoGMemError, Option<i32>)> {
         let mut length_buf = [0u8; 4];
         let mut peer_pid = None;
 
@@ -59,12 +65,19 @@ impl Runtime {
             // read entire message
             let length = u32::from_le_bytes(length_buf);
             let mut buf = vec![0u8; length as usize];
-            stream.read_exact(&mut buf).await?;
-            let message = bincode::deserialize(&buf)?;
+            stream
+                .read_exact(&mut buf)
+                .await
+                .map_err(|e| (AutoGMemError::from(e), peer_pid))?;
+            let message =
+                bincode::deserialize(&buf).map_err(|e| (AutoGMemError::from(e), peer_pid))?;
 
             // make sure the peer process has registered itself
             if peer_pid.is_none() && !matches!(message, Message::ClientHello(_)) {
-                return Err(AutoGMemError::InvalidMessage);
+                return Err((
+                    AutoGMemError::Invalid("ClientHello message is required"),
+                    None,
+                ));
             }
             match message {
                 Message::ClientHello(hello) => {
@@ -73,14 +86,30 @@ impl Runtime {
                 }
                 Message::UvmFd(fd) => {
                     tracing::debug!("UvmFd: {:?}", fd);
+                    let (pid_fd, uvm_fd) =
+                        duplicate_peer_fd(peer_pid.unwrap(), fd.fd).map_err(|e| (e, peer_pid))?;
+                    let event_queue = EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))?;
+                    let peer_pid2 = peer_pid;
+                    tokio::spawn(async move {
+                        if let Err(e) = Self::monitor_process(pid_fd, event_queue).await {
+                            tracing::error!("Client[pid={}] {}", peer_pid2.unwrap(), e);
+                        }
+                    });
                 }
             }
         }
         Ok(())
     }
+
+    async fn monitor_process(
+        pid_fd: OwnedFd,
+        event_queue: EventQueue,
+    ) -> Result<(), AutoGMemError> {
+        todo!()
+    }
 }
 
-fn get_peer_fd(pid: i32, remote_fd: i32) -> Result<OwnedFd, AutoGMemError> {
+fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), AutoGMemError> {
     let pid_fd = match unsafe { syscall!(Sysno::pidfd_open, pid, 0) } {
         Ok(fd) => fd as c_int,
         Err(e) => {
@@ -92,8 +121,9 @@ fn get_peer_fd(pid: i32, remote_fd: i32) -> Result<OwnedFd, AutoGMemError> {
     };
     match unsafe { syscall!(Sysno::pidfd_getfd, pid_fd, remote_fd, 0) } {
         Ok(fd) => {
-            let _ = nix::unistd::close(pid_fd);
-            Ok(unsafe { OwnedFd::from_raw_fd(fd as c_int) })
+            let pid_fd = unsafe { OwnedFd::from_raw_fd(pid_fd) };
+            let uvm_fd = unsafe { OwnedFd::from_raw_fd(fd as c_int) };
+            Ok((pid_fd, uvm_fd))
         }
         Err(e) => {
             let _ = nix::unistd::close(pid_fd);

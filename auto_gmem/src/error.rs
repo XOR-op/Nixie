@@ -8,6 +8,8 @@ pub enum AutoGMemError {
     Bincode(#[from] bincode::Error),
     #[error("Unix error: {0} for {1}")]
     Errno(nix::errno::Errno, &'static str),
-    #[error("Invalid message")]
-    InvalidMessage,
+    #[error("Invalid: {0}")]
+    Invalid(&'static str),
+    #[error("Invalid: {0}")]
+    Invalid2(String),
 }

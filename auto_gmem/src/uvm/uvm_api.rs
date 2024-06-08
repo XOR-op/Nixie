@@ -44,27 +44,6 @@ impl UvmToolsInitEventTrackerParams {
     }
 }
 
-#[repr(C)]
-pub(crate) struct UvmToolsEventControlData_V2 {
-    pub volatile_get_ahead: u32,
-    pub volatile_get_behind: u32,
-    pub volatile_put_ahead: u32,
-    pub volatile_put_behind: u32,
-    pub version: u32,
-    pub _padding32bits: u32,
-    pub dropped: [u64; 64], // UvmEventNumTypesAll
-}
+const UVM_TOOLS_INIT_EVENT_TRACKER_IOCTL: u32 = 56;
 
-impl UvmToolsEventControlData_V2 {
-    pub fn zeroed() -> Self {
-        Self {
-            volatile_get_ahead: 0,
-            volatile_get_behind: 0,
-            volatile_put_ahead: 0,
-            volatile_put_behind: 0,
-            version: 2, // UvmToolsEventQueueVersion_V2
-            _padding32bits: Default::default(),
-            dropped: [0; 64],
-        }
-    }
-}
+nix::ioctl_readwrite_bad!(uvm_tools_init_event_tracker, UVM_TOOLS_INIT_EVENT_TRACKER_IOCTL, UvmToolsInitEventTrackerParams);
