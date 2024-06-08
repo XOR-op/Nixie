@@ -4,6 +4,7 @@ use clap::Parser;
 mod inject;
 mod runtime;
 mod uvm;
+mod error;
 
 #[derive(Debug, Parser)]
 struct PrefetchArgs {
