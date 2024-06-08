@@ -9,10 +9,14 @@ use crate::{utils::size_to_string, PTR_MAPPING};
 type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
 type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
 type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
+type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
 
 static MALLOC_FN: OnceCell<CudaMallocType> = OnceCell::new();
 static FREE_FN: OnceCell<CudaFreeType> = OnceCell::new();
 static OPEN_FN: OnceCell<OpenType> = OnceCell::new();
+static IOCTL_FN: OnceCell<IoCtlType> = OnceCell::new();
+
+static UVM_FD: OnceCell<i32> = OnceCell::new();
 
 #[allow(non_snake_case)]
 #[no_mangle]
@@ -81,11 +85,37 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
         std::mem::transmute(func)
     });
     let res = open_func(path, oflag, mode);
+    if UVM_FD.get().is_none()
+        && std::ffi::CStr::from_ptr(path)
+            .to_str()
+            .is_ok_and(|s| s == "/dev/nvidia-uvm")
+    {
+        let _ = UVM_FD.set(res);
+    }
     println!(
         "open({:?}, {:08X}) -> {}",
         std::ffi::CStr::from_ptr(path),
         oflag,
         res
     );
+    return res;
+}
+
+#[allow(non_snake_case)]
+#[no_mangle]
+pub unsafe extern "C" fn ioctl(fd: c_int, request: c_int, arg: *mut libc::c_void) -> c_int {
+    let ioctl_func = IOCTL_FN.get_or_init(|| {
+        let func = dlsym(RTLD_NEXT, cr"ioctl".as_ptr()) as *mut IoCtlType;
+        if func.is_null() {
+            panic!("Failed to get original ioctl function");
+        }
+        std::mem::transmute(func)
+    });
+    let res = ioctl_func(fd, request, arg);
+    // if let Some(uvm_fd) = UVM_FD.get() {
+    //     if *uvm_fd == fd {
+    //         println!("ioctl({}, {}, ...) -> {}", fd, request, res);
+    //     }
+    // }
     return res;
 }
