@@ -18,3 +18,4 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter", "std", "fmt
 
 auto_gmem_ipc = { path = "../auto_gmem_ipc" }
 chrono = "0.4.38"
+syscalls = { version = "0.6.18", features = ["x86_64"] }

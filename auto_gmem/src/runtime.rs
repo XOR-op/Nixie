@@ -1,4 +1,9 @@
-use std::path::{Path, PathBuf};
+use nix::libc::c_int;
+use std::{
+    os::fd::{FromRawFd, OwnedFd},
+    path::{Path, PathBuf},
+};
+use syscalls::{syscall, Sysno};
 
 use tokio::{io::AsyncReadExt, net::UnixListener};
 
@@ -75,7 +80,33 @@ impl Runtime {
     }
 }
 
+fn get_peer_fd(pid: i32, remote_fd: i32) -> Result<OwnedFd, AutoGMemError> {
+    let pid_fd = match unsafe { syscall!(Sysno::pidfd_open, pid, 0) } {
+        Ok(fd) => fd as c_int,
+        Err(e) => {
+            return Err(AutoGMemError::Errno(
+                nix::errno::Errno::from_raw(e.into_raw()),
+                "pidfd_open",
+            ));
+        }
+    };
+    match unsafe { syscall!(Sysno::pidfd_getfd, pid_fd, remote_fd, 0) } {
+        Ok(fd) => {
+            let _ = nix::unistd::close(pid_fd);
+            Ok(unsafe { OwnedFd::from_raw_fd(fd as c_int) })
+        }
+        Err(e) => {
+            let _ = nix::unistd::close(pid_fd);
+            Err(AutoGMemError::Errno(
+                nix::errno::Errno::from_raw(e.into_raw()),
+                "pidfd_getfd",
+            ))
+        }
+    }
+}
+
 // Utils
+
 struct UnixListenerGuard {
     path: PathBuf,
     listener: Option<UnixListener>,
