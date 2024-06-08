@@ -1,7 +1,7 @@
 use cudarc::driver::sys::CUstream;
-use once_cell::sync::OnceCell;
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Mutex, OnceLock};
 
+mod comm;
 mod intercept;
 mod snippet;
 mod utils;
@@ -12,10 +12,10 @@ unsafe impl Sync for CuStreamWrapper {}
 
 /// For some reasons, cudaMemPrefetchAsync exhibits blocking behavior.
 /// Use a separate thread to prefetch.
-pub(crate) static PREFETCH_REQ_QUEUE: OnceCell<mpsc::Sender<u64>> = OnceCell::new();
+pub(crate) static PREFETCH_REQ_QUEUE: OnceLock<mpsc::Sender<u64>> = OnceLock::new();
 
 /// All streams used for prefetching
-pub(crate) static STREAM_VEC: OnceCell<Vec<CuStreamWrapper>> = OnceCell::new();
+pub(crate) static STREAM_VEC: OnceLock<Vec<CuStreamWrapper>> = OnceLock::new();
 
 /// Global mapping of device pointers and their sizes
-pub(crate) static PTR_MAPPING: OnceCell<Mutex<Vec<(u64, usize)>>> = OnceCell::new();
+pub(crate) static PTR_MAPPING: OnceLock<Mutex<Vec<(u64, usize)>>> = OnceLock::new();

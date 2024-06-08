@@ -9,9 +9,11 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+auto_gmem_ipc = { path = "../auto_gmem_ipc" }
+
 cudarc = { version = "0.10.0", default-features = false, features = [
     "std",
     "driver",
 ] }
-once_cell = "1.19.0"
 nix = { version = "0.28.0", features = ["fs"] }
+bincode = "1.3.3"

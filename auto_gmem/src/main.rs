@@ -1,10 +1,11 @@
 use crate::inject::*;
 use clap::Parser;
 
+mod error;
 mod inject;
+mod logging;
 mod runtime;
 mod uvm;
-mod error;
 
 #[derive(Debug, Parser)]
 struct PrefetchArgs {

@@ -1,9 +1,9 @@
 use cudarc::driver::sys::cudaError_enum;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
-use once_cell::sync::OnceCell;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
+use crate::comm::notify_fd;
 use crate::{utils::size_to_string, PTR_MAPPING};
 
 type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
@@ -11,12 +11,12 @@ type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
 type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
 type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
 
-static MALLOC_FN: OnceCell<CudaMallocType> = OnceCell::new();
-static FREE_FN: OnceCell<CudaFreeType> = OnceCell::new();
-static OPEN_FN: OnceCell<OpenType> = OnceCell::new();
-static IOCTL_FN: OnceCell<IoCtlType> = OnceCell::new();
+static MALLOC_FN: OnceLock<CudaMallocType> = OnceLock::new();
+static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
+static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
+static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
 
-static UVM_FD: OnceCell<i32> = OnceCell::new();
+static UVM_FD: OnceLock<i32> = OnceLock::new();
 
 #[allow(non_snake_case)]
 #[no_mangle]
@@ -91,6 +91,7 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
             .is_ok_and(|s| s == "/dev/nvidia-uvm")
     {
         let _ = UVM_FD.set(res);
+        notify_fd(res);
     }
     println!(
         "open({:?}, {:08X}) -> {}",
