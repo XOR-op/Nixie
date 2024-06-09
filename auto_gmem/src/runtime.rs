@@ -89,10 +89,11 @@ impl Runtime {
                     let (pid_fd, uvm_fd) =
                         duplicate_peer_fd(peer_pid.unwrap(), fd.fd).map_err(|e| (e, peer_pid))?;
                     let event_queue = EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))?;
-                    let peer_pid2 = peer_pid;
+                    let peer_pid2 = peer_pid.unwrap();
                     tokio::spawn(async move {
+                        tracing::info!("Monitoring process [pid={}]", peer_pid2);
                         if let Err(e) = Self::monitor_process(pid_fd, event_queue).await {
-                            tracing::error!("Client[pid={}] {}", peer_pid2.unwrap(), e);
+                            tracing::error!("Client[pid={}] {}", peer_pid2, e);
                         }
                     });
                 }
@@ -105,7 +106,9 @@ impl Runtime {
         pid_fd: OwnedFd,
         event_queue: EventQueue,
     ) -> Result<(), AutoGMemError> {
-        todo!()
+        loop {
+            let _ = tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
     }
 }
 

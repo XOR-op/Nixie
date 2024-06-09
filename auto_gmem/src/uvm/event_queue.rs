@@ -7,15 +7,15 @@ use crate::error::AutoGMemError;
 
 use super::{
     uvm_api::{uvm_tools_init_event_tracker, UvmToolsInitEventTrackerParams},
-    uvm_binding::{UvmEventEntry_V2, UvmToolsEventControlData_V2},
+    uvm_binding::{UvmEventEntry_V1, UvmToolsEventControlData_V1},
     PageBackedArray,
 };
 
 pub(crate) struct EventQueue {
     uvm_tools_handle: ManuallyDrop<OwnedFd>,
     uvm_fd: ManuallyDrop<OwnedFd>,
-    event_buffer: PageBackedArray<UvmEventEntry_V2>,
-    control_buffer: PageBackedArray<UvmToolsEventControlData_V2>,
+    event_buffer: PageBackedArray<UvmEventEntry_V1>,
+    control_buffer: PageBackedArray<UvmToolsEventControlData_V1>,
 }
 
 impl EventQueue {
@@ -34,8 +34,8 @@ impl EventQueue {
             }
             ManuallyDrop::new(OwnedFd::from_raw_fd(uvm_tools_handle))
         };
-        let event_buffer = PageBackedArray::<UvmEventEntry_V2>::new(len);
-        let control_buffer = PageBackedArray::<UvmToolsEventControlData_V2>::new(1);
+        let event_buffer = PageBackedArray::<UvmEventEntry_V1>::new(len);
+        let control_buffer = PageBackedArray::<UvmToolsEventControlData_V1>::new(1);
 
         // ioctl to init event tracker
         let mut args = UvmToolsInitEventTrackerParams::create_event_queue(
@@ -49,7 +49,7 @@ impl EventQueue {
                 .map_err(|e| AutoGMemError::Errno(e, "uvm_tools_init_event_tracker"))?
         };
         match args.result() {
-            (0, 2) => {
+            (0, 0) | (0, 1) => {
                 tracing::info!("Opened UVM event queue successfully");
                 Ok(Self {
                     uvm_tools_handle,

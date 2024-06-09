@@ -10,11 +10,24 @@ async-bincode = "0.7.2"
 bincode = "1.3.3"
 clap = { version = "4.5.4", features = ["derive"] }
 goblin = "0.8.0"
-nix = {version = "0.28.0", features = ["fs", "user", "ioctl"]}
+nix = { version = "0.28.0", features = ["fs", "user", "ioctl"] }
 thiserror = "1.0.61"
-tokio = { version = "1.38.0", features = ["rt-multi-thread", "net", "sync", "macros", "signal", "io-util"] }
+tokio = { version = "1.38.0", features = [
+    "rt-multi-thread",
+    "net",
+    "sync",
+    "macros",
+    "signal",
+    "io-util",
+    "time",
+] }
 tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "std", "fmt", "json"] }
+tracing-subscriber = { version = "0.3.18", features = [
+    "env-filter",
+    "std",
+    "fmt",
+    "json",
+] }
 
 auto_gmem_ipc = { path = "../auto_gmem_ipc" }
 chrono = "0.4.38"

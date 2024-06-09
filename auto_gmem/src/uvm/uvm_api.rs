@@ -46,4 +46,8 @@ impl UvmToolsInitEventTrackerParams {
 
 const UVM_TOOLS_INIT_EVENT_TRACKER_IOCTL: u32 = 56;
 
-nix::ioctl_readwrite_bad!(uvm_tools_init_event_tracker, UVM_TOOLS_INIT_EVENT_TRACKER_IOCTL, UvmToolsInitEventTrackerParams);
+nix::ioctl_readwrite_bad!(
+    uvm_tools_init_event_tracker,
+    UVM_TOOLS_INIT_EVENT_TRACKER_IOCTL,
+    UvmToolsInitEventTrackerParams
+);
