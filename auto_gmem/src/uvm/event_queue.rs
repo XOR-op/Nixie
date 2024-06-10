@@ -6,8 +6,11 @@ use std::{
 use crate::error::AutoGMemError;
 
 use super::{
-    uvm_api::{uvm_tools_init_event_tracker, UvmToolsInitEventTrackerParams},
-    uvm_binding::{UvmEventEntry_V1, UvmToolsEventControlData_V1},
+    uvm_api::{
+        uvm_tools_event_queue_enable_events, uvm_tools_init_event_tracker,
+        UvmToolsEventQueueEnableEventsParams, UvmToolsInitEventTrackerParams,
+    },
+    uvm_binding::{UvmEventEntry_V1, UvmEventType, UvmToolsEventControlData_V1},
     PageBackedArray,
 };
 
@@ -44,10 +47,11 @@ impl EventQueue {
             control_buffer.as_ptr() as u64,
             uvm_fd.as_raw_fd() as u32,
         );
-        unsafe {
+        let res = unsafe {
             uvm_tools_init_event_tracker(uvm_tools_handle.as_raw_fd(), &mut args as *mut _)
                 .map_err(|e| AutoGMemError::Errno(e, "uvm_tools_init_event_tracker"))?
         };
+        tracing::debug!("uvm_tools_init_event_tracker -> {:?}", res);
         match args.result() {
             (0, 0) | (0, 1) => {
                 tracing::info!("Opened UVM event queue successfully");
@@ -63,6 +67,111 @@ impl EventQueue {
                 e, ver
             ))),
         }
+    }
+
+    pub fn enable_event(&self, event_type: UvmEventType) -> Result<(), AutoGMemError> {
+        let mut args = UvmToolsEventQueueEnableEventsParams {
+            event_type_flags: 1 << event_type as u64,
+            rm_status: 0,
+        };
+        unsafe {
+            uvm_tools_event_queue_enable_events(
+                self.uvm_tools_handle.as_raw_fd(),
+                &mut args as *mut _,
+            )
+        }
+        .map_err(|e| AutoGMemError::Errno(e, "uvm_tools_event_queue_enable_events"))?;
+        if args.rm_status != 0 {
+            Err(AutoGMemError::Invalid2(format!(
+                "uvm_tools_event_queue_enable_events failed with error: {}",
+                args.rm_status
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn read_events<F>(&mut self, mut callback: F) -> u32
+    where
+        F: FnMut(&UvmEventEntry_V1) -> bool,
+    {
+        let mut completed = 0;
+        // [behind, ahead)
+        let put_behind = unsafe { std::ptr::read_volatile(self.put_behind_ptr()) };
+        let get_behind = unsafe { std::ptr::read_volatile(self.get_behind_ptr()) };
+        unsafe { std::ptr::write_volatile(self.get_ahead_ptr_mut(), put_behind) };
+
+        // Read events
+        for i in (get_behind as usize + self.event_buffer.len())
+            ..(put_behind as usize + self.event_buffer.len())
+        {
+            let idx = self.wrap_around(i);
+            let event = &self.event_buffer.as_slice()[idx];
+            if callback(event) {
+                completed += 1;
+            }
+        }
+
+        // update get_behind
+        unsafe { std::ptr::write_volatile(self.get_behind_ptr_mut(), put_behind) };
+        completed
+    }
+}
+
+// Helper functions
+impl EventQueue {
+    /// Get the number of events in the buffer
+    fn buffer_usage(&self) -> u32 {
+        let put_ahead = unsafe { std::ptr::read_volatile(self.put_ahead_ptr()) };
+        let get_behind = unsafe { std::ptr::read_volatile(self.get_behind_ptr()) };
+        (self.event_buffer.len() as u32 + put_ahead - get_behind)
+            & (self.event_buffer.len() as u32 - 1)
+    }
+
+    #[inline(always)]
+    fn wrap_around(&self, idx: usize) -> usize {
+        debug_assert!(is_pow2(self.event_buffer.len()));
+        idx & (self.event_buffer.len() - 1)
+    }
+
+    #[inline(always)]
+    fn put_behind_ptr(&self) -> *const u32 {
+        &self.control_buffer.as_slice()[0].put_behind as *const u32
+    }
+
+    #[inline(always)]
+    fn put_behind_ptr_mut(&mut self) -> *mut u32 {
+        &mut self.control_buffer.as_slice_mut()[0].put_behind as *mut u32
+    }
+
+    #[inline(always)]
+    fn put_ahead_ptr(&self) -> *const u32 {
+        &self.control_buffer.as_slice()[0].put_ahead as *const u32
+    }
+
+    #[inline(always)]
+    fn put_ahead_ptr_mut(&mut self) -> *mut u32 {
+        &mut self.control_buffer.as_slice_mut()[0].put_ahead as *mut u32
+    }
+
+    #[inline(always)]
+    fn get_behind_ptr(&self) -> *const u32 {
+        &self.control_buffer.as_slice()[0].get_behind as *const u32
+    }
+
+    #[inline(always)]
+    fn get_behind_ptr_mut(&mut self) -> *mut u32 {
+        &mut self.control_buffer.as_slice_mut()[0].get_behind as *mut u32
+    }
+
+    #[inline(always)]
+    fn get_ahead_ptr(&self) -> *const u32 {
+        &self.control_buffer.as_slice()[0].get_ahead as *const u32
+    }
+
+    #[inline(always)]
+    fn get_ahead_ptr_mut(&mut self) -> *mut u32 {
+        &mut self.control_buffer.as_slice_mut()[0].get_ahead as *mut u32
     }
 }
 

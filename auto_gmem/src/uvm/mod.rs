@@ -2,8 +2,8 @@ use std::alloc;
 use std::ptr::NonNull;
 
 pub(crate) mod event_queue;
-mod uvm_api;
-mod uvm_binding;
+pub(crate) mod uvm_api;
+pub(crate) mod uvm_binding;
 
 const PAGE_SIZE: usize = 4096;
 
@@ -33,22 +33,27 @@ impl<T> PageBackedArray<T> {
     }
 
     /// Get the length of the elements
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.ele_len
     }
 
+    #[inline(always)]
     pub fn as_slice(&self) -> &[T] {
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.ele_len) }
     }
 
+    #[inline(always)]
     pub fn as_slice_mut(&mut self) -> &mut [T] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.ele_len) }
     }
 
+    #[inline(always)]
     pub fn as_ptr(&self) -> *const T {
         self.ptr.as_ptr()
     }
 
+    #[inline(always)]
     pub unsafe fn as_mut(&mut self) -> *mut T {
         self.ptr.as_mut()
     }

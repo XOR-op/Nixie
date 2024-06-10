@@ -6,7 +6,10 @@ use std::{
 use syscalls::{syscall, Sysno};
 use tokio::{io::AsyncReadExt, net::UnixListener};
 
-use crate::{error::AutoGMemError, uvm::event_queue::EventQueue};
+use crate::{
+    error::AutoGMemError,
+    uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeReadDuplicateInvalidate},
+};
 use auto_gmem_ipc::Message;
 
 pub struct Runtime {
@@ -88,7 +91,7 @@ impl Runtime {
                     tracing::debug!("UvmFd: {:?}", fd);
                     let (pid_fd, uvm_fd) =
                         duplicate_peer_fd(peer_pid.unwrap(), fd.fd).map_err(|e| (e, peer_pid))?;
-                    let event_queue = EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))?;
+                    let event_queue = EventQueue::new(uvm_fd, 64).map_err(|e| (e, peer_pid))?;
                     let peer_pid2 = peer_pid.unwrap();
                     tokio::spawn(async move {
                         tracing::info!("Monitoring process [pid={}]", peer_pid2);
@@ -104,10 +107,35 @@ impl Runtime {
 
     async fn monitor_process(
         pid_fd: OwnedFd,
-        event_queue: EventQueue,
+        mut event_queue: EventQueue,
     ) -> Result<(), AutoGMemError> {
+        event_queue
+            .enable_event(UvmEventType_UvmEventTypeReadDuplicateInvalidate)
+            .map_err(|e| AutoGMemError::from(e))?;
+        tracing::info!("Listen READ_DUPLICATION_INVALIDATE event");
         loop {
             let _ = tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let n_completed = event_queue.read_events(|event| {
+                let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
+                if event_type != UvmEventType_UvmEventTypeReadDuplicateInvalidate as u8 {
+                    tracing::warn!("Unknown event type: {}", event_type);
+                    return false;
+                }
+                let event_ref =
+                    unsafe { &event.__bindgen_anon_1.eventData.readDuplicateInvalidate };
+                tracing::info!(
+                    "event: addr={:#018x}, size={}bytes",
+                    event_ref.address,
+                    event_ref.size
+                );
+                true
+            });
+            if n_completed > 0 {
+                tracing::info!(
+                    "Received {} READ_DUPLICATION_INVALIDATE events",
+                    n_completed
+                );
+            }
         }
     }
 }
