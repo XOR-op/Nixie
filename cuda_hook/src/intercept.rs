@@ -1,3 +1,4 @@
+use colored::Colorize;
 use cudarc::driver::sys::cudaError_enum;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
@@ -44,7 +45,9 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             .map(|pr| pr.1)
             .sum();
         println!(
-            "cudaMalloc: size={}, total_size={}, count={}",
+            "{}: at={}, size={}, total_size={}, count={}",
+            "cudaMalloc".green(),
+            format!("{:#018x}", unsafe { *dev_ptr as u64 }).blue(),
             size_to_string(size),
             size_to_string(total_size),
             PTR_MAPPING.get().unwrap().lock().unwrap().len()

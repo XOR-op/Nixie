@@ -1,5 +1,6 @@
 use std::{
     mem::ManuallyDrop,
+    ops::Range,
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
 };
 
@@ -99,11 +100,14 @@ impl EventQueue {
         // [behind, ahead)
         let put_behind = unsafe { std::ptr::read_volatile(self.put_behind_ptr()) };
         let get_behind = unsafe { std::ptr::read_volatile(self.get_behind_ptr()) };
+        if put_behind == get_behind {
+            return 0;
+        }
+        // We make sure we have some events to read
         unsafe { std::ptr::write_volatile(self.get_ahead_ptr_mut(), put_behind) };
 
         // Read events
-        for i in (get_behind as usize + self.event_buffer.len())
-            ..(put_behind as usize + self.event_buffer.len())
+        for i in circular_buffer_index_range(get_behind, put_behind, self.event_buffer.len() as u32)
         {
             let idx = self.wrap_around(i);
             let event = &self.event_buffer.as_slice()[idx];
@@ -111,9 +115,9 @@ impl EventQueue {
                 completed += 1;
             }
         }
-
         // update get_behind
         unsafe { std::ptr::write_volatile(self.get_behind_ptr_mut(), put_behind) };
+
         completed
     }
 }
@@ -186,4 +190,12 @@ impl Drop for EventQueue {
 
 fn is_pow2(n: usize) -> bool {
     n & (n - 1) == 0
+}
+
+fn circular_buffer_index_range(get_idx: u32, put_idx: u32, len: u32) -> Range<usize> {
+    if get_idx <= put_idx {
+        (get_idx as usize)..(put_idx as usize)
+    } else {
+        (get_idx as usize)..((len + put_idx) as usize)
+    }
 }

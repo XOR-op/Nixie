@@ -8,7 +8,7 @@ use tokio::{io::AsyncReadExt, net::UnixListener};
 
 use crate::{
     error::AutoGMemError,
-    uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeReadDuplicateInvalidate},
+    uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
 use auto_gmem_ipc::Message;
 
@@ -91,11 +91,12 @@ impl Runtime {
                     tracing::debug!("UvmFd: {:?}", fd);
                     let (pid_fd, uvm_fd) =
                         duplicate_peer_fd(peer_pid.unwrap(), fd.fd).map_err(|e| (e, peer_pid))?;
-                    let event_queue = EventQueue::new(uvm_fd, 64).map_err(|e| (e, peer_pid))?;
+                    let event_queue = EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))?;
                     let peer_pid2 = peer_pid.unwrap();
                     tokio::spawn(async move {
                         tracing::info!("Monitoring process [pid={}]", peer_pid2);
-                        if let Err(e) = Self::monitor_process(pid_fd, event_queue).await {
+                        if let Err(e) = Self::monitor_process(peer_pid2, pid_fd, event_queue).await
+                        {
                             tracing::error!("Client[pid={}] {}", peer_pid2, e);
                         }
                     });
@@ -106,34 +107,51 @@ impl Runtime {
     }
 
     async fn monitor_process(
+        peer_pid: i32,
         pid_fd: OwnedFd,
         mut event_queue: EventQueue,
     ) -> Result<(), AutoGMemError> {
         event_queue
-            .enable_event(UvmEventType_UvmEventTypeReadDuplicateInvalidate)
+            .enable_event(UvmEventType_UvmEventTypeGpuFault)
             .map_err(|e| AutoGMemError::from(e))?;
-        tracing::info!("Listen READ_DUPLICATION_INVALIDATE event");
+
+        tracing::info!("Listen events from process [pid={}]", peer_pid);
         loop {
             let _ = tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let mut write_cnt = 0;
+            let mut first = true;
             let n_completed = event_queue.read_events(|event| {
                 let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
-                if event_type != UvmEventType_UvmEventTypeReadDuplicateInvalidate as u8 {
-                    tracing::warn!("Unknown event type: {}", event_type);
-                    return false;
+                match event_type as u32 {
+                    UvmEventType_UvmEventTypeGpuFault => {
+                        let event_ref = unsafe { &event.__bindgen_anon_1.eventData.gpuFault };
+                        const UVM_FAULT_TYPE_WRITE: u8 = 3;
+                        match event_ref.faultType {
+                            UVM_FAULT_TYPE_WRITE => write_cnt += 1,
+                            _ => {}
+                        }
+                        if first && event_ref.faultType == UVM_FAULT_TYPE_WRITE {
+                            tracing::info!(
+                                "fault: addr={:#018x}, fault_type={}",
+                                event_ref.address,
+                                event_ref.faultType
+                            );
+                            first = false;
+                        }
+                        true
+                    }
+                    _ => {
+                        tracing::warn!("Unknown event type: {}", event_type);
+                        false
+                    }
                 }
-                let event_ref =
-                    unsafe { &event.__bindgen_anon_1.eventData.readDuplicateInvalidate };
-                tracing::info!(
-                    "event: addr={:#018x}, size={}bytes",
-                    event_ref.address,
-                    event_ref.size
-                );
-                true
             });
             if n_completed > 0 {
                 tracing::info!(
-                    "Received {} READ_DUPLICATION_INVALIDATE events",
-                    n_completed
+                    "[pid={}] Received {} events: write={}",
+                    peer_pid,
+                    n_completed,
+                    write_cnt
                 );
             }
         }
