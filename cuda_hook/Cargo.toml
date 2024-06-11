@@ -9,12 +9,12 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-auto_gmem_ipc = { path = "../auto_gmem_ipc" }
+auto_gmem_ipc.workspace = true
+bincode.workspace = true
+nix.workspace = true
 
 cudarc = { version = "0.10.0", default-features = false, features = [
     "std",
     "driver",
 ] }
-nix = { version = "0.28.0", features = ["fs"] }
-bincode = "1.3.3"
 colored = "2.1.0"
