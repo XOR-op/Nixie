@@ -48,7 +48,13 @@ macro_rules! check_err {
     };
 }
 
-pub fn inject_process(pid: i32, func_offset: u64, rdi: u64) -> Result<(), InjectError> {
+pub fn inject_process(
+    pid: i32,
+    func_offset: u64,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+) -> Result<u64, InjectError> {
     unsafe {
         // Attach to the process
         check_err!(
@@ -76,7 +82,9 @@ pub fn inject_process(pid: i32, func_offset: u64, rdi: u64) -> Result<(), Inject
          */
         let code: u64 = 0xccd0ff;
         user_regs.rax = func_offset as u64;
-        user_regs.rdi = rdi;
+        user_regs.rdi = arg1;
+        user_regs.rsi = arg2;
+        user_regs.rdx = arg3;
         check_err!(
             libc::ptrace(libc::PTRACE_SETREGS, pid, 0, &user_regs as *const _),
             InjectErrorStage::InjectCode
@@ -89,12 +97,19 @@ pub fn inject_process(pid: i32, func_offset: u64, rdi: u64) -> Result<(), Inject
             libc::ptrace(libc::PTRACE_CONT, pid, 0, 0),
             InjectErrorStage::InjectCode
         );
-        // Recover the context
+        // Wait injected code to finish
         let mut status = 0;
         waitpid(pid, &mut status as *mut _, 0);
         if !(libc::WSTOPSIG(status) == SIGTRAP) {
             return Err(InjectError::new(InjectErrorStage::WaitExec(status)));
         }
+        // Retrive return value
+        check_err!(
+            libc::ptrace(libc::PTRACE_GETREGS, pid, 0, &mut user_regs as *mut _),
+            InjectErrorStage::RecoverCtx
+        );
+        let ret_val = user_regs.rax;
+        // Recover the context
         check_err!(
             libc::ptrace(libc::PTRACE_POKETEXT, pid, regs_bak.rip, text_bak),
             InjectErrorStage::RecoverCtx
@@ -107,7 +122,7 @@ pub fn inject_process(pid: i32, func_offset: u64, rdi: u64) -> Result<(), Inject
             libc::ptrace(libc::PTRACE_CONT, pid, 0, 0),
             InjectErrorStage::RecoverCtx
         );
-        Ok(())
+        Ok(ret_val)
     }
 }
 

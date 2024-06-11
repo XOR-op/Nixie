@@ -11,7 +11,7 @@ mod uvm;
 
 #[derive(Debug, Parser)]
 struct PrefetchArgs {
-    #[arg(short, long, default_value = "1")]
+    #[arg(short, long, default_value = "0")]
     pub limit: u64,
     #[command(flatten)]
     pub cli: CliArgs,
@@ -22,6 +22,8 @@ struct AttributeArgs {
     // set read duplicatoin attribute
     #[arg(short, long, alias = "read-dup")]
     pub read_dup: Option<bool>,
+    #[arg(short, long, default_value = "0")]
+    pub limit: u64,
     #[command(flatten)]
     pub cli: CliArgs,
 }
@@ -42,7 +44,7 @@ struct CliArgs {
     pub dylib_path: Option<String>,
 }
 
-fn inject(args: CliArgs, func_sym: &str, eax: u64) {
+fn inject(args: CliArgs, func_sym: &str, arg1: u64, arg2: u64, arg3: u64) {
     let dylib_base = locate_dylib_base(args.pid as i32, "libcuda_hook.so").unwrap();
     let dylib_path = args
         .dylib_path
@@ -51,7 +53,9 @@ fn inject(args: CliArgs, func_sym: &str, eax: u64) {
     dbg!(inject_process(
         args.pid as i32,
         dylib_base + func_offset,
-        eax
+        arg1,
+        arg2,
+        arg3
     ))
     .ok();
 }
@@ -64,11 +68,17 @@ fn main() {
             runtime.start();
         }
         Args::Prefetch(args) => {
-            inject(args.cli, "_auto_gmem_prefetch", args.limit);
+            inject(args.cli, "_auto_gmem_prefetch", args.limit, 0, 0);
         }
         Args::Attribute(args) => {
             if let Some(read_dup) = args.read_dup {
-                inject(args.cli, "_auto_gmem_advise_read_mostly", read_dup as u64);
+                inject(
+                    args.cli,
+                    "_auto_gmem_advise_read_mostly",
+                    read_dup as u64,
+                    args.limit,
+                    0,
+                );
             }
         }
     };

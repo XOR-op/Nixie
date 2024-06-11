@@ -33,7 +33,7 @@ fn prefetch_impl(size_mb: u64) {
 }
 
 #[no_mangle]
-pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) {
+pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) -> u64 {
     let _ = STREAM_VEC.get_or_init(|| {
         let mut vec = Vec::new();
         for _ in 0..8 {
@@ -66,26 +66,32 @@ pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) {
         sender
     });
     dbg!(sender.send(size_mb).ok());
+    0
 }
 
 #[no_mangle]
-pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool) {
-    println!("Hello from _auto_gmem_advise_read_mostly: read_mostly={read_mostly}");
+pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshold_mb: u64) -> u64 {
+    println!(
+        "Hello from _auto_gmem_advise_read_mostly: read_mostly={}, size_threshold={}MB",
+        read_mostly, size_threshold_mb
+    );
     let mapping = PTR_MAPPING
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap();
+    let mut cadidate_cnt = 0;
     unsafe {
         let mut curr_dev = 0;
         let res = cudarc::driver::sys::cuCtxGetDevice(&mut curr_dev as *mut _);
         if res != cudaError_enum::CUDA_SUCCESS {
             println!("Failed to get current device: {:?}", res);
-            return;
+            return 0;
         }
         for (dev_ptr, size) in mapping.iter() {
-            if false && *size < 1024 * 1024 * 512 {
+            if *size < (size_threshold_mb as usize * 1024 * 1024) {
                 continue;
             }
+            cadidate_cnt += 1;
             let res = cudarc::driver::sys::cuMemAdvise(
                 *dev_ptr as u64,
                 *size,
@@ -101,4 +107,5 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool) {
             }
         }
     }
+    cadidate_cnt
 }
