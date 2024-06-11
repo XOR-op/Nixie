@@ -5,8 +5,9 @@ use std::{
 };
 
 use auto_gmem_ipc::{Message, UvmFileDescriptor};
+use colored::Colorize;
 
-static COMM: OnceLock<Mutex<UnixStream>> = OnceLock::new();
+static COMM: OnceLock<Option<Mutex<UnixStream>>> = OnceLock::new();
 
 fn init_comm_inner() -> std::io::Result<UnixStream> {
     let mut comm = UnixStream::connect("/tmp/auto_gmem.sock")?;
@@ -20,12 +21,26 @@ fn init_comm_inner() -> std::io::Result<UnixStream> {
     Ok(comm)
 }
 
-fn init_comm() -> Mutex<UnixStream> {
-    Mutex::new(init_comm_inner().expect("Failed to connect to AutoGMem Daemon"))
+fn init_comm() -> Option<Mutex<UnixStream>> {
+    match init_comm_inner() {
+        Ok(comm) => Some(Mutex::new(comm)),
+        Err(e) => {
+            eprintln!(
+                "{} {}: {}",
+                "[libcuda_hook]".bold(),
+                "Failed to connect to AutoGMem daemon".red(),
+                e
+            );
+            None
+        }
+    }
 }
 
 pub(crate) fn notify_fd(fd: i32) {
-    let mut comm = COMM.get_or_init(|| init_comm()).lock().unwrap();
+    let Some(lock) = COMM.get_or_init(|| init_comm()) else {
+        return;
+    };
+    let mut comm = lock.lock().unwrap();
     let message = Message::UvmFd(UvmFileDescriptor { fd });
     let buf = bincode::serialize(&message).unwrap();
     let length = buf.len() as u32;
