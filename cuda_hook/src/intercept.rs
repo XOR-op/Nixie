@@ -44,8 +44,9 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             .iter()
             .map(|pr| pr.1)
             .sum();
-        println!(
-            "{}: at={}, size={}, total_size={}, count={}",
+        eprintln!(
+            "{} {}: at={}, size={}, total_size={}, count={}",
+            "[libcuda_hook]".bold(),
             "cudaMalloc".green(),
             format!("{:#018x}", unsafe { *dev_ptr as u64 }).blue(),
             size_to_string(size),
@@ -96,7 +97,7 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
         let _ = UVM_FD.set(res);
         notify_fd(res);
     }
-    println!(
+    eprintln!(
         "open({:?}, {:08X}) -> {}",
         std::ffi::CStr::from_ptr(path),
         oflag,

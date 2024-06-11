@@ -1,10 +1,10 @@
+use colored::Colorize;
 use cudarc::driver::sys::{cuMemPrefetchAsync, cuStreamCreate, cudaError_enum, CUdevice};
 use std::sync::{mpsc, Mutex};
 
 use crate::{utils::size_to_string, CuStreamWrapper, PREFETCH_REQ_QUEUE, PTR_MAPPING, STREAM_VEC};
 
 fn prefetch_impl(size_mb: u64) {
-    println!("Hello from _auto_gmem_prefetch >={size_mb}MB");
     let streams = STREAM_VEC.get().unwrap();
     let mut prefetch_cnt = 0;
     let mut stream_idx = 0;
@@ -19,12 +19,12 @@ fn prefetch_impl(size_mb: u64) {
             let res =
                 unsafe { cuMemPrefetchAsync(ptr, size, CUdevice::from(0), streams[stream_idx].0) };
             if res != cudaError_enum::CUDA_SUCCESS {
-                println!("Failed to prefetch memory: {:?}", res);
+                eprintln!("Failed to prefetch memory: {:?}", res);
             }
             prefetch_cnt += 1;
             stream_idx = (stream_idx + 1) % streams.len();
-            println!(
-                "Prefetch:  size={}, time={:?}",
+            eprintln!(
+                "Prefetch: size={}, time={:?}",
                 size_to_string(size),
                 start.elapsed()
             )
@@ -61,19 +61,28 @@ pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) -> u64 {
                 }
                 prefetch_impl(len);
             }
-            println!("WARN: Prefetch thread exited");
+            eprintln!("WARN: Prefetch thread exited");
         });
         sender
     });
+    eprintln!(
+        "{} {}: size={}MB",
+        "[libcuda_hook]".bold(),
+        "_auto_gmem_prefetch".green(),
+        size_mb
+    );
     dbg!(sender.send(size_mb).ok());
     0
 }
 
 #[no_mangle]
 pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshold_mb: u64) -> u64 {
-    println!(
-        "Hello from _auto_gmem_advise_read_mostly: read_mostly={}, size_threshold={}MB",
-        read_mostly, size_threshold_mb
+    eprintln!(
+        "{} {}: read_mostly={}, size_threshold={}MB",
+        "[libcuda_hook]".bold(),
+        "_auto_gmem_advise_read_mostly".green(),
+        format!("{}", read_mostly).blue(),
+        size_threshold_mb
     );
     let mapping = PTR_MAPPING
         .get_or_init(|| Mutex::new(Vec::new()))
@@ -84,7 +93,7 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshol
         let mut curr_dev = 0;
         let res = cudarc::driver::sys::cuCtxGetDevice(&mut curr_dev as *mut _);
         if res != cudaError_enum::CUDA_SUCCESS {
-            println!("Failed to get current device: {:?}", res);
+            eprintln!("Failed to get current device: {:?}", res);
             return 0;
         }
         for (dev_ptr, size) in mapping.iter() {
@@ -103,7 +112,7 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshol
                 curr_dev,
             );
             if res != cudaError_enum::CUDA_SUCCESS {
-                println!("Failed to set read mostly: {:?}", res);
+                eprintln!("Failed to set read mostly: {:?}", res);
             }
         }
     }
