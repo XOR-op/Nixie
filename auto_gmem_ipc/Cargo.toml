@@ -8,4 +8,6 @@ edition = "2021"
 [lib]
 
 [dependencies]
+nix.workspace = true
+
 serde = { version = "1.0.203", features = ["derive"] }

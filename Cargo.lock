@@ -126,6 +126,7 @@ dependencies = [
 name = "auto_gmem_ipc"
 version = "0.1.0"
 dependencies = [
+ "nix",
  "serde",
 ]
 
