@@ -102,6 +102,10 @@ impl Runtime {
                         }
                     });
                 }
+                Message::ShmPath(path) => {
+                    tracing::debug!("ShmPath: {:?}", path);
+                    todo!()
+                }
             }
         }
         Ok(())

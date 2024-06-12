@@ -2,9 +2,13 @@ use auto_gmem_ipc::{
     shm::{Shm, ShmGuard, ShmVec},
     sync::IpcMutexGuard,
 };
+use comm::nofity_shm;
 use cudarc::driver::sys::CUstream;
 use nix::libc;
-use std::sync::{mpsc, Mutex, MutexGuard, OnceLock};
+use std::{
+    ffi::CString,
+    sync::{mpsc, Mutex, MutexGuard, OnceLock},
+};
 
 mod comm;
 mod intercept;
@@ -42,17 +46,37 @@ impl GenericData {
     }
 
     pub fn new() -> Self {
+        let uuid = uuid::Uuid::new_v4();
+        let path = format!(
+            "/auto_gmem_ipc-{}-{}.shm",
+            std::process::id(),
+            uuid.to_string().split_at(8).0
+        );
+        let cpath = CString::new(path.clone()).unwrap();
+        eprintln!("Creating shared memory at {}", path);
         let shm_fd = unsafe {
             libc::shm_open(
-                cr"/dev/shm/auto_gmem".as_ptr(),
-                libc::O_RDWR,
+                cpath.as_ptr(),
+                libc::O_RDWR | libc::O_CREAT,
                 libc::S_IRUSR | libc::S_IWUSR,
             )
         };
+        if shm_fd == -1 {
+            panic!(
+                "Failed to open shared memory: {}",
+                nix::errno::Errno::last()
+            );
+        }
+        // create mmap
         let shm = ShmGuard::new(
             Shm::init_at(shm_fd, auto_gmem_ipc::shm::Shm::SHM_STRUCT_SIZE)
                 .expect("Failed to init shared memory"),
         );
+        // close fd but not unlink; daemon will be responsible for unlinking
+        unsafe {
+            libc::close(shm_fd);
+        }
+        nofity_shm(path);
 
         let overflowed_ptr_mapping = Mutex::new(Vec::new());
         Self {

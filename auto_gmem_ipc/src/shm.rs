@@ -38,7 +38,7 @@ impl Shm {
         }
     }
 
-    pub unsafe fn open_readonly_at(shm_fd: i32, len: u32) -> Result<Pin<&'static mut Self>, c_int> {
+    pub unsafe fn open_copy_at(shm_fd: i32, len: u32) -> Result<Pin<&'static mut Self>, c_int> {
         if len < core::mem::size_of::<Self>() as u32 {
             return Err(libc::EINVAL);
         }
@@ -46,7 +46,7 @@ impl Shm {
         let ptr = libc::mmap(
             core::ptr::null_mut(),
             len as usize,
-            libc::PROT_READ,
+            libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_SHARED,
             shm_fd,
             0,

@@ -7,6 +7,7 @@ mod error;
 mod inject;
 mod logging;
 mod runtime;
+mod shm;
 mod uvm;
 
 #[derive(Debug, Parser)]

@@ -1,4 +1,3 @@
-#![no_std]
 use serde::{Deserialize, Serialize};
 
 pub mod shm;
@@ -8,6 +7,7 @@ pub mod sync;
 pub enum Message {
     ClientHello(ClientHello),
     UvmFd(UvmFileDescriptor),
+    ShmPath(ShmPath),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -18,4 +18,9 @@ pub struct ClientHello {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct UvmFileDescriptor {
     pub fd: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShmPath {
+    pub path: String,
 }
