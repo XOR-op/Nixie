@@ -4,6 +4,11 @@ use std::{
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
 };
 
+use tokio::io::{
+    unix::{AsyncFd, AsyncFdReadyGuard},
+    Interest,
+};
+
 use crate::error::AutoGMemError;
 
 use super::{
@@ -16,7 +21,7 @@ use super::{
 };
 
 pub(crate) struct EventQueue {
-    uvm_tools_handle: ManuallyDrop<OwnedFd>,
+    uvm_tools_handle: ManuallyDrop<AsyncFd<OwnedFd>>,
     uvm_fd: ManuallyDrop<OwnedFd>,
     event_buffer: PageBackedArray<UvmEventEntry_V1>,
     control_buffer: PageBackedArray<UvmToolsEventControlData_V1>,
@@ -28,15 +33,17 @@ impl EventQueue {
             return Err(AutoGMemError::Invalid("EventQueue::len must be power of 2"));
         }
         let uvm_tools_handle = unsafe {
-            let uvm_tools_handle =
-                nix::libc::open(cr"/dev/nvidia-uvm-tools".as_ptr(), nix::libc::O_RDWR);
+            let uvm_tools_handle = nix::libc::open(
+                cr"/dev/nvidia-uvm-tools".as_ptr(),
+                nix::libc::O_RDWR | nix::libc::O_NONBLOCK,
+            );
             if uvm_tools_handle < 0 {
                 return Err(AutoGMemError::Errno(
                     nix::errno::Errno::from_raw(uvm_tools_handle),
                     "open /dev/nvidia-uvm-tools",
                 ));
             }
-            ManuallyDrop::new(OwnedFd::from_raw_fd(uvm_tools_handle))
+            ManuallyDrop::new(AsyncFd::new(OwnedFd::from_raw_fd(uvm_tools_handle))?)
         };
         let event_buffer = PageBackedArray::<UvmEventEntry_V1>::new(len);
         let control_buffer = PageBackedArray::<UvmToolsEventControlData_V1>::new(1);
@@ -90,6 +97,17 @@ impl EventQueue {
         } else {
             Ok(())
         }
+    }
+
+    pub async fn ready(&self) -> Result<AsyncFdReadyGuard<OwnedFd>, AutoGMemError> {
+        self.uvm_tools_handle
+            .ready(Interest::READABLE | Interest::PRIORITY | Interest::ERROR)
+            .await
+            .map_err(|e| AutoGMemError::Io(e))
+    }
+
+    pub fn tool_handle(&self) -> &AsyncFd<OwnedFd> {
+        &self.uvm_tools_handle
     }
 
     pub fn read_events<F>(&mut self, mut callback: F) -> u32

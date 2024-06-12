@@ -4,7 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 use syscalls::{syscall, Sysno};
-use tokio::{io::AsyncReadExt, net::UnixListener};
+use tokio::{
+    io::{unix::AsyncFd, AsyncReadExt},
+    net::UnixListener,
+};
 
 use crate::{error::AutoGMemError, uvm::event_queue::EventQueue};
 use auto_gmem_ipc::Message;
@@ -13,12 +16,14 @@ use super::{proc_ctl::ProcessControlBuilder, shm::open_shm};
 
 pub struct Daemon {
     control_path: PathBuf,
+    dylib_path: String,
 }
 
 impl Daemon {
-    pub fn new() -> Self {
+    pub fn new(dylib_path: String) -> Self {
         Self {
             control_path: PathBuf::from("/tmp/auto_gmem.sock"),
+            dylib_path,
         }
     }
 
@@ -46,8 +51,9 @@ impl Daemon {
         tracing::info!("Daemon started at {:?}", self.control_path);
         loop {
             let (stream, _) = controller.get_listener().accept().await?;
+            let dylib_path = self.dylib_path.clone();
             tokio::spawn(async move {
-                match Self::serve_conn(stream).await {
+                match Self::serve_conn(stream, dylib_path).await {
                     Ok(_) => {}
                     Err(e) => {
                         tracing::error!("Client[pid={}] {}", e.1.unwrap_or(-1), e.0);
@@ -59,10 +65,11 @@ impl Daemon {
 
     async fn serve_conn(
         mut stream: tokio::net::UnixStream,
+        dylib_path: String,
     ) -> Result<(), (AutoGMemError, Option<i32>)> {
         let mut length_buf = [0u8; 4];
         let mut peer_pid = None;
-        let mut builder = ProcessControlBuilder::new();
+        let mut builder = ProcessControlBuilder::new(dylib_path);
 
         while stream.read_exact(&mut length_buf).await.is_ok() {
             // read entire message
@@ -94,7 +101,9 @@ impl Daemon {
                     let event_queue = EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))?;
                     builder
                         .with_pid(peer_pid.unwrap())
-                        .with_pid_fd(pid_fd)
+                        .with_pid_fd(
+                            AsyncFd::new(pid_fd).map_err(|e| (AutoGMemError::Io(e), peer_pid))?,
+                        )
                         .with_event_queue(event_queue);
                     if let Some(ctl) = builder.build() {
                         tokio::spawn(async move {
@@ -118,7 +127,7 @@ impl Daemon {
 }
 
 fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), AutoGMemError> {
-    let pid_fd = match unsafe { syscall!(Sysno::pidfd_open, pid, 0) } {
+    let pid_fd = match unsafe { syscall!(Sysno::pidfd_open, pid, nix::libc::PIDFD_NONBLOCK) } {
         Ok(fd) => fd as c_int,
         Err(e) => {
             return Err(AutoGMemError::Errno(

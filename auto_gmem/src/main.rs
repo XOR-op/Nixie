@@ -29,9 +29,15 @@ struct AttributeArgs {
 }
 
 #[derive(Debug, Parser)]
+struct StartArgs {
+    #[arg(long, alias = "dylib-path")]
+    pub dylib_path: Option<String>,
+}
+
+#[derive(Debug, Parser)]
 #[clap(name = "AutoGMem", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
-    Start,
+    Start(StartArgs),
     Prefetch(PrefetchArgs),
     Attribute(AttributeArgs),
 }
@@ -44,27 +50,26 @@ struct CliArgs {
     pub dylib_path: Option<String>,
 }
 
-fn inject(args: CliArgs, func_sym: &str, arg1: u64, arg2: u64, arg3: u64) {
-    let dylib_base = locate_dylib_base(args.pid as i32, "libcuda_hook.so").unwrap();
-    let dylib_path = args
-        .dylib_path
-        .unwrap_or("./target/release/libcuda_hook.so".to_string());
-    let func_offset = resolve_func_offset(func_sym, &dylib_path).unwrap();
-    dbg!(inject_process(
-        args.pid as i32,
-        dylib_base + func_offset,
+fn resolve_dylib_path(path: Option<String>) -> String {
+    path.unwrap_or("./target/release/libcuda_hook.so".to_string())
+}
+
+fn inject(cli: CliArgs, func_sym: &str, arg1: u64, arg2: u64, arg3: u64) {
+    inject_wrapper(
+        cli.pid as i32,
+        resolve_dylib_path(cli.dylib_path),
+        func_sym,
         arg1,
         arg2,
-        arg3
-    ))
-    .ok();
+        arg3,
+    );
 }
 
 fn main() {
     let args: Args = Args::parse();
     match args {
-        Args::Start => {
-            let runtime = runtime::Daemon::new();
+        Args::Start(args) => {
+            let runtime = runtime::Daemon::new(resolve_dylib_path(args.dylib_path));
             runtime.start();
         }
         Args::Prefetch(args) => {

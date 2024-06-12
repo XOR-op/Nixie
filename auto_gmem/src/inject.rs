@@ -48,6 +48,26 @@ macro_rules! check_err {
     };
 }
 
+pub fn inject_wrapper(
+    pid: i32,
+    dylib_path: String,
+    func_sym: &str,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+) {
+    let dylib_base = locate_dylib_base(pid as i32, "libcuda_hook.so").unwrap();
+    let func_offset = resolve_func_offset(func_sym, &dylib_path).unwrap();
+    dbg!(inject_process(
+        pid as i32,
+        dylib_base + func_offset,
+        arg1,
+        arg2,
+        arg3
+    ))
+    .ok();
+}
+
 pub fn inject_process(
     pid: i32,
     func_offset: u64,
@@ -119,7 +139,7 @@ pub fn inject_process(
             InjectErrorStage::RecoverCtx
         );
         check_err!(
-            libc::ptrace(libc::PTRACE_CONT, pid, 0, 0),
+            libc::ptrace(libc::PTRACE_DETACH, pid, 0, 0),
             InjectErrorStage::RecoverCtx
         );
         Ok(ret_val)

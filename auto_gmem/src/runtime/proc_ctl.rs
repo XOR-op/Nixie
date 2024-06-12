@@ -1,18 +1,21 @@
 #![allow(non_upper_case_globals)]
-use std::os::fd::OwnedFd;
+use std::{collections::BTreeSet, os::fd::OwnedFd};
 
 use auto_gmem_ipc::shm::ShmGuard;
+use tokio::io::unix::AsyncFd;
 
 use crate::{
     error::AutoGMemError,
+    inject_wrapper,
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
 
 pub(crate) struct ProcessControl {
     peer_pid: i32,
-    pid_fd: OwnedFd,
+    pid_fd: AsyncFd<OwnedFd>,
     event_queue: EventQueue,
     shm: ShmGuard,
+    dylib_path: String,
 }
 
 impl ProcessControl {
@@ -30,61 +33,102 @@ impl ProcessControl {
 
         tracing::info!("Listen events from process [pid={}]", self.peer_pid);
         loop {
-            let _ = tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let mut write_cnt = 0;
-            let mut first = true;
-            let n_completed = self.event_queue.read_events(|event| {
-                let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
-                match event_type as u32 {
-                    UvmEventType_UvmEventTypeGpuFault => {
-                        let event_ref = unsafe { &event.__bindgen_anon_1.eventData.gpuFault };
-                        const UVM_FAULT_TYPE_WRITE: u8 = 3;
-                        match event_ref.faultType {
-                            UVM_FAULT_TYPE_WRITE => write_cnt += 1,
-                            _ => {}
-                        }
-                        if first && event_ref.faultType == UVM_FAULT_TYPE_WRITE {
-                            tracing::info!(
-                                "fault: addr={:#018x}, fault_type={}",
-                                event_ref.address,
-                                event_ref.faultType
-                            );
-                            first = false;
-                        }
-                        true
-                    }
-                    _ => {
-                        tracing::warn!("Unknown event type: {}", event_type);
-                        false
-                    }
+            tokio::select! {
+                // _ = self.event_queue.ready() => {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                    let n = self.process_event();
+                    // if n > 0 {
+                    //     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    // }
                 }
-            });
-            if n_completed > 0 {
-                tracing::info!(
-                    "[pid={}] Received {} events: write={}",
+                _ = self.pid_fd.readable() => {
+                    break;
+                }
+            }
+        }
+        tracing::info!("ProcessControl [pid={}] finished", self.peer_pid);
+        Ok(())
+    }
+
+    fn process_event(&mut self) -> u32 {
+        let mut fault_tree = BTreeSet::new();
+        let n_completed = self.event_queue.read_events(|event| {
+            let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
+            match event_type as u32 {
+                UvmEventType_UvmEventTypeGpuFault => {
+                    let event_ref = unsafe { &event.__bindgen_anon_1.eventData.gpuFault };
+                    const UVM_FAULT_TYPE_WRITE: u8 = 3;
+                    match event_ref.faultType {
+                        UVM_FAULT_TYPE_WRITE => {
+                            fault_tree.insert(event_ref.address);
+                        }
+                        _ => {}
+                    }
+                    true
+                }
+                _ => {
+                    tracing::warn!("Unknown event type: {}", event_type);
+                    false
+                }
+            }
+        });
+        // disable read duplication
+        if !fault_tree.is_empty() {
+            let mapping = self.shm.inner.ptr_mapping.lock();
+            let mut disabled = BTreeSet::new();
+            for entry in mapping.iter() {
+                let start = entry.0;
+                let end = entry.0 + entry.1 as u64;
+                if fault_tree.range(start..end).next().is_some() {
+                    disabled.insert(*entry);
+                }
+            }
+            drop(mapping);
+            tracing::debug!(
+                "[pid={}] Disable read duplication for {:?}",
+                self.peer_pid,
+                disabled
+            );
+            for entry in disabled {
+                inject_wrapper(
                     self.peer_pid,
-                    n_completed,
-                    write_cnt
+                    self.dylib_path.clone(),
+                    "_auto_gmem_advise_read_mostly_for",
+                    false as u64,
+                    entry.0,
+                    0,
                 );
             }
         }
+
+        if n_completed > 0 {
+            tracing::info!(
+                "[pid={}] Received {} events: write_fault={}",
+                self.peer_pid,
+                n_completed,
+                fault_tree.len()
+            );
+        }
+        n_completed
     }
 }
 
 pub(crate) struct ProcessControlBuilder {
     pid: Option<i32>,
-    pid_fd: Option<OwnedFd>,
+    pid_fd: Option<AsyncFd<OwnedFd>>,
     event_queue: Option<EventQueue>,
     shm: Option<ShmGuard>,
+    dylib_path: String,
 }
 
 impl ProcessControlBuilder {
-    pub fn new() -> Self {
+    pub fn new(dylib_path: String) -> Self {
         Self {
             pid: None,
             pid_fd: None,
             event_queue: None,
             shm: None,
+            dylib_path,
         }
     }
 
@@ -96,7 +140,7 @@ impl ProcessControlBuilder {
         self
     }
 
-    pub fn with_pid_fd(&mut self, pid_fd: OwnedFd) -> &mut Self {
+    pub fn with_pid_fd(&mut self, pid_fd: AsyncFd<OwnedFd>) -> &mut Self {
         if self.pid_fd.is_some() {
             tracing::warn!("pid_fd is already set");
         }
@@ -136,6 +180,7 @@ impl ProcessControlBuilder {
             pid_fd: self.pid_fd.take().unwrap(),
             event_queue: self.event_queue.take().unwrap(),
             shm: self.shm.take().unwrap(),
+            dylib_path: self.dylib_path.clone(),
         })
     }
 }

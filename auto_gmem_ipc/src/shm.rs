@@ -149,4 +149,8 @@ impl<T, const N: usize> ShmVec<T, N> {
     pub fn as_slice(&self) -> &[T] {
         &self.data[..self.len as usize]
     }
+
+    pub fn iter(&self) -> core::slice::Iter<'_, T> {
+        self.as_slice().iter()
+    }
 }
