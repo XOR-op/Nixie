@@ -1,14 +1,15 @@
 use colored::Colorize;
 use cudarc::driver::sys::{cuMemPrefetchAsync, cuStreamCreate, cudaError_enum, CUdevice};
-use std::sync::{mpsc, Mutex};
+use std::sync::mpsc;
 
-use crate::{utils::size_to_string, CuStreamWrapper, PREFETCH_REQ_QUEUE, PTR_MAPPING, STREAM_VEC};
+use crate::{utils::size_to_string, CuStreamWrapper, GENERIC_DATA, PREFETCH_REQ_QUEUE, STREAM_VEC};
 
 fn prefetch_impl(size_mb: u64) {
     let streams = STREAM_VEC.get().unwrap();
     let mut prefetch_cnt = 0;
     let mut stream_idx = 0;
-    for pair in PTR_MAPPING.get().unwrap().lock().unwrap().iter() {
+    let ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
+    for pair in ptr_mapping.iter() {
         if prefetch_cnt > streams.len() * 40 {
             break;
         }
@@ -84,10 +85,7 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshol
         format!("{}", read_mostly).blue(),
         size_threshold_mb
     );
-    let mapping = PTR_MAPPING
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .unwrap();
+    let mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
     let mut cadidate_cnt = 0;
     unsafe {
         let mut curr_dev = 0;

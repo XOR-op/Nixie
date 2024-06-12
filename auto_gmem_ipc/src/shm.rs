@@ -108,4 +108,40 @@ impl<T, const N: usize> ShmVec<T, N> {
         self.len += 1;
         Ok(())
     }
+
+    pub fn pop(&mut self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        Some(core::mem::replace(
+            &mut self.data[self.len as usize],
+            unsafe { core::mem::zeroed() },
+        ))
+    }
+
+    pub fn remove(&mut self, idx: usize) -> T {
+        if idx >= self.len as usize {
+            panic!("index out of bounds")
+        }
+        let val = core::mem::replace(&mut self.data[idx], unsafe { core::mem::zeroed() });
+        self.len -= 1;
+        for i in idx..self.len as usize {
+            self.data[i] =
+                core::mem::replace(&mut self.data[i + 1], unsafe { core::mem::zeroed() });
+        }
+        val
+    }
+
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        &self.data[..self.len as usize]
+    }
 }

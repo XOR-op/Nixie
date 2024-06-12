@@ -1,5 +1,10 @@
+use auto_gmem_ipc::{
+    shm::{Shm, ShmGuard, ShmVec},
+    sync::IpcMutexGuard,
+};
 use cudarc::driver::sys::CUstream;
-use std::sync::{mpsc, Mutex, OnceLock};
+use nix::libc;
+use std::sync::{mpsc, Mutex, MutexGuard, OnceLock};
 
 mod comm;
 mod intercept;
@@ -17,5 +22,73 @@ pub(crate) static PREFETCH_REQ_QUEUE: OnceLock<mpsc::Sender<u64>> = OnceLock::ne
 /// All streams used for prefetching
 pub(crate) static STREAM_VEC: OnceLock<Vec<CuStreamWrapper>> = OnceLock::new();
 
-/// Global mapping of device pointers and their sizes
-pub(crate) static PTR_MAPPING: OnceLock<Mutex<Vec<(u64, usize)>>> = OnceLock::new();
+pub(crate) static GENERIC_DATA: OnceLock<GenericData> = OnceLock::new();
+
+pub(crate) struct GenericData {
+    shm: ShmGuard,
+    overflowed_ptr_mapping: Mutex<Vec<(u64, usize)>>,
+}
+
+impl GenericData {
+    /// Global mapping of device pointers and their sizes
+    pub fn lock_ptr_mapping<'a>(&'a self) -> FusedPtrMapping<'a> {
+        // We always lock shared memory first
+        let shm_guard = self.shm.inner.ptr_mapping.lock();
+        let ptr_mapping_guard = self.overflowed_ptr_mapping.lock().unwrap();
+        FusedPtrMapping {
+            shm: shm_guard,
+            overflowed: ptr_mapping_guard,
+        }
+    }
+
+    pub fn new() -> Self {
+        let shm_fd = unsafe {
+            libc::shm_open(
+                cr"/dev/shm/auto_gmem".as_ptr(),
+                libc::O_RDWR,
+                libc::S_IRUSR | libc::S_IWUSR,
+            )
+        };
+        let shm = ShmGuard::new(
+            Shm::init_at(shm_fd, auto_gmem_ipc::shm::Shm::SHM_STRUCT_SIZE)
+                .expect("Failed to init shared memory"),
+        );
+
+        let overflowed_ptr_mapping = Mutex::new(Vec::new());
+        Self {
+            shm,
+            overflowed_ptr_mapping,
+        }
+    }
+}
+
+pub(crate) struct FusedPtrMapping<'a> {
+    shm: IpcMutexGuard<'a, ShmVec<(u64, usize), 4096>>,
+    overflowed: MutexGuard<'a, Vec<(u64, usize)>>,
+}
+
+impl<'a> FusedPtrMapping<'a> {
+    pub fn push(&mut self, ptr: (u64, usize)) {
+        if self.shm.len() < self.shm.capacity() {
+            let _ = self.shm.push(ptr);
+        } else {
+            self.overflowed.push(ptr);
+        }
+    }
+
+    pub fn remove(&mut self, idx: usize) -> (u64, usize) {
+        if idx < self.shm.len() {
+            self.shm.remove(idx)
+        } else {
+            self.overflowed.remove(idx - self.shm.len())
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.shm.len() + self.overflowed.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(u64, usize)> {
+        self.shm.as_slice().iter().chain(self.overflowed.iter())
+    }
+}

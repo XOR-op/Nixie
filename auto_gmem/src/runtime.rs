@@ -1,3 +1,4 @@
+#![allow(non_upper_case_globals)]
 use nix::libc::c_int;
 use std::{
     os::fd::{FromRawFd, OwnedFd},

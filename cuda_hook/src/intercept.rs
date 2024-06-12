@@ -2,10 +2,11 @@ use colored::Colorize;
 use cudarc::driver::sys::cudaError_enum;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use crate::comm::notify_fd;
-use crate::{utils::size_to_string, PTR_MAPPING};
+use crate::utils::size_to_string;
+use crate::{GenericData, GENERIC_DATA};
 
 type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
 type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
@@ -31,19 +32,11 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     });
     let res = malloc_func(dev_ptr, size, 0x01);
     if res == cudaError_enum::CUDA_SUCCESS {
-        PTR_MAPPING
-            .get_or_init(|| Mutex::new(Vec::new()))
-            .lock()
-            .unwrap()
-            .push((unsafe { *dev_ptr as u64 }, size));
-        let total_size = PTR_MAPPING
-            .get()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|pr| pr.1)
-            .sum();
+        let mut ptr_mapping = GENERIC_DATA
+            .get_or_init(|| GenericData::new())
+            .lock_ptr_mapping();
+        ptr_mapping.push((unsafe { *dev_ptr as u64 }, size));
+        let total_size = ptr_mapping.iter().map(|pr| pr.1).sum();
         eprintln!(
             "{} {}: at={}, size={}, total_size={}, count={}",
             "[libcuda_hook]".bold(),
@@ -51,7 +44,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             format!("{:#018x}", unsafe { *dev_ptr as u64 }).blue(),
             size_to_string(size),
             size_to_string(total_size),
-            PTR_MAPPING.get().unwrap().lock().unwrap().len()
+            ptr_mapping.len()
         );
     }
     return res;
@@ -67,11 +60,11 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         }
         std::mem::transmute(func)
     });
-    let mut mapping = PTR_MAPPING
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .unwrap();
-    if let Some(idx) = mapping.iter().position(|pr| pr.0 == dev_ptr as u64) {
+    let mut mapping = GENERIC_DATA
+        .get_or_init(|| GenericData::new())
+        .lock_ptr_mapping();
+    let idx = mapping.iter().position(|pr| pr.0 == dev_ptr as u64);
+    if let Some(idx) = idx {
         mapping.remove(idx);
     }
     return free_func(dev_ptr);

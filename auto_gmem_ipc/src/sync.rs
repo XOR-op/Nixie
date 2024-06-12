@@ -58,6 +58,8 @@ impl<T> IpcMutex<T> {
     }
 }
 
+unsafe impl<T: Sync> Sync for IpcMutex<T> {}
+
 pub struct IpcMutexGuard<'a, T> {
     lock: &'a IpcMutex<T>,
 }
