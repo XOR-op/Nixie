@@ -61,7 +61,7 @@ impl GenericData {
                 libc::S_IRUSR | libc::S_IWUSR,
             )
         };
-        if shm_fd == -1 {
+        if shm_fd < 0 {
             panic!(
                 "Failed to open shared memory: {}",
                 nix::errno::Errno::last()

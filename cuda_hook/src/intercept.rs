@@ -90,12 +90,12 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
         let _ = UVM_FD.set(res);
         notify_fd(res);
     }
-    eprintln!(
-        "open({:?}, {:08X}) -> {}",
-        std::ffi::CStr::from_ptr(path),
-        oflag,
-        res
-    );
+    // eprintln!(
+    //     "open({:?}, {:08X}) -> {}",
+    //     std::ffi::CStr::from_ptr(path),
+    //     oflag,
+    //     res
+    // );
     return res;
 }
 

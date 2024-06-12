@@ -17,6 +17,11 @@ impl Shm {
             return Err(libc::EINVAL);
         }
         unsafe {
+            // extend shmem
+            let errno = libc::ftruncate(shm_fd, len as i64);
+            if errno != 0 {
+                return Err(errno);
+            }
             // create mmap
             let ptr = libc::mmap(
                 core::ptr::null_mut(),

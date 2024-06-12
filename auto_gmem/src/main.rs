@@ -7,7 +7,6 @@ mod error;
 mod inject;
 mod logging;
 mod runtime;
-mod shm;
 mod uvm;
 
 #[derive(Debug, Parser)]
@@ -65,7 +64,7 @@ fn main() {
     let args: Args = Args::parse();
     match args {
         Args::Start => {
-            let runtime = runtime::Runtime::new();
+            let runtime = runtime::Daemon::new();
             runtime.start();
         }
         Args::Prefetch(args) => {

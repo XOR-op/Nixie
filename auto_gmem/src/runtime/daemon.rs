@@ -1,4 +1,3 @@
-#![allow(non_upper_case_globals)]
 use nix::libc::c_int;
 use std::{
     os::fd::{FromRawFd, OwnedFd},
@@ -7,17 +6,16 @@ use std::{
 use syscalls::{syscall, Sysno};
 use tokio::{io::AsyncReadExt, net::UnixListener};
 
-use crate::{
-    error::AutoGMemError,
-    uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
-};
+use crate::{error::AutoGMemError, uvm::event_queue::EventQueue};
 use auto_gmem_ipc::Message;
 
-pub struct Runtime {
+use super::{proc_ctl::ProcessControlBuilder, shm::open_shm};
+
+pub struct Daemon {
     control_path: PathBuf,
 }
 
-impl Runtime {
+impl Daemon {
     pub fn new() -> Self {
         Self {
             control_path: PathBuf::from("/tmp/auto_gmem.sock"),
@@ -45,7 +43,7 @@ impl Runtime {
 
     async fn mainloop(self) -> Result<(), AutoGMemError> {
         let controller = UnixListenerGuard::new(self.control_path.as_path())?;
-        tracing::info!("Runtime started at {:?}", self.control_path);
+        tracing::info!("Daemon started at {:?}", self.control_path);
         loop {
             let (stream, _) = controller.get_listener().accept().await?;
             tokio::spawn(async move {
@@ -64,6 +62,7 @@ impl Runtime {
     ) -> Result<(), (AutoGMemError, Option<i32>)> {
         let mut length_buf = [0u8; 4];
         let mut peer_pid = None;
+        let mut builder = ProcessControlBuilder::new();
 
         while stream.read_exact(&mut length_buf).await.is_ok() {
             // read entire message
@@ -93,73 +92,28 @@ impl Runtime {
                     let (pid_fd, uvm_fd) =
                         duplicate_peer_fd(peer_pid.unwrap(), fd.fd).map_err(|e| (e, peer_pid))?;
                     let event_queue = EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))?;
-                    let peer_pid2 = peer_pid.unwrap();
-                    tokio::spawn(async move {
-                        tracing::info!("Monitoring process [pid={}]", peer_pid2);
-                        if let Err(e) = Self::monitor_process(peer_pid2, pid_fd, event_queue).await
-                        {
-                            tracing::error!("Client[pid={}] {}", peer_pid2, e);
-                        }
-                    });
+                    builder
+                        .with_pid(peer_pid.unwrap())
+                        .with_pid_fd(pid_fd)
+                        .with_event_queue(event_queue);
+                    if let Some(ctl) = builder.build() {
+                        tokio::spawn(async move {
+                            ctl.run().await;
+                        });
+                    }
                 }
                 Message::ShmPath(path) => {
-                    tracing::debug!("ShmPath: {:?}", path);
-                    todo!()
+                    let shmem = open_shm(path.path).map_err(|e| (e, peer_pid))?;
+                    builder.with_shm(shmem);
+                    if let Some(ctl) = builder.build() {
+                        tokio::spawn(async move {
+                            ctl.run().await;
+                        });
+                    }
                 }
             }
         }
         Ok(())
-    }
-
-    async fn monitor_process(
-        peer_pid: i32,
-        pid_fd: OwnedFd,
-        mut event_queue: EventQueue,
-    ) -> Result<(), AutoGMemError> {
-        event_queue
-            .enable_event(UvmEventType_UvmEventTypeGpuFault)
-            .map_err(|e| AutoGMemError::from(e))?;
-
-        tracing::info!("Listen events from process [pid={}]", peer_pid);
-        loop {
-            let _ = tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let mut write_cnt = 0;
-            let mut first = true;
-            let n_completed = event_queue.read_events(|event| {
-                let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
-                match event_type as u32 {
-                    UvmEventType_UvmEventTypeGpuFault => {
-                        let event_ref = unsafe { &event.__bindgen_anon_1.eventData.gpuFault };
-                        const UVM_FAULT_TYPE_WRITE: u8 = 3;
-                        match event_ref.faultType {
-                            UVM_FAULT_TYPE_WRITE => write_cnt += 1,
-                            _ => {}
-                        }
-                        if first && event_ref.faultType == UVM_FAULT_TYPE_WRITE {
-                            tracing::info!(
-                                "fault: addr={:#018x}, fault_type={}",
-                                event_ref.address,
-                                event_ref.faultType
-                            );
-                            first = false;
-                        }
-                        true
-                    }
-                    _ => {
-                        tracing::warn!("Unknown event type: {}", event_type);
-                        false
-                    }
-                }
-            });
-            if n_completed > 0 {
-                tracing::info!(
-                    "[pid={}] Received {} events: write={}",
-                    peer_pid,
-                    n_completed,
-                    write_cnt
-                );
-            }
-        }
     }
 }
 

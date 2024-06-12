@@ -11,7 +11,7 @@ pub(crate) fn open_shm(path: String) -> Result<ShmGuard, AutoGMemError> {
     let cpath = CString::new(path).unwrap();
     let shm_fd =
         unsafe { libc::shm_open(cpath.as_ptr(), libc::O_RDWR, libc::S_IRUSR | libc::S_IWUSR) };
-    if shm_fd == -1 {
+    if shm_fd < 0 {
         return Err(AutoGMemError::Errno(
             nix::errno::Errno::last(),
             "open shared memory failed",
@@ -24,7 +24,7 @@ pub(crate) fn open_shm(path: String) -> Result<ShmGuard, AutoGMemError> {
     });
     unsafe {
         libc::close(shm_fd);
-        let errno = libc::unlink(cpath.as_ptr());
+        let errno = libc::shm_unlink(cpath.as_ptr());
         if errno != 0 {
             tracing::warn!("Failed to unlink shared memory: {}", errno);
         }
