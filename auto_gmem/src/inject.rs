@@ -106,6 +106,8 @@ pub fn inject_process(
         user_regs.rdi = arg1;
         user_regs.rsi = arg2;
         user_regs.rdx = arg3;
+        // Align rsp to 16 bytes boundary according to x86-64 ABI
+        user_regs.rsp = user_regs.rsp & !0xf;
         check_err!(
             libc::ptrace(libc::PTRACE_SETREGS, pid, 0, &user_regs as *const _),
             InjectErrorStage::InjectCode
