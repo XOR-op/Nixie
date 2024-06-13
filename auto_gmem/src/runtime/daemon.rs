@@ -10,7 +10,7 @@ use tokio::{
 };
 
 use crate::{error::AutoGMemError, uvm::event_queue::EventQueue};
-use auto_gmem_ipc::Message;
+use auto_gmem_ipc::C2SMessage;
 
 use super::{proc_ctl::ProcessControlBuilder, shm::open_shm};
 
@@ -51,9 +51,8 @@ impl Daemon {
         tracing::info!("Daemon started at {:?}", self.control_path);
         loop {
             let (stream, _) = controller.get_listener().accept().await?;
-            let dylib_path = self.dylib_path.clone();
             tokio::spawn(async move {
-                match Self::serve_conn(stream, dylib_path).await {
+                match Self::serve_conn(stream).await {
                     Ok(_) => {}
                     Err(e) => {
                         tracing::error!("Client[pid={}] {}", e.1.unwrap_or(-1), e.0);
@@ -64,18 +63,18 @@ impl Daemon {
     }
 
     async fn serve_conn(
-        mut stream: tokio::net::UnixStream,
-        dylib_path: String,
+        stream: tokio::net::UnixStream,
     ) -> Result<(), (AutoGMemError, Option<i32>)> {
         let mut length_buf = [0u8; 4];
         let mut peer_pid = None;
-        let mut builder = ProcessControlBuilder::new(dylib_path);
+        let (mut uds_recv, uds_send) = stream.into_split();
+        let mut builder = ProcessControlBuilder::new(uds_send);
 
-        while stream.read_exact(&mut length_buf).await.is_ok() {
+        while uds_recv.read_exact(&mut length_buf).await.is_ok() {
             // read entire message
             let length = u32::from_le_bytes(length_buf);
             let mut buf = vec![0u8; length as usize];
-            stream
+            uds_recv
                 .read_exact(&mut buf)
                 .await
                 .map_err(|e| (AutoGMemError::from(e), peer_pid))?;
@@ -83,18 +82,18 @@ impl Daemon {
                 bincode::deserialize(&buf).map_err(|e| (AutoGMemError::from(e), peer_pid))?;
 
             // make sure the peer process has registered itself
-            if peer_pid.is_none() && !matches!(message, Message::ClientHello(_)) {
+            if peer_pid.is_none() && !matches!(message, C2SMessage::ClientHello(_)) {
                 return Err((
                     AutoGMemError::Invalid("ClientHello message is required"),
                     None,
                 ));
             }
             match message {
-                Message::ClientHello(hello) => {
+                C2SMessage::ClientHello(hello) => {
                     peer_pid = Some(hello.pid);
                     tracing::info!("Client[pid={}] connected", hello.pid);
                 }
-                Message::UvmFd(fd) => {
+                C2SMessage::UvmFd(fd) => {
                     tracing::debug!("UvmFd: {:?}", fd);
                     let (pid_fd, uvm_fd) =
                         duplicate_peer_fd(peer_pid.unwrap(), fd.fd).map_err(|e| (e, peer_pid))?;
@@ -111,7 +110,7 @@ impl Daemon {
                         });
                     }
                 }
-                Message::ShmPath(path) => {
+                C2SMessage::ShmPath(path) => {
                     let shmem = open_shm(path.path).map_err(|e| (e, peer_pid))?;
                     builder.with_shm(shmem);
                     if let Some(ctl) = builder.build() {

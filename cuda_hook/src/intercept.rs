@@ -1,10 +1,12 @@
+use auto_gmem_ipc::shm::AllocationEntry;
 use colored::Colorize;
 use cudarc::driver::sys::cudaError_enum;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
-use crate::comm::notify_fd;
+use crate::comm::{notify_fd, try_duplicate_comm};
+use crate::sidecar::Sidecar;
 use crate::utils::size_to_string;
 use crate::{GenericData, GENERIC_DATA};
 
@@ -32,11 +34,23 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     });
     let res = malloc_func(dev_ptr, size, 0x01);
     if res == cudaError_enum::CUDA_SUCCESS {
+        let device_id = {
+            let mut device_id = 0;
+            let res = unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id) };
+            if res != cudaError_enum::CUDA_SUCCESS {
+                panic!("Failed to get device id: {:?}", res);
+            }
+            device_id
+        };
         let mut ptr_mapping = GENERIC_DATA
             .get_or_init(|| GenericData::new())
             .lock_ptr_mapping();
-        ptr_mapping.push((unsafe { *dev_ptr as u64 }, size));
-        let total_size = ptr_mapping.iter().map(|pr| pr.1).sum();
+        ptr_mapping.push(AllocationEntry {
+            addr: unsafe { *dev_ptr as u64 },
+            len: size,
+            device: device_id,
+        });
+        let total_size = ptr_mapping.iter().map(|pr| pr.len).sum();
         eprintln!(
             "{} {}: at={}, size={}, total_size={}, count={}",
             "[libcuda_hook]".bold(),
@@ -63,7 +77,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     let mut mapping = GENERIC_DATA
         .get_or_init(|| GenericData::new())
         .lock_ptr_mapping();
-    let idx = mapping.iter().position(|pr| pr.0 == dev_ptr as u64);
+    let idx = mapping.iter().position(|pr| pr.addr == dev_ptr as u64);
     if let Some(idx) = idx {
         mapping.remove(idx);
     }
@@ -89,13 +103,15 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
     {
         let _ = UVM_FD.set(res);
         notify_fd(res);
+        if let Some(stream) = try_duplicate_comm() {
+            let sidecar = Sidecar::new(stream);
+            std::thread::spawn(|| {
+                if let Err(e) = sidecar.run() {
+                    eprintln!("Sidecar error : {:?}", e);
+                }
+            });
+        }
     }
-    // eprintln!(
-    //     "open({:?}, {:08X}) -> {}",
-    //     std::ffi::CStr::from_ptr(path),
-    //     oflag,
-    //     res
-    // );
     return res;
 }
 
@@ -110,10 +126,5 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_int, arg: *mut libc::c_void
         std::mem::transmute(func)
     });
     let res = ioctl_func(fd, request, arg);
-    // if let Some(uvm_fd) = UVM_FD.get() {
-    //     if *uvm_fd == fd {
-    //         println!("ioctl({}, {}, ...) -> {}", fd, request, res);
-    //     }
-    // }
     return res;
 }

@@ -4,7 +4,7 @@ pub mod shm;
 pub mod sync;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Message {
+pub enum C2SMessage {
     ClientHello(ClientHello),
     UvmFd(UvmFileDescriptor),
     ShmPath(ShmPath),
@@ -23,4 +23,17 @@ pub struct UvmFileDescriptor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShmPath {
     pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum S2CMessage {
+    SetReadDup(SetReadDupArgs),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SetReadDupArgs {
+    pub addr: u64,
+    pub len: u64,
+    pub device: i32,
+    pub value: bool,
 }

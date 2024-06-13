@@ -1,12 +1,14 @@
 #![allow(non_upper_case_globals)]
 use std::{collections::BTreeSet, os::fd::OwnedFd};
 
-use auto_gmem_ipc::shm::ShmGuard;
-use tokio::io::unix::AsyncFd;
+use auto_gmem_ipc::{shm::ShmGuard, SetReadDupArgs};
+use tokio::{
+    io::{unix::AsyncFd, AsyncWriteExt},
+    net::unix::OwnedWriteHalf as UnixWriteHalf,
+};
 
 use crate::{
     error::AutoGMemError,
-    inject_wrapper,
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
 
@@ -15,7 +17,7 @@ pub(crate) struct ProcessControl {
     pid_fd: AsyncFd<OwnedFd>,
     event_queue: EventQueue,
     shm: ShmGuard,
-    dylib_path: String,
+    rpc_sender: UnixWriteHalf,
 }
 
 impl ProcessControl {
@@ -36,10 +38,7 @@ impl ProcessControl {
             tokio::select! {
                 // _ = self.event_queue.ready() => {
                 _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
-                    let n = self.process_event();
-                    // if n > 0 {
-                    //     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    // }
+                    self.process_event().await?;
                 }
                 _ = self.pid_fd.readable() => {
                     break;
@@ -50,7 +49,7 @@ impl ProcessControl {
         Ok(())
     }
 
-    fn process_event(&mut self) -> u32 {
+    async fn process_event(&mut self) -> Result<u32, AutoGMemError> {
         let mut fault_tree = BTreeSet::new();
         let n_completed = self.event_queue.read_events(|event| {
             let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
@@ -77,10 +76,10 @@ impl ProcessControl {
             let mapping = self.shm.inner.ptr_mapping.lock();
             let mut disabled = BTreeSet::new();
             for entry in mapping.iter() {
-                let start = entry.0;
-                let end = entry.0 + entry.1 as u64;
+                let start = entry.addr;
+                let end = entry.addr + entry.len as u64;
                 if fault_tree.range(start..end).next().is_some() {
-                    disabled.insert(*entry);
+                    disabled.insert(entry.clone());
                 }
             }
             drop(mapping);
@@ -90,18 +89,18 @@ impl ProcessControl {
                 disabled
             );
             for entry in disabled {
-                inject_wrapper(
-                    self.peer_pid,
-                    self.dylib_path.clone(),
-                    "_auto_gmem_advise_read_mostly_for",
-                    false as u64,
-                    entry.0,
-                    0,
-                );
+                let msg = auto_gmem_ipc::S2CMessage::SetReadDup(SetReadDupArgs {
+                    addr: entry.addr,
+                    len: entry.len as u64,
+                    device: entry.device,
+                    value: false,
+                });
+                let buf = serialize_msg(msg);
+                self.rpc_sender.write_all(&buf).await?;
             }
         }
 
-        if n_completed > 0 {
+        if !fault_tree.is_empty() {
             tracing::info!(
                 "[pid={}] Received {} events: write_fault={}",
                 self.peer_pid,
@@ -109,7 +108,7 @@ impl ProcessControl {
                 fault_tree.len()
             );
         }
-        n_completed
+        Ok(n_completed)
     }
 }
 
@@ -118,17 +117,17 @@ pub(crate) struct ProcessControlBuilder {
     pid_fd: Option<AsyncFd<OwnedFd>>,
     event_queue: Option<EventQueue>,
     shm: Option<ShmGuard>,
-    dylib_path: String,
+    msg_sender: Option<UnixWriteHalf>,
 }
 
 impl ProcessControlBuilder {
-    pub fn new(dylib_path: String) -> Self {
+    pub fn new(msg_sender: UnixWriteHalf) -> Self {
         Self {
             pid: None,
             pid_fd: None,
             event_queue: None,
             shm: None,
-            dylib_path,
+            msg_sender: Some(msg_sender),
         }
     }
 
@@ -169,6 +168,7 @@ impl ProcessControlBuilder {
             && self.pid_fd.is_some()
             && self.event_queue.is_some()
             && self.shm.is_some()
+            && self.msg_sender.is_some()
     }
 
     pub fn build(&mut self) -> Option<ProcessControl> {
@@ -180,7 +180,17 @@ impl ProcessControlBuilder {
             pid_fd: self.pid_fd.take().unwrap(),
             event_queue: self.event_queue.take().unwrap(),
             shm: self.shm.take().unwrap(),
-            dylib_path: self.dylib_path.clone(),
+            rpc_sender: self.msg_sender.take().unwrap(),
         })
     }
+}
+
+fn serialize_msg(msg: auto_gmem_ipc::S2CMessage) -> Vec<u8> {
+    let buf = bincode::serialize(&msg).unwrap();
+    let length = buf.len() as u32;
+    let length_buf = length.to_le_bytes();
+    let mut coalesced_buf = Vec::with_capacity(4 + buf.len());
+    coalesced_buf.extend_from_slice(&length_buf);
+    coalesced_buf.extend_from_slice(&buf);
+    coalesced_buf
 }

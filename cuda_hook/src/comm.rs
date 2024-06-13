@@ -4,7 +4,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use auto_gmem_ipc::{Message, ShmPath, UvmFileDescriptor};
+use auto_gmem_ipc::{C2SMessage, ShmPath, UvmFileDescriptor};
 use colored::Colorize;
 
 static COMM: OnceLock<Option<Mutex<UnixStream>>> = OnceLock::new();
@@ -12,7 +12,7 @@ static COMM: OnceLock<Option<Mutex<UnixStream>>> = OnceLock::new();
 fn init_comm_inner() -> std::io::Result<UnixStream> {
     let mut comm = UnixStream::connect("/tmp/auto_gmem.sock")?;
     let pid = std::process::id();
-    let message = Message::ClientHello(auto_gmem_ipc::ClientHello { pid: pid as i32 });
+    let message = C2SMessage::ClientHello(auto_gmem_ipc::ClientHello { pid: pid as i32 });
     comm.write_all(&construct_message(message))?;
     Ok(comm)
 }
@@ -37,7 +37,7 @@ pub(crate) fn notify_fd(fd: i32) {
         return;
     };
     let mut comm = lock.lock().unwrap();
-    let message = Message::UvmFd(UvmFileDescriptor { fd });
+    let message = C2SMessage::UvmFd(UvmFileDescriptor { fd });
     if comm.write_all(&construct_message(message)).is_err() {
         eprintln!("Failed to send UvmFd message to AutoGMem Daemon")
     }
@@ -48,13 +48,13 @@ pub(crate) fn nofity_shm(path: String) {
         return;
     };
     let mut comm = lock.lock().unwrap();
-    let message = Message::ShmPath(ShmPath { path });
+    let message = C2SMessage::ShmPath(ShmPath { path });
     if comm.write_all(&construct_message(message)).is_err() {
         eprintln!("Failed to send ShmPath message to AutoGMem Daemon")
     }
 }
 
-fn construct_message(message: Message) -> Vec<u8> {
+fn construct_message(message: C2SMessage) -> Vec<u8> {
     let buf = bincode::serialize(&message).unwrap();
     let length = buf.len() as u32;
     let length_buf = length.to_le_bytes();
@@ -62,4 +62,11 @@ fn construct_message(message: Message) -> Vec<u8> {
     coalesced_buf.extend_from_slice(&length_buf);
     coalesced_buf.extend_from_slice(&buf);
     coalesced_buf
+}
+
+pub(crate) fn try_duplicate_comm() -> Option<UnixStream> {
+    let Some(lock) = COMM.get_or_init(|| init_comm()) else {
+        return None;
+    };
+    lock.lock().unwrap().try_clone().ok()
 }

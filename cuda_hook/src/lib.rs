@@ -1,5 +1,5 @@
 use auto_gmem_ipc::{
-    shm::{Shm, ShmGuard, ShmVec},
+    shm::{AllocationEntry, Shm, ShmGuard, ShmVec},
     sync::IpcMutexGuard,
 };
 use comm::nofity_shm;
@@ -12,6 +12,7 @@ use std::{
 
 mod comm;
 mod intercept;
+mod sidecar;
 mod snippet;
 mod utils;
 
@@ -30,7 +31,7 @@ pub(crate) static GENERIC_DATA: OnceLock<GenericData> = OnceLock::new();
 
 pub(crate) struct GenericData {
     shm: ShmGuard,
-    overflowed_ptr_mapping: Mutex<Vec<(u64, usize)>>,
+    overflowed_ptr_mapping: Mutex<Vec<AllocationEntry>>,
 }
 
 impl GenericData {
@@ -87,12 +88,12 @@ impl GenericData {
 }
 
 pub(crate) struct FusedPtrMapping<'a> {
-    shm: IpcMutexGuard<'a, ShmVec<(u64, usize), 4096>>,
-    overflowed: MutexGuard<'a, Vec<(u64, usize)>>,
+    shm: IpcMutexGuard<'a, ShmVec<AllocationEntry, 4096>>,
+    overflowed: MutexGuard<'a, Vec<AllocationEntry>>,
 }
 
 impl<'a> FusedPtrMapping<'a> {
-    pub fn push(&mut self, ptr: (u64, usize)) {
+    pub fn push(&mut self, ptr: AllocationEntry) {
         if self.shm.len() < self.shm.capacity() {
             let _ = self.shm.push(ptr);
         } else {
@@ -100,7 +101,7 @@ impl<'a> FusedPtrMapping<'a> {
         }
     }
 
-    pub fn remove(&mut self, idx: usize) -> (u64, usize) {
+    pub fn remove(&mut self, idx: usize) -> AllocationEntry {
         if idx < self.shm.len() {
             self.shm.remove(idx)
         } else {
@@ -112,7 +113,7 @@ impl<'a> FusedPtrMapping<'a> {
         self.shm.len() + self.overflowed.len()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &(u64, usize)> {
+    pub fn iter(&self) -> impl Iterator<Item = &AllocationEntry> {
         self.shm.as_slice().iter().chain(self.overflowed.iter())
     }
 }

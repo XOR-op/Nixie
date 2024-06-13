@@ -6,7 +6,15 @@ use crate::sync::IpcMutex;
 
 pub struct Shm {
     all_len: u32,
-    pub ptr_mapping: IpcMutex<ShmVec<(u64, usize), 4096>>,
+    pub ptr_mapping: IpcMutex<ShmVec<AllocationEntry, 4096>>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AllocationEntry {
+    pub addr: u64,
+    pub len: usize,
+    pub device: i32,
 }
 
 impl Shm {

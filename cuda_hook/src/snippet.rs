@@ -13,8 +13,8 @@ fn prefetch_impl(size_mb: u64) {
         if prefetch_cnt > streams.len() * 40 {
             break;
         }
-        let ptr = pair.0;
-        let size = pair.1;
+        let ptr = pair.addr;
+        let size = pair.len;
         if size >= 1024 * 1024 * size_mb as usize {
             let start = std::time::Instant::now();
             let res =
@@ -88,27 +88,20 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshol
     let mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
     let mut cadidate_cnt = 0;
     unsafe {
-        // TODO: device should follow allocation
-        let mut curr_dev = 0;
-        let res = cudarc::driver::sys::cuCtxGetDevice(&mut curr_dev as *mut _);
-        if res != cudaError_enum::CUDA_SUCCESS {
-            eprintln!("Failed to get current device: {:?}", res);
-            return 0;
-        }
-        for (dev_ptr, size) in mapping.iter() {
-            if *size < (size_threshold_mb as usize * 1024 * 1024) {
+        for entry in mapping.iter() {
+            if entry.len < (size_threshold_mb as usize * 1024 * 1024) {
                 continue;
             }
             cadidate_cnt += 1;
             let res = cudarc::driver::sys::cuMemAdvise(
-                *dev_ptr as u64,
-                *size,
+                entry.addr,
+                entry.len,
                 if read_mostly {
                     cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
                 } else {
                     cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
                 },
-                curr_dev,
+                entry.device,
             );
             if res != cudaError_enum::CUDA_SUCCESS {
                 eprintln!("Failed to set read mostly: {:?}", res);
@@ -119,7 +112,12 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshol
 }
 
 #[no_mangle]
-pub extern "C" fn _auto_gmem_advise_read_mostly_for(read_mostly: bool, address: u64) -> u64 {
+pub extern "C" fn _auto_gmem_advise_read_mostly_for(
+    read_mostly: bool,
+    address: u64,
+    length: u64,
+    device: i32,
+) -> u64 {
     eprintln!(
         "{} {}: read_mostly={}, address={:#018x}",
         "[libcuda_hook]".bold(),
@@ -127,33 +125,21 @@ pub extern "C" fn _auto_gmem_advise_read_mostly_for(read_mostly: bool, address: 
         format!("{}", read_mostly).blue(),
         address
     );
-    let mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
     unsafe {
-        let mut curr_dev = 0;
-        let res = cudarc::driver::sys::cuCtxGetDevice(&mut curr_dev as *mut _);
+        let res = cudarc::driver::sys::cuMemAdvise(
+            address,
+            length as usize,
+            if read_mostly {
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
+            } else {
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
+            },
+            device,
+        );
         if res != cudaError_enum::CUDA_SUCCESS {
-            eprintln!("Failed to get current device: {:?}", res);
-            return 2;
+            eprintln!("Failed to set read mostly: {:?}", res);
+            return 1;
         }
-        for (dev_ptr, size) in mapping.iter() {
-            if *dev_ptr == address {
-                let res = cudarc::driver::sys::cuMemAdvise(
-                    *dev_ptr as u64,
-                    *size,
-                    if read_mostly {
-                        cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
-                    } else {
-                        cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
-                    },
-                    curr_dev,
-                );
-                if res != cudaError_enum::CUDA_SUCCESS {
-                    eprintln!("Failed to set read mostly: {:?}", res);
-                    return 2;
-                }
-                return 0;
-            }
-        }
+        0
     }
-    1
 }
