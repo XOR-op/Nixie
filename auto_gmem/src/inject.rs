@@ -100,8 +100,9 @@ pub fn inject_process(
          *  ff d0 => call rax
          *  cc => int3
          */
-        let code: u64 = 0xccd0ff;
-        user_regs.rax = func_offset as u64;
+        let base_code: u64 = 0xccd0ff;
+        let code: u64 = base_code | (text_bak as u64 & 0xffffffffff000000);
+        user_regs.rax = func_offset;
         user_regs.rdi = arg1;
         user_regs.rsi = arg2;
         user_regs.rdx = arg3;
@@ -121,12 +122,23 @@ pub fn inject_process(
         let mut status = 0;
         waitpid(pid, &mut status as *mut _, 0);
         if !(libc::WSTOPSIG(status) == SIGTRAP) {
-            return Err(InjectError::new(InjectErrorStage::WaitExec(status)));
+            tracing::error!(
+                "!!!!!!!!!!!!!!!!!!!!!!!! Got bad status: {} as sig {}; original rax = {}; jump to {:#x}",
+                status,
+                libc::WSTOPSIG(status),
+                regs_bak.rax,
+                func_offset
+            );
+            // return Err(InjectError::new(InjectErrorStage::WaitExec(status)));
         }
         // Retrive return value
         check_err!(
             libc::ptrace(libc::PTRACE_GETREGS, pid, 0, &mut user_regs as *mut _),
             InjectErrorStage::RecoverCtx
+        );
+        eprintln!(
+            "new PC = {:#x}; old PC = {:#x}; result={}/{:#x}",
+            user_regs.rip, regs_bak.rip, user_regs.rax, user_regs.rax
         );
         let ret_val = user_regs.rax;
         // Recover the context

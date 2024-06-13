@@ -51,8 +51,9 @@ impl Daemon {
         tracing::info!("Daemon started at {:?}", self.control_path);
         loop {
             let (stream, _) = controller.get_listener().accept().await?;
+            let dylib_path = self.dylib_path.clone();
             tokio::spawn(async move {
-                match Self::serve_conn(stream).await {
+                match Self::serve_conn(stream, dylib_path).await {
                     Ok(_) => {}
                     Err(e) => {
                         tracing::error!("Client[pid={}] {}", e.1.unwrap_or(-1), e.0);
@@ -64,11 +65,12 @@ impl Daemon {
 
     async fn serve_conn(
         stream: tokio::net::UnixStream,
+        dylib_path: String,
     ) -> Result<(), (AutoGMemError, Option<i32>)> {
         let mut length_buf = [0u8; 4];
         let mut peer_pid = None;
         let (mut uds_recv, uds_send) = stream.into_split();
-        let mut builder = ProcessControlBuilder::new(uds_send);
+        let mut builder = ProcessControlBuilder::new(uds_send, dylib_path);
 
         while uds_recv.read_exact(&mut length_buf).await.is_ok() {
             // read entire message

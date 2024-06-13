@@ -1,14 +1,12 @@
 #![allow(non_upper_case_globals)]
 use std::{collections::BTreeSet, os::fd::OwnedFd};
 
-use auto_gmem_ipc::{shm::ShmGuard, SetReadDupArgs};
-use tokio::{
-    io::{unix::AsyncFd, AsyncWriteExt},
-    net::unix::OwnedWriteHalf as UnixWriteHalf,
-};
+use auto_gmem_ipc::shm::ShmGuard;
+use tokio::{io::unix::AsyncFd, net::unix::OwnedWriteHalf as UnixWriteHalf};
 
 use crate::{
     error::AutoGMemError,
+    inject_wrapper,
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
 
@@ -18,6 +16,7 @@ pub(crate) struct ProcessControl {
     event_queue: EventQueue,
     shm: ShmGuard,
     rpc_sender: UnixWriteHalf,
+    dylib_path: String,
 }
 
 impl ProcessControl {
@@ -89,14 +88,33 @@ impl ProcessControl {
                 disabled
             );
             for entry in disabled {
-                let msg = auto_gmem_ipc::S2CMessage::SetReadDup(SetReadDupArgs {
-                    addr: entry.addr,
-                    len: entry.len as u64,
-                    device: entry.device,
-                    value: false,
-                });
-                let buf = serialize_msg(msg);
-                self.rpc_sender.write_all(&buf).await?;
+                // let msg = auto_gmem_ipc::S2CMessage::SetReadDup(SetReadDupArgs {
+                //     addr: entry.addr,
+                //     len: entry.len as u64,
+                //     device: entry.device,
+                //     value: false,
+                // });
+                // let buf = serialize_msg(msg);
+                // self.rpc_sender.write_all(&buf).await?;
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                tracing::trace!("Disable read duplication for {:?}", entry);
+                inject_wrapper(
+                    self.peer_pid,
+                    self.dylib_path.clone(),
+                    "_auto_gmem_disable_read_duplication",
+                    entry.addr,
+                    entry.len as u64,
+                    entry.device as u64,
+                );
+                tracing::trace!("Dummy call");
+                inject_wrapper(
+                    self.peer_pid,
+                    self.dylib_path.clone(),
+                    "_auto_gmem_dummy",
+                    0,
+                    0,
+                    0,
+                );
             }
         }
 
@@ -118,16 +136,18 @@ pub(crate) struct ProcessControlBuilder {
     event_queue: Option<EventQueue>,
     shm: Option<ShmGuard>,
     msg_sender: Option<UnixWriteHalf>,
+    dylib_path: String,
 }
 
 impl ProcessControlBuilder {
-    pub fn new(msg_sender: UnixWriteHalf) -> Self {
+    pub fn new(msg_sender: UnixWriteHalf, dylib_path: String) -> Self {
         Self {
             pid: None,
             pid_fd: None,
             event_queue: None,
             shm: None,
             msg_sender: Some(msg_sender),
+            dylib_path,
         }
     }
 
@@ -181,6 +201,7 @@ impl ProcessControlBuilder {
             event_queue: self.event_queue.take().unwrap(),
             shm: self.shm.take().unwrap(),
             rpc_sender: self.msg_sender.take().unwrap(),
+            dylib_path: self.dylib_path.clone(),
         })
     }
 }

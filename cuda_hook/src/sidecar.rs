@@ -2,7 +2,7 @@ use std::{io::Read, os::unix::net::UnixStream};
 
 use auto_gmem_ipc::S2CMessage;
 
-use crate::snippet::_auto_gmem_advise_read_mostly_for;
+use crate::snippet::advise_read_mostly_for;
 
 pub(crate) struct Sidecar {
     recv: UnixStream,
@@ -33,7 +33,7 @@ impl Sidecar {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             match args {
                 S2CMessage::SetReadDup(args) => {
-                    _auto_gmem_advise_read_mostly_for(args.value, args.addr, args.len, args.device);
+                    advise_read_mostly_for(args.value, args.addr, args.len, args.device);
                 }
             }
         }

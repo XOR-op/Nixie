@@ -112,19 +112,57 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshol
 }
 
 #[no_mangle]
-pub extern "C" fn _auto_gmem_advise_read_mostly_for(
-    read_mostly: bool,
+pub extern "C" fn _auto_gmem_disable_read_duplication(
     address: u64,
     length: u64,
-    device: i32,
+    device: u64,
 ) -> u64 {
+    // eprintln!(
+    //     "{} {}: address={:#018x}, length={}, device={}",
+    //     "[libcuda_hook]".bold(),
+    //     "_auto_gmem_disable_read_duplication".green(),
+    //     address,
+    //     length,
+    //     device
+    // );
+    let res = unsafe {
+        cudarc::driver::sys::cuMemAdvise(
+            address,
+            length as usize,
+            cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY,
+            device as i32,
+        )
+    };
+    if res != cudaError_enum::CUDA_SUCCESS {
+        // eprintln!("Failed to unset read mostly: {:?}", res);
+        return 1;
+    }
+    // eprintln!("{}", "Success".green());
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn _auto_gmem_dummy(a: u64, b: u64, c: u64) -> u64 {
     eprintln!(
-        "{} {}: read_mostly={}, address={:#018x}",
+        "{} {} IDK",
         "[libcuda_hook]".bold(),
-        "_auto_gmem_advise_read_mostly_for".green(),
-        format!("{}", read_mostly).blue(),
-        address
+        "_auto_gmem_dummy".green()
     );
+    let mut r = 0;
+    for _ in 0..100000 {
+        r += a * b - c;
+    }
+    r
+}
+
+pub fn advise_read_mostly_for(read_mostly: bool, address: u64, length: u64, device: i32) -> u64 {
+    // eprintln!(
+    //     "{} {}: read_mostly={}, address={:#018x}",
+    //     "[libcuda_hook]".bold(),
+    //     "_auto_gmem_advise_read_mostly_for".green(),
+    //     format!("{}", read_mostly).blue(),
+    //     address
+    // );
     unsafe {
         let res = cudarc::driver::sys::cuMemAdvise(
             address,
@@ -137,7 +175,7 @@ pub extern "C" fn _auto_gmem_advise_read_mostly_for(
             device,
         );
         if res != cudaError_enum::CUDA_SUCCESS {
-            eprintln!("Failed to set read mostly: {:?}", res);
+            // eprintln!("Failed to set read mostly: {:?}", res);
             return 1;
         }
         0
