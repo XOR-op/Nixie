@@ -1,6 +1,6 @@
 use auto_gmem_ipc::shm::AllocationEntry;
 use colored::Colorize;
-use cudarc::driver::sys::cudaError_enum;
+use cudarc::driver::sys::{cudaError_enum, CUdevice};
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
@@ -32,16 +32,30 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         }
         std::mem::transmute(func)
     });
+    eprintln!("cudaMalloc: {} Entering", size);
     let res = malloc_func(dev_ptr, size, 0x01);
     if res == cudaError_enum::CUDA_SUCCESS {
         let device_id = {
-            let mut device_id = 0;
-            let res = unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id) };
+            let mut device_id = CUdevice::default();
+            let res = unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id as *mut _) };
             if res != cudaError_enum::CUDA_SUCCESS {
                 panic!("Failed to get device id: {:?}", res);
             }
             device_id
         };
+        // set read mostly
+        let res = unsafe {
+            cudarc::driver::sys::cuMemAdvise(
+                *dev_ptr as u64,
+                size,
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY,
+                device_id,
+            )
+        };
+        if res != cudaError_enum::CUDA_SUCCESS {
+            eprintln!("Failed to set read mostly: {:?}", res);
+        }
+        // record ptr mapping
         let mut ptr_mapping = GENERIC_DATA
             .get_or_init(|| GenericData::new())
             .lock_ptr_mapping();

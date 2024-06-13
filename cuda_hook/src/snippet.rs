@@ -69,7 +69,7 @@ pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) -> u64 {
     eprintln!(
         "{} {}: size={}MB",
         "[libcuda_hook]".bold(),
-        "_auto_gmem_prefetch".green(),
+        "_auto_gmem_prefetch".blue(),
         size_mb
     );
     dbg!(sender.send(size_mb).ok());
@@ -81,8 +81,8 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshol
     eprintln!(
         "{} {}: read_mostly={}, size_threshold={}MB",
         "[libcuda_hook]".bold(),
-        "_auto_gmem_advise_read_mostly".green(),
-        format!("{}", read_mostly).blue(),
+        "_auto_gmem_advise_read_mostly".blue(),
+        format!("{}", read_mostly).yellow(),
         size_threshold_mb
     );
     let mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
@@ -120,7 +120,7 @@ pub extern "C" fn _auto_gmem_disable_read_duplication(
     eprintln!(
         "{} {}: address={:#018x}, length={}, device={}",
         "[libcuda_hook]".bold(),
-        "_auto_gmem_disable_read_duplication".green(),
+        "_auto_gmem_disable_read_duplication".blue(),
         address,
         length,
         device

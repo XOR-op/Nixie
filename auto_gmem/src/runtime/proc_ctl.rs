@@ -83,25 +83,30 @@ impl ProcessControl {
             }
             drop(mapping);
             for entry in disabled {
-                inject_wrapper(
+                match inject_wrapper(
                     self.peer_pid,
                     self.dylib_path.clone(),
                     "_auto_gmem_disable_read_duplication",
                     entry.addr,
                     entry.len as u64,
                     entry.device as u64,
-                );
+                ) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!("Failed to disable read duplication: {:?}", e);
+                    }
+                }
             }
         }
 
-        if !fault_tree.is_empty() {
-            tracing::info!(
-                "[pid={}] Received {} events: write_fault={}",
-                self.peer_pid,
-                n_completed,
-                fault_tree.len()
-            );
-        }
+        // if !fault_tree.is_empty() {
+        //     tracing::info!(
+        //         "[pid={}] Received {} events: write_fault={}",
+        //         self.peer_pid,
+        //         n_completed,
+        //         fault_tree.len()
+        //     );
+        // }
         Ok(n_completed)
     }
 }

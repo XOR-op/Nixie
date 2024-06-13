@@ -4,12 +4,13 @@ use nix::libc::{self, waitpid, PTRACE_ATTACH, SIGSTOP, SIGTRAP};
 
 #[derive(Debug, Clone, Copy)]
 pub enum InjectErrorStage {
+    Preparing,
     Attach,
     WaitAttach(i32),
-    BackupCtx,
+    BackupCtx(&'static str),
     InjectCode,
     WaitExec(i32),
-    RecoverCtx,
+    RecoverCtx(&'static str),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -55,17 +56,12 @@ pub fn inject_wrapper(
     arg1: u64,
     arg2: u64,
     arg3: u64,
-) {
-    let dylib_base = locate_dylib_base(pid as i32, "libcuda_hook.so").unwrap();
-    let func_offset = resolve_func_offset(func_sym, &dylib_path).unwrap();
-    dbg!(inject_process(
-        pid as i32,
-        dylib_base + func_offset,
-        arg1,
-        arg2,
-        arg3
-    ))
-    .ok();
+) -> Result<u64, InjectError> {
+    let dylib_base = locate_dylib_base(pid as i32, "libcuda_hook.so")
+        .ok_or(InjectError::new(InjectErrorStage::Preparing))?;
+    let func_offset = resolve_func_offset(func_sym, &dylib_path)
+        .ok_or(InjectError::new(InjectErrorStage::Preparing))?;
+    inject_process(pid as i32, dylib_base + func_offset, arg1, arg2, arg3)
 }
 
 pub fn inject_process(
@@ -90,24 +86,26 @@ pub fn inject_process(
         let mut user_regs: libc::user_regs_struct = std::mem::zeroed();
         check_err!(
             libc::ptrace(libc::PTRACE_GETREGS, pid, 0, &mut user_regs as *mut _),
-            InjectErrorStage::BackupCtx
+            InjectErrorStage::BackupCtx("GETREGS")
         );
         let regs_bak = user_regs.clone();
         let text_bak: i64 = libc::ptrace(libc::PTRACE_PEEKTEXT, pid, regs_bak.rip, 0);
-        check_err!(text_bak, InjectErrorStage::BackupCtx);
+        check_err!(text_bak, InjectErrorStage::BackupCtx("PEEKTEXT"));
         // Inject the code
         /*
-         *  ff d0 => call rax
+         *  41 ff d1 => call r9
          *  cc => int3
          */
-        let base_code: u64 = 0xccd0ff;
-        let code: u64 = base_code | (text_bak as u64 & 0xffffffffff000000);
-        user_regs.rax = func_offset;
+        let base_code: u64 = 0xccd1ff41;
+        let code: u64 = base_code | (text_bak as u64 & 0xffffffff00000000);
+        user_regs.r9 = func_offset;
         user_regs.rdi = arg1;
         user_regs.rsi = arg2;
         user_regs.rdx = arg3;
+        user_regs.rax = 0;
         // Align rsp to 16 bytes boundary according to x86-64 ABI
-        user_regs.rsp = user_regs.rsp & !0xf;
+        // 128 bytes for red zone
+        user_regs.rsp = (user_regs.rsp - 128) & !0xf;
         check_err!(
             libc::ptrace(libc::PTRACE_SETREGS, pid, 0, &user_regs as *const _),
             InjectErrorStage::InjectCode
@@ -123,27 +121,46 @@ pub fn inject_process(
         // Wait injected code to finish
         let mut status = 0;
         waitpid(pid, &mut status as *mut _, 0);
+        let mut should_debug = false;
         if !(libc::WSTOPSIG(status) == SIGTRAP) {
-            return Err(InjectError::new(InjectErrorStage::WaitExec(status)));
+            should_debug = true;
+            if libc::WIFSTOPPED(status) {
+                tracing::warn!(
+                    "Injected code failed with status: {}: {}",
+                    status,
+                    libc::WSTOPSIG(status)
+                );
+            }
+            // return Err(InjectError::new(InjectErrorStage::WaitExec(status)));
         }
         // Retrive return value
         check_err!(
             libc::ptrace(libc::PTRACE_GETREGS, pid, 0, &mut user_regs as *mut _),
-            InjectErrorStage::RecoverCtx
+            InjectErrorStage::RecoverCtx("GETREGS")
         );
         let ret_val = user_regs.rax;
+
+        if should_debug {
+            tracing::trace!(
+                "new PC=: {:#x}/{}, old PC={:#x}, new regs={:?}",
+                user_regs.rip,
+                user_regs.rip,
+                regs_bak.rip,
+                user_regs
+            );
+        }
         // Recover the context
         check_err!(
             libc::ptrace(libc::PTRACE_POKETEXT, pid, regs_bak.rip, text_bak),
-            InjectErrorStage::RecoverCtx
+            InjectErrorStage::RecoverCtx("POKETEXT")
         );
         check_err!(
             libc::ptrace(libc::PTRACE_SETREGS, pid, 0, &regs_bak as *const _),
-            InjectErrorStage::RecoverCtx
+            InjectErrorStage::RecoverCtx("SETREGS")
         );
         check_err!(
             libc::ptrace(libc::PTRACE_DETACH, pid, 0, 0),
-            InjectErrorStage::RecoverCtx
+            InjectErrorStage::RecoverCtx("DETACH")
         );
         Ok(ret_val)
     }

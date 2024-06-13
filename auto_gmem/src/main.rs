@@ -55,14 +55,15 @@ fn resolve_dylib_path(path: Option<String>) -> String {
 }
 
 fn inject(cli: CliArgs, func_sym: &str, arg1: u64, arg2: u64, arg3: u64) {
-    inject_wrapper(
+    dbg!(inject_wrapper(
         cli.pid as i32,
         resolve_dylib_path(cli.dylib_path),
         func_sym,
         arg1,
         arg2,
         arg3,
-    );
+    )
+    .ok());
 }
 
 fn main() {
