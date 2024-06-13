@@ -2,11 +2,13 @@
 use std::{collections::BTreeSet, os::fd::OwnedFd};
 
 use auto_gmem_ipc::shm::ShmGuard;
-use tokio::{io::unix::AsyncFd, net::unix::OwnedWriteHalf as UnixWriteHalf};
+use tokio::{
+    io::{unix::AsyncFd, AsyncWriteExt},
+    net::unix::OwnedWriteHalf as UnixWriteHalf,
+};
 
 use crate::{
     error::AutoGMemError,
-    inject_wrapper,
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
 
@@ -83,19 +85,27 @@ impl ProcessControl {
             }
             drop(mapping);
             for entry in disabled {
-                match inject_wrapper(
-                    self.peer_pid,
-                    self.dylib_path.clone(),
-                    "_auto_gmem_disable_read_duplication",
-                    entry.addr,
-                    entry.len as u64,
-                    entry.device as u64,
-                ) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::error!("Failed to disable read duplication: {:?}", e);
-                    }
-                }
+                // match inject_wrapper(
+                //     self.peer_pid,
+                //     self.dylib_path.clone(),
+                //     "_auto_gmem_disable_read_duplication",
+                //     entry.addr,
+                //     entry.len as u64,
+                //     entry.device as u64,
+                // ) {
+                //     Ok(_) => {}
+                //     Err(e) => {
+                //         tracing::error!("Failed to disable read duplication: {:?}", e);
+                //     }
+                // }
+                let msg = auto_gmem_ipc::S2CMessage::SetReadDup(auto_gmem_ipc::SetReadDupArgs {
+                    addr: entry.addr,
+                    len: entry.len as u64,
+                    value: false,
+                    device: entry.device as i32,
+                });
+                let buf = serialize_msg(msg);
+                self.rpc_sender.write_all(&buf).await?;
             }
         }
 

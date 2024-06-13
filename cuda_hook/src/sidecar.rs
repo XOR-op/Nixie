@@ -1,7 +1,12 @@
-use std::{io::Read, os::unix::net::UnixStream};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    io::Read,
+    os::unix::net::UnixStream,
+};
 
 use auto_gmem_ipc::S2CMessage;
-use cudarc::driver::sys::cudaError_enum;
+use colored::Colorize;
+use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
 
 pub(crate) struct Sidecar {
     recv: UnixStream,
@@ -13,6 +18,9 @@ impl Sidecar {
     }
 
     pub fn run(mut self) -> std::io::Result<()> {
+        let mut ctxs = CudaContextGuard {
+            cuda_ctxs: HashMap::new(),
+        };
         let mut len_buf = [0u8; 4];
         let mut buf = [0u8; 4096];
         loop {
@@ -32,6 +40,16 @@ impl Sidecar {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             match args {
                 S2CMessage::SetReadDup(args) => {
+                    ctxs.set_current_ctx(args.device);
+                    eprintln!(
+                        "{} {}: =>{} address={:#x}, len={:#x}, device={}",
+                        "[libcuda_hook]".bold(),
+                        "rpc_read_duplication".blue(),
+                        args.value,
+                        args.addr,
+                        args.len,
+                        args.device
+                    );
                     advise_read_mostly_for(args.value, args.addr, args.len, args.device);
                 }
             }
@@ -39,9 +57,61 @@ impl Sidecar {
     }
 }
 
-fn advise_read_mostly_for(read_mostly: bool, address: u64, length: u64, device: i32) -> u64 {
-    unsafe {
-        let res = cudarc::driver::sys::cuMemAdvise(
+struct CudaContextGuard {
+    cuda_ctxs: HashMap<i32, CUcontext>,
+}
+
+impl CudaContextGuard {
+    fn get_dev_ctx(&mut self, device_idx: CUdevice) -> CUcontext {
+        match self.cuda_ctxs.entry(device_idx) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                let mut ctx = std::ptr::null_mut();
+                let res = unsafe {
+                    cudarc::driver::sys::cuDevicePrimaryCtxRetain(&mut ctx as *mut _, device_idx)
+                };
+                if res != cudaError_enum::CUDA_SUCCESS {
+                    eprintln!(
+                        "Failed to retain context for device {}: {:?}",
+                        device_idx, res
+                    );
+                }
+                e.insert(ctx);
+                eprintln!(
+                    "{} {}: device={}",
+                    "[libcuda_hook]".bold(),
+                    "init_dev_ctx".blue(),
+                    device_idx
+                );
+                ctx
+            }
+        }
+    }
+
+    fn set_current_ctx(&mut self, device_idx: CUdevice) {
+        let ctx = self.get_dev_ctx(device_idx);
+        let res = unsafe { cudarc::driver::sys::cuCtxSetCurrent(ctx) };
+        if res != cudaError_enum::CUDA_SUCCESS {
+            eprintln!("Failed to set current context: {:?}", res);
+        }
+    }
+}
+
+impl Drop for CudaContextGuard {
+    fn drop(&mut self) {
+        self.cuda_ctxs.keys().for_each(|dev| {
+            let res = unsafe { cudarc::driver::sys::cuDevicePrimaryCtxRelease_v2(*dev) };
+            if res != cudaError_enum::CUDA_SUCCESS {
+                eprintln!("Failed to release context: {:?}", res);
+            }
+        });
+        self.cuda_ctxs.clear();
+    }
+}
+
+fn advise_read_mostly_for(read_mostly: bool, address: u64, length: u64, device: i32) {
+    let res = unsafe {
+        cudarc::driver::sys::cuMemAdvise(
             address,
             length as usize,
             if read_mostly {
@@ -50,10 +120,9 @@ fn advise_read_mostly_for(read_mostly: bool, address: u64, length: u64, device: 
                 cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
             },
             device,
-        );
-        if res != cudaError_enum::CUDA_SUCCESS {
-            return 1;
-        }
-        0
+        )
+    };
+    if res != cudaError_enum::CUDA_SUCCESS {
+        eprintln!("Failed to set read mostly: {:?}", res);
     }
 }

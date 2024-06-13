@@ -44,17 +44,17 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             device_id
         };
         // set read mostly
-        let res = unsafe {
-            cudarc::driver::sys::cuMemAdvise(
-                *dev_ptr as u64,
-                size,
-                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY,
-                device_id,
-            )
-        };
-        if res != cudaError_enum::CUDA_SUCCESS {
-            eprintln!("Failed to set read mostly: {:?}", res);
-        }
+        // let res = unsafe {
+        //     cudarc::driver::sys::cuMemAdvise(
+        //         *dev_ptr as u64,
+        //         size,
+        //         cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY,
+        //         device_id,
+        //     )
+        // };
+        // if res != cudaError_enum::CUDA_SUCCESS {
+        //     eprintln!("Failed to set read mostly: {:?}", res);
+        // }
         // record ptr mapping
         let mut ptr_mapping = GENERIC_DATA
             .get_or_init(|| GenericData::new())
@@ -94,7 +94,15 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     let idx = mapping.iter().position(|pr| pr.addr == dev_ptr as u64);
     if let Some(idx) = idx {
         mapping.remove(idx);
+    } else {
+        eprintln!("Failed to find ptr mapping for {}", dev_ptr as u64);
     }
+    eprintln!(
+        "{} {}: at={:#018x}",
+        "[libcuda_hook]".bold(),
+        "cudaFree".green(),
+        dev_ptr as u64
+    );
     return free_func(dev_ptr);
 }
 
