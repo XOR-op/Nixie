@@ -82,22 +82,7 @@ impl ProcessControl {
                 }
             }
             drop(mapping);
-            tracing::debug!(
-                "[pid={}] Disable read duplication for {:?}",
-                self.peer_pid,
-                disabled
-            );
             for entry in disabled {
-                // let msg = auto_gmem_ipc::S2CMessage::SetReadDup(SetReadDupArgs {
-                //     addr: entry.addr,
-                //     len: entry.len as u64,
-                //     device: entry.device,
-                //     value: false,
-                // });
-                // let buf = serialize_msg(msg);
-                // self.rpc_sender.write_all(&buf).await?;
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                tracing::trace!("Disable read duplication for {:?}", entry);
                 inject_wrapper(
                     self.peer_pid,
                     self.dylib_path.clone(),
@@ -105,15 +90,6 @@ impl ProcessControl {
                     entry.addr,
                     entry.len as u64,
                     entry.device as u64,
-                );
-                tracing::trace!("Dummy call");
-                inject_wrapper(
-                    self.peer_pid,
-                    self.dylib_path.clone(),
-                    "_auto_gmem_dummy",
-                    0,
-                    0,
-                    0,
                 );
             }
         }

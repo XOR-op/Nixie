@@ -124,23 +124,12 @@ pub fn inject_process(
         let mut status = 0;
         waitpid(pid, &mut status as *mut _, 0);
         if !(libc::WSTOPSIG(status) == SIGTRAP) {
-            tracing::error!(
-                "!!!!!!!!!!!!!!!!!!!!!!!! Got bad status: {} as sig {}; original rax = {}; jump to {:#x}",
-                status,
-                libc::WSTOPSIG(status),
-                regs_bak.rax,
-                func_offset
-            );
-            // return Err(InjectError::new(InjectErrorStage::WaitExec(status)));
+            return Err(InjectError::new(InjectErrorStage::WaitExec(status)));
         }
         // Retrive return value
         check_err!(
             libc::ptrace(libc::PTRACE_GETREGS, pid, 0, &mut user_regs as *mut _),
             InjectErrorStage::RecoverCtx
-        );
-        eprintln!(
-            "new PC = {:#x}; old PC = {:#x}; result={}/{:#x}",
-            user_regs.rip, regs_bak.rip, user_regs.rax, user_regs.rax
         );
         let ret_val = user_regs.rax;
         // Recover the context
