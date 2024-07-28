@@ -1,6 +1,6 @@
 use auto_gmem_ipc::shm::AllocationEntry;
 use colored::Colorize;
-use cudarc::driver::sys::{cudaError_enum, CUdevice};
+use cudarc::driver::sys::{cudaError_enum, CUdevice, CUstream};
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
@@ -10,13 +10,29 @@ use crate::sidecar::Sidecar;
 use crate::utils::size_to_string;
 use crate::{GenericData, GENERIC_DATA};
 
+#[repr(C)]
+pub struct CudaDim3 {
+    x: u32,
+    y: u32,
+    z: u32,
+}
+
 type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
 type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
+type CudaLaunchKernelType = extern "C" fn(
+    *const libc::c_void,
+    CudaDim3,
+    CudaDim3,
+    *mut *mut libc::c_void,
+    usize,
+    CUstream,
+) -> cudaError_enum;
 type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
 type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
 
 static MALLOC_FN: OnceLock<CudaMallocType> = OnceLock::new();
 static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
+static LAUNCH_KERNEL_FN: OnceLock<CudaLaunchKernelType> = OnceLock::new();
 static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
 static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
 
@@ -104,6 +120,43 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         dev_ptr as u64
     );
     return free_func(dev_ptr);
+}
+
+#[allow(non_snake_case)]
+#[no_mangle]
+pub extern "C" fn cudaLaunchKernel(
+    func: *const libc::c_void,
+    gridDim: CudaDim3,
+    blockDim: CudaDim3,
+    args: *mut *mut libc::c_void,
+    sharedMem: usize,
+    stream: CUstream,
+) -> cudaError_enum {
+    let launch_kernel_func = LAUNCH_KERNEL_FN.get_or_init(|| unsafe {
+        let func = dlsym(RTLD_NEXT, cr"cudaLaunchKernel".as_ptr()) as *mut CudaLaunchKernelType;
+        if func.is_null() {
+            panic!("Failed to get original cudaLaunchKernel function");
+        }
+        std::mem::transmute(func)
+    });
+    const ANSI_BOLD: &'static str = "\x1b[1m";
+    const ANSI_GREEN: &'static str = "\x1b[0;32m";
+    const ANSI_RESET: &'static str = "\x1b[0m";
+    println!(
+        "{}[libcudahook] ({}) {}cudaLaunchKernel{}: gridDim=({},{},{}), blockDim=({},{},{}), sharedMem={}",
+        ANSI_BOLD,
+        chrono::Local::now().format("%H:%M:%S%.6f"),
+        ANSI_GREEN,
+        ANSI_RESET,
+        gridDim.x,
+        gridDim.y,
+        gridDim.z,
+        blockDim.x,
+        blockDim.y,
+        blockDim.z,
+        sharedMem
+    );
+    return launch_kernel_func(func, gridDim, blockDim, args, sharedMem, stream);
 }
 
 #[allow(non_snake_case)]
