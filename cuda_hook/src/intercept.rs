@@ -179,7 +179,9 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
         let _ = UVM_FD.set(res);
         notify_fd(res);
         if let Some(stream) = try_duplicate_comm() {
-            let sidecar = Sidecar::new(stream);
+            let (sender, receiver) = crossbeam::channel::bounded(30);
+            let sidecar = Sidecar::new(stream, sender);
+            let _ = crate::schedule::SCHED_SIG_RECV.set(receiver);
             std::thread::spawn(|| {
                 if let Err(e) = sidecar.run() {
                     eprintln!("Sidecar error : {:?}", e);

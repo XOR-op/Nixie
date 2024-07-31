@@ -34,3 +34,4 @@ tracing-subscriber = { version = "0.3.18", features = [
 
 chrono = "0.4.38"
 syscalls = { version = "0.6.18", features = ["x86_64"] }
+ringbuf = "0.4.1"

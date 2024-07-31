@@ -121,6 +121,7 @@ impl Daemon {
                         });
                     }
                 }
+                C2SMessage::MemoryUsage(_) => todo!(),
             }
         }
         Ok(())

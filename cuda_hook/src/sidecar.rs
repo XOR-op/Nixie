@@ -10,11 +10,15 @@ use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
 
 pub(crate) struct Sidecar {
     recv: UnixStream,
+    sched_notifier: crossbeam::channel::Sender<()>,
 }
 
 impl Sidecar {
-    pub fn new(stream: UnixStream) -> Self {
-        Self { recv: stream }
+    pub fn new(stream: UnixStream, sched_notifier: crossbeam::channel::Sender<()>) -> Self {
+        Self {
+            recv: stream,
+            sched_notifier,
+        }
     }
 
     pub fn run(mut self) -> std::io::Result<()> {
@@ -51,6 +55,21 @@ impl Sidecar {
                         args.device
                     );
                     advise_read_mostly_for(args.value, args.addr, args.len, args.device);
+                }
+                S2CMessage::GrantRunningToken(args) => {
+                    eprintln!(
+                        "{} {}: time={:?}",
+                        "[libcuda_hook]".bold(),
+                        "UNIMPLEMENTED rpc_grant_running_token".red(),
+                        args.time,
+                    );
+                    let mut allowed_running_until =
+                        crate::schedule::ALLOWED_RUNNING_UNTIL.lock().unwrap();
+                    if *allowed_running_until < args.time {
+                        *allowed_running_until = args.time;
+                        let _ = self.sched_notifier.send(());
+                    }
+                    drop(allowed_running_until);
                 }
             }
         }

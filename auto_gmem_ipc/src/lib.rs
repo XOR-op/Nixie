@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use serde::{Deserialize, Serialize};
 
 pub mod shm;
@@ -8,6 +10,7 @@ pub enum C2SMessage {
     ClientHello(ClientHello),
     UvmFd(UvmFileDescriptor),
     ShmPath(ShmPath),
+    MemoryUsage(MemoryUsageUpdate),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -25,9 +28,17 @@ pub struct ShmPath {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct MemoryUsageUpdate {
+    pub change: i64,
+}
+
+// ------------------------------------------------------------
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum S2CMessage {
     SetReadDup(SetReadDupArgs),
+    GrantRunningToken(GrantRunningTokenArgs),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -36,4 +47,9 @@ pub struct SetReadDupArgs {
     pub len: u64,
     pub device: i32,
     pub value: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct GrantRunningTokenArgs {
+    pub time: SystemTime,
 }
