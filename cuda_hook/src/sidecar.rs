@@ -8,16 +8,18 @@ use auto_gmem_ipc::S2CMessage;
 use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
 
+use crate::schedule::SchedControl;
+
 pub(crate) struct Sidecar {
     recv: UnixStream,
-    sched_notifier: crossbeam::channel::Sender<()>,
+    sched_ctrl: &'static SchedControl,
 }
 
 impl Sidecar {
-    pub fn new(stream: UnixStream, sched_notifier: crossbeam::channel::Sender<()>) -> Self {
+    pub fn new(stream: UnixStream, sched_ctrl: &'static SchedControl) -> Self {
         Self {
             recv: stream,
-            sched_notifier,
+            sched_ctrl,
         }
     }
 
@@ -63,13 +65,7 @@ impl Sidecar {
                         "UNIMPLEMENTED rpc_grant_running_token".red(),
                         args.time,
                     );
-                    let mut allowed_running_until =
-                        crate::schedule::ALLOWED_RUNNING_UNTIL.lock().unwrap();
-                    if *allowed_running_until < args.time {
-                        *allowed_running_until = args.time;
-                        let _ = self.sched_notifier.send(());
-                    }
-                    drop(allowed_running_until);
+                    self.sched_ctrl.update_time(args.time);
                 }
             }
         }

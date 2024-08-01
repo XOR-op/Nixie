@@ -1,32 +1,35 @@
 use std::{
-    sync::{Mutex, OnceLock},
-    time::{Duration, SystemTime},
+    sync::{Condvar, Mutex},
+    time::SystemTime,
 };
 
-pub(crate) static SCHED_SIG_RECV: OnceLock<crossbeam::channel::Receiver<()>> = OnceLock::new();
-pub(crate) static ALLOWED_RUNNING_UNTIL: Mutex<SystemTime> = Mutex::new(SystemTime::UNIX_EPOCH);
+pub(crate) static SCHED_CTRL: SchedControl = SchedControl::new();
 
-pub fn wait_until_schedulable() {
-    let allowed_running_until = ALLOWED_RUNNING_UNTIL.lock().unwrap();
-    if SystemTime::now() < *allowed_running_until {
-        return;
+pub(crate) struct SchedControl {
+    allow_running_until: Mutex<SystemTime>,
+    cond_var: Condvar,
+}
+
+impl SchedControl {
+    pub const fn new() -> Self {
+        Self {
+            allow_running_until: Mutex::new(SystemTime::UNIX_EPOCH),
+            cond_var: Condvar::new(),
+        }
     }
-    drop(allowed_running_until);
 
-    loop {
-        crossbeam::select! {
-            recv(SCHED_SIG_RECV.get().unwrap()) -> r => {
-                if r.is_err() {
-                    // Disconnected, allow anyway
-                    return;
-                }
-            }
-            default(Duration::from_millis(30)) => {}
+    pub fn update_time(&self, new_time: SystemTime) {
+        let mut allowed_running_until = self.allow_running_until.lock().unwrap();
+        if new_time > *allowed_running_until {
+            *allowed_running_until = new_time;
+            self.cond_var.notify_all();
         }
-        let allowed_running_until = ALLOWED_RUNNING_UNTIL.lock().unwrap();
-        if SystemTime::now() < *allowed_running_until {
-            return;
+    }
+
+    pub fn wait_until_schedulable(&self) {
+        let mut allowed_running_until = self.allow_running_until.lock().unwrap();
+        while SystemTime::now() > *allowed_running_until {
+            allowed_running_until = self.cond_var.wait(allowed_running_until).unwrap();
         }
-        drop(allowed_running_until);
     }
 }
