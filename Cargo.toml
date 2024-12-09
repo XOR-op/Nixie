@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["nihilphased", "nihilapi", "nihilshim"]
+members = ["src/daemon", "src/api", "src/shim"]
 
 [workspace.dependencies]
-nihilapi = { path = "nihilapi" }
+nihilapi = { path = "src/api" }
 bincode = "1.3.3"
 nix = { version = "0.28.0", features = ["fs", "user", "ioctl"] }
