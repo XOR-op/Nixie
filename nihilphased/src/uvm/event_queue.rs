@@ -9,7 +9,7 @@ use tokio::io::{
     Interest,
 };
 
-use crate::error::AutoGMemError;
+use crate::error::NihilphaseError;
 
 use super::{
     uvm_api::{
@@ -28,9 +28,11 @@ pub(crate) struct EventQueue {
 }
 
 impl EventQueue {
-    pub fn new(uvm_fd: OwnedFd, len: usize) -> Result<Self, AutoGMemError> {
+    pub fn new(uvm_fd: OwnedFd, len: usize) -> Result<Self, NihilphaseError> {
         if !is_pow2(len) {
-            return Err(AutoGMemError::Invalid("EventQueue::len must be power of 2"));
+            return Err(NihilphaseError::Invalid(
+                "EventQueue::len must be power of 2",
+            ));
         }
         let uvm_tools_handle = unsafe {
             let uvm_tools_handle = nix::libc::open(
@@ -38,7 +40,7 @@ impl EventQueue {
                 nix::libc::O_RDWR | nix::libc::O_NONBLOCK,
             );
             if uvm_tools_handle < 0 {
-                return Err(AutoGMemError::Errno(
+                return Err(NihilphaseError::Errno(
                     nix::errno::Errno::from_raw(uvm_tools_handle),
                     "open /dev/nvidia-uvm-tools",
                 ));
@@ -57,7 +59,7 @@ impl EventQueue {
         );
         let res = unsafe {
             uvm_tools_init_event_tracker(uvm_tools_handle.as_raw_fd(), &mut args as *mut _)
-                .map_err(|e| AutoGMemError::Errno(e, "uvm_tools_init_event_tracker"))?
+                .map_err(|e| NihilphaseError::Errno(e, "uvm_tools_init_event_tracker"))?
         };
         tracing::debug!("uvm_tools_init_event_tracker -> {:?}", res);
         match args.result() {
@@ -70,14 +72,14 @@ impl EventQueue {
                     control_buffer,
                 })
             }
-            (e, ver) => Err(AutoGMemError::Invalid2(format!(
+            (e, ver) => Err(NihilphaseError::Invalid2(format!(
                 "uvm_tools_init_event_tracker failed with error: {}, version: {}",
                 e, ver
             ))),
         }
     }
 
-    pub fn enable_event(&self, event_type: UvmEventType) -> Result<(), AutoGMemError> {
+    pub fn enable_event(&self, event_type: UvmEventType) -> Result<(), NihilphaseError> {
         let mut args = UvmToolsEventQueueEnableEventsParams {
             event_type_flags: 1 << event_type as u64,
             rm_status: 0,
@@ -88,9 +90,9 @@ impl EventQueue {
                 &mut args as *mut _,
             )
         }
-        .map_err(|e| AutoGMemError::Errno(e, "uvm_tools_event_queue_enable_events"))?;
+        .map_err(|e| NihilphaseError::Errno(e, "uvm_tools_event_queue_enable_events"))?;
         if args.rm_status != 0 {
-            Err(AutoGMemError::Invalid2(format!(
+            Err(NihilphaseError::Invalid2(format!(
                 "uvm_tools_event_queue_enable_events failed with error: {}",
                 args.rm_status
             )))
@@ -99,11 +101,11 @@ impl EventQueue {
         }
     }
 
-    pub async fn ready(&self) -> Result<AsyncFdReadyGuard<OwnedFd>, AutoGMemError> {
+    pub async fn ready(&self) -> Result<AsyncFdReadyGuard<OwnedFd>, NihilphaseError> {
         self.uvm_tools_handle
             .ready(Interest::READABLE | Interest::PRIORITY | Interest::ERROR)
             .await
-            .map_err(|e| AutoGMemError::Io(e))
+            .map_err(|e| NihilphaseError::Io(e))
     }
 
     pub fn tool_handle(&self) -> &AsyncFd<OwnedFd> {

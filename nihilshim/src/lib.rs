@@ -1,9 +1,9 @@
-use auto_gmem_ipc::{
+use comm::nofity_shm;
+use cudarc::driver::sys::CUstream;
+use nihilapi::{
     shm::{AllocationEntry, Shm, ShmGuard, ShmVec},
     sync::IpcMutexGuard,
 };
-use comm::nofity_shm;
-use cudarc::driver::sys::CUstream;
 use nix::libc;
 use std::{
     ffi::CString,
@@ -50,7 +50,7 @@ impl GenericData {
     pub fn new() -> Self {
         let uuid = uuid::Uuid::new_v4();
         let path = format!(
-            "/auto_gmem_ipc-{}-{}.shm",
+            "/nihilphase_ipc-{}-{}.shm",
             std::process::id(),
             uuid.to_string().split_at(8).0
         );
@@ -71,7 +71,7 @@ impl GenericData {
         }
         // create mmap
         let shm = ShmGuard::new(
-            Shm::init_at(shm_fd, auto_gmem_ipc::shm::Shm::SHM_STRUCT_SIZE)
+            Shm::init_at(shm_fd, nihilapi::shm::Shm::SHM_STRUCT_SIZE)
                 .expect("Failed to init shared memory"),
         );
         // close fd but not unlink; daemon will be responsible for unlinking

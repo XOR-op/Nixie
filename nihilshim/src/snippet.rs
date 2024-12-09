@@ -34,7 +34,7 @@ fn prefetch_impl(size_mb: u64) {
 }
 
 #[no_mangle]
-pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) -> u64 {
+pub extern "C" fn _nihilphase_prefetch(size_mb: u64) -> u64 {
     let _ = STREAM_VEC.get_or_init(|| {
         let mut vec = Vec::new();
         for _ in 0..8 {
@@ -69,7 +69,7 @@ pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) -> u64 {
     eprintln!(
         "{} {}: size={}MB",
         "[libcuda_hook]".bold(),
-        "_auto_gmem_prefetch".blue(),
+        "_nihilphase_prefetch".blue(),
         size_mb
     );
     dbg!(sender.send(size_mb).ok());
@@ -77,11 +77,11 @@ pub extern "C" fn _auto_gmem_prefetch(size_mb: u64) -> u64 {
 }
 
 #[no_mangle]
-pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshold_mb: u64) -> u64 {
+pub extern "C" fn _nihilphase_advise_read_mostly(read_mostly: bool, size_threshold_mb: u64) -> u64 {
     eprintln!(
         "{} {}: read_mostly={}, size_threshold={}MB",
         "[libcuda_hook]".bold(),
-        "_auto_gmem_advise_read_mostly".blue(),
+        "_nihilphase_advise_read_mostly".blue(),
         format!("{}", read_mostly).yellow(),
         size_threshold_mb
     );
@@ -112,7 +112,7 @@ pub extern "C" fn _auto_gmem_advise_read_mostly(read_mostly: bool, size_threshol
 }
 
 #[no_mangle]
-pub extern "C" fn _auto_gmem_disable_read_duplication(
+pub extern "C" fn _nihilphase_disable_read_duplication(
     address: u64,
     length: u64,
     device: u64,
@@ -120,7 +120,7 @@ pub extern "C" fn _auto_gmem_disable_read_duplication(
     eprintln!(
         "{} {}: address={:#018x}, length={}, device={}",
         "[libcuda_hook]".bold(),
-        "_auto_gmem_disable_read_duplication".blue(),
+        "_nihilphase_disable_read_duplication".blue(),
         address,
         length,
         device

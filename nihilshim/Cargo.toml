@@ -1,5 +1,5 @@
 [package]
-name = "cuda_hook"
+name = "nihilshim"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,7 +9,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-auto_gmem_ipc.workspace = true
+nihilapi.workspace = true
 bincode.workspace = true
 nix.workspace = true
 

@@ -4,15 +4,15 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use auto_gmem_ipc::{C2SMessage, ShmPath, UvmFileDescriptor};
 use colored::Colorize;
+use nihilapi::{C2SMessage, ShmPath, UvmFileDescriptor};
 
 static COMM: OnceLock<Option<Mutex<UnixStream>>> = OnceLock::new();
 
 fn init_comm_inner() -> std::io::Result<UnixStream> {
-    let mut comm = UnixStream::connect("/tmp/auto_gmem.sock")?;
+    let mut comm = UnixStream::connect("/tmp/nihilphase.sock")?;
     let pid = std::process::id();
-    let message = C2SMessage::ClientHello(auto_gmem_ipc::ClientHello { pid: pid as i32 });
+    let message = C2SMessage::ClientHello(nihilapi::ClientHello { pid: pid as i32 });
     comm.write_all(&construct_message(message))?;
     Ok(comm)
 }
@@ -24,7 +24,7 @@ fn init_comm() -> Option<Mutex<UnixStream>> {
             eprintln!(
                 "{} {}: {}",
                 "[libcuda_hook]".bold(),
-                "Failed to connect to AutoGMem daemon".red(),
+                "Failed to connect to Nihilphase daemon".red(),
                 e
             );
             None
@@ -39,7 +39,7 @@ pub(crate) fn notify_fd(fd: i32) {
     let mut comm = lock.lock().unwrap();
     let message = C2SMessage::UvmFd(UvmFileDescriptor { fd });
     if comm.write_all(&construct_message(message)).is_err() {
-        eprintln!("Failed to send UvmFd message to AutoGMem Daemon")
+        eprintln!("Failed to send UvmFd message to Nihilphase Daemon")
     }
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn nofity_shm(path: String) {
     let mut comm = lock.lock().unwrap();
     let message = C2SMessage::ShmPath(ShmPath { path });
     if comm.write_all(&construct_message(message)).is_err() {
-        eprintln!("Failed to send ShmPath message to AutoGMem Daemon")
+        eprintln!("Failed to send ShmPath message to Nihilphase Daemon")
     }
 }
 

@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["auto_gmem", "auto_gmem_ipc", "cuda_hook"]
+members = ["nihilphased", "nihilapi", "nihilshim"]
 
 [workspace.dependencies]
-auto_gmem_ipc = { path = "auto_gmem_ipc" }
+nihilapi = { path = "nihilapi" }
 bincode = "1.3.3"
 nix = { version = "0.28.0", features = ["fs", "user", "ioctl"] }

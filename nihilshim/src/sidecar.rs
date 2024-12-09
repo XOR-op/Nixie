@@ -4,9 +4,9 @@ use std::{
     os::unix::net::UnixStream,
 };
 
-use auto_gmem_ipc::S2CMessage;
 use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
+use nihilapi::S2CMessage;
 
 use crate::schedule::SchedControl;
 

@@ -1,12 +1,12 @@
 [package]
-name = "auto_gmem"
+name = "nihilphased"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-auto_gmem_ipc.workspace = true
+nihilapi.workspace = true
 bincode.workspace = true
 nix.workspace = true
 

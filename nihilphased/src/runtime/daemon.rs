@@ -9,8 +9,8 @@ use tokio::{
     net::UnixListener,
 };
 
-use crate::{error::AutoGMemError, uvm::event_queue::EventQueue};
-use auto_gmem_ipc::C2SMessage;
+use crate::{error::NihilphaseError, uvm::event_queue::EventQueue};
+use nihilapi::C2SMessage;
 
 use super::{proc_ctl::ProcessControlBuilder, shm::open_shm};
 
@@ -22,7 +22,7 @@ pub struct Daemon {
 impl Daemon {
     pub fn new(dylib_path: String) -> Self {
         Self {
-            control_path: PathBuf::from("/tmp/auto_gmem.sock"),
+            control_path: PathBuf::from("/tmp/nihilphase.sock"),
             dylib_path,
         }
     }
@@ -34,7 +34,7 @@ impl Daemon {
             .enable_all()
             .build()
             .unwrap();
-        let r: Result<(), AutoGMemError> = rt.block_on(async move {
+        let r: Result<(), NihilphaseError> = rt.block_on(async move {
             tokio::select! {
                 r = self.mainloop() => r,
                 _ = tokio::signal::ctrl_c() => Ok(())
@@ -46,7 +46,7 @@ impl Daemon {
         }
     }
 
-    async fn mainloop(self) -> Result<(), AutoGMemError> {
+    async fn mainloop(self) -> Result<(), NihilphaseError> {
         let controller = UnixListenerGuard::new(self.control_path.as_path())?;
         tracing::info!("Daemon started at {:?}", self.control_path);
         loop {
@@ -66,7 +66,7 @@ impl Daemon {
     async fn serve_conn(
         stream: tokio::net::UnixStream,
         dylib_path: String,
-    ) -> Result<(), (AutoGMemError, Option<i32>)> {
+    ) -> Result<(), (NihilphaseError, Option<i32>)> {
         let mut length_buf = [0u8; 4];
         let mut peer_pid = None;
         let (mut uds_recv, uds_send) = stream.into_split();
@@ -79,14 +79,14 @@ impl Daemon {
             uds_recv
                 .read_exact(&mut buf)
                 .await
-                .map_err(|e| (AutoGMemError::from(e), peer_pid))?;
+                .map_err(|e| (NihilphaseError::from(e), peer_pid))?;
             let message =
-                bincode::deserialize(&buf).map_err(|e| (AutoGMemError::from(e), peer_pid))?;
+                bincode::deserialize(&buf).map_err(|e| (NihilphaseError::from(e), peer_pid))?;
 
             // make sure the peer process has registered itself
             if peer_pid.is_none() && !matches!(message, C2SMessage::ClientHello(_)) {
                 return Err((
-                    AutoGMemError::Invalid("ClientHello message is required"),
+                    NihilphaseError::Invalid("ClientHello message is required"),
                     None,
                 ));
             }
@@ -103,7 +103,7 @@ impl Daemon {
                     builder
                         .with_pid(peer_pid.unwrap())
                         .with_pid_fd(
-                            AsyncFd::new(pid_fd).map_err(|e| (AutoGMemError::Io(e), peer_pid))?,
+                            AsyncFd::new(pid_fd).map_err(|e| (NihilphaseError::Io(e), peer_pid))?,
                         )
                         .with_event_queue(event_queue);
                     if let Some(ctl) = builder.build() {
@@ -128,11 +128,11 @@ impl Daemon {
     }
 }
 
-fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), AutoGMemError> {
+fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), NihilphaseError> {
     let pid_fd = match unsafe { syscall!(Sysno::pidfd_open, pid, nix::libc::PIDFD_NONBLOCK) } {
         Ok(fd) => fd as c_int,
         Err(e) => {
-            return Err(AutoGMemError::Errno(
+            return Err(NihilphaseError::Errno(
                 nix::errno::Errno::from_raw(e.into_raw()),
                 "pidfd_open",
             ));
@@ -146,7 +146,7 @@ fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), Aut
         }
         Err(e) => {
             let _ = nix::unistd::close(pid_fd);
-            Err(AutoGMemError::Errno(
+            Err(NihilphaseError::Errno(
                 nix::errno::Errno::from_raw(e.into_raw()),
                 "pidfd_getfd",
             ))
@@ -162,12 +162,12 @@ struct UnixListenerGuard {
 }
 
 impl UnixListenerGuard {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, AutoGMemError> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, NihilphaseError> {
         let path = path.as_ref().to_path_buf();
         let listener = UnixListener::bind(&path)?;
         if let Some((_, uid, gid)) = get_user_info() {
             nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))
-                .map_err(|e| AutoGMemError::Errno(e, "chown"))?;
+                .map_err(|e| NihilphaseError::Errno(e, "chown"))?;
         }
         Ok(Self {
             path,

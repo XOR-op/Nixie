@@ -1,14 +1,14 @@
 #![allow(non_upper_case_globals)]
 use std::{collections::BTreeSet, os::fd::OwnedFd};
 
-use auto_gmem_ipc::shm::ShmGuard;
+use nihilapi::shm::ShmGuard;
 use tokio::{
     io::{unix::AsyncFd, AsyncWriteExt},
     net::unix::OwnedWriteHalf as UnixWriteHalf,
 };
 
 use crate::{
-    error::AutoGMemError,
+    error::NihilphaseError,
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
 
@@ -29,10 +29,10 @@ impl ProcessControl {
         }
     }
 
-    async fn run_inner(mut self) -> Result<(), AutoGMemError> {
+    async fn run_inner(mut self) -> Result<(), NihilphaseError> {
         self.event_queue
             .enable_event(UvmEventType_UvmEventTypeGpuFault)
-            .map_err(|e| AutoGMemError::from(e))?;
+            .map_err(|e| NihilphaseError::from(e))?;
 
         tracing::info!("Listen events from process [pid={}]", self.peer_pid);
         loop {
@@ -50,7 +50,7 @@ impl ProcessControl {
         Ok(())
     }
 
-    async fn process_event(&mut self) -> Result<u32, AutoGMemError> {
+    async fn process_event(&mut self) -> Result<u32, NihilphaseError> {
         let mut fault_tree = BTreeSet::new();
         let n_completed = self.event_queue.read_events(|event| {
             let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
@@ -88,7 +88,7 @@ impl ProcessControl {
                 // match inject_wrapper(
                 //     self.peer_pid,
                 //     self.dylib_path.clone(),
-                //     "_auto_gmem_disable_read_duplication",
+                //     "_nihilphase_disable_read_duplication",
                 //     entry.addr,
                 //     entry.len as u64,
                 //     entry.device as u64,
@@ -98,7 +98,7 @@ impl ProcessControl {
                 //         tracing::error!("Failed to disable read duplication: {:?}", e);
                 //     }
                 // }
-                let msg = auto_gmem_ipc::S2CMessage::SetReadDup(auto_gmem_ipc::SetReadDupArgs {
+                let msg = nihilapi::S2CMessage::SetReadDup(nihilapi::SetReadDupArgs {
                     addr: entry.addr,
                     len: entry.len as u64,
                     value: false,
@@ -197,7 +197,7 @@ impl ProcessControlBuilder {
     }
 }
 
-fn serialize_msg(msg: auto_gmem_ipc::S2CMessage) -> Vec<u8> {
+fn serialize_msg(msg: nihilapi::S2CMessage) -> Vec<u8> {
     let buf = bincode::serialize(&msg).unwrap();
     let length = buf.len() as u32;
     let length_buf = length.to_le_bytes();

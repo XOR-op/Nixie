@@ -1,5 +1,5 @@
 [package]
-name = "auto_gmem_ipc"
+name = "nihilapi"
 version = "0.1.0"
 edition = "2021"
 

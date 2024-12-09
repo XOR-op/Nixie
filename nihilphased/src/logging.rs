@@ -31,7 +31,7 @@ pub fn init_tracing() {
         .with(stdout_layer)
         .with(
             EnvFilter::builder()
-                .with_default_directive(Directive::from_str("auto_gmem=trace").unwrap())
+                .with_default_directive(Directive::from_str("nihilphase=trace").unwrap())
                 .from_env_lossy(),
         )
         .init();

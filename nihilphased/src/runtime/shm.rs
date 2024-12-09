@@ -1,25 +1,25 @@
 use std::ffi::CString;
 
-use auto_gmem_ipc::shm::{Shm, ShmGuard};
+use nihilapi::shm::{Shm, ShmGuard};
 
 use nix::libc;
 
-use crate::error::AutoGMemError;
+use crate::error::NihilphaseError;
 
-pub(crate) fn open_shm(path: String) -> Result<ShmGuard, AutoGMemError> {
+pub(crate) fn open_shm(path: String) -> Result<ShmGuard, NihilphaseError> {
     tracing::debug!("open_shm({})", path);
     let cpath = CString::new(path).unwrap();
     let shm_fd =
         unsafe { libc::shm_open(cpath.as_ptr(), libc::O_RDWR, libc::S_IRUSR | libc::S_IWUSR) };
     if shm_fd < 0 {
-        return Err(AutoGMemError::Errno(
+        return Err(NihilphaseError::Errno(
             nix::errno::Errno::last(),
             "open shared memory failed",
         ));
     }
     let shm = ShmGuard::new(unsafe {
-        Shm::open_copy_at(shm_fd, auto_gmem_ipc::shm::Shm::SHM_STRUCT_SIZE).map_err(|e| {
-            AutoGMemError::Errno(nix::errno::Errno::from_raw(e), "open_shm(): mmap failed")
+        Shm::open_copy_at(shm_fd, nihilapi::shm::Shm::SHM_STRUCT_SIZE).map_err(|e| {
+            NihilphaseError::Errno(nix::errno::Errno::from_raw(e), "open_shm(): mmap failed")
         })?
     });
     unsafe {

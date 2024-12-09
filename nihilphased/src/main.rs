@@ -35,7 +35,7 @@ struct StartArgs {
 }
 
 #[derive(Debug, Parser)]
-#[clap(name = "AutoGMem", about = "", version = env!("CARGO_PKG_VERSION"))]
+#[clap(name = "nihilphased", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
     Start(StartArgs),
     Prefetch(PrefetchArgs),
@@ -74,13 +74,13 @@ fn main() {
             runtime.start();
         }
         Args::Prefetch(args) => {
-            inject(args.cli, "_auto_gmem_prefetch", args.limit, 0, 0);
+            inject(args.cli, "_nihilphase_prefetch", args.limit, 0, 0);
         }
         Args::Attribute(args) => {
             if let Some(read_dup) = args.read_dup {
                 inject(
                     args.cli,
-                    "_auto_gmem_advise_read_mostly",
+                    "_nihilphase_advise_read_mostly",
                     read_dup as u64,
                     args.limit,
                     0,
