@@ -1,6 +1,6 @@
 use comm::nofity_shm;
 use cudarc::driver::sys::CUstream;
-use nihilapi::{
+use nihilipc::{
     shm::{AllocationEntry, Shm, ShmGuard, ShmVec},
     sync::IpcMutexGuard,
 };
@@ -71,7 +71,7 @@ impl GenericData {
         }
         // create mmap
         let shm = ShmGuard::new(
-            Shm::init_at(shm_fd, nihilapi::shm::Shm::SHM_STRUCT_SIZE)
+            Shm::init_at(shm_fd, nihilipc::shm::Shm::SHM_STRUCT_SIZE)
                 .expect("Failed to init shared memory"),
         );
         // close fd but not unlink; daemon will be responsible for unlinking

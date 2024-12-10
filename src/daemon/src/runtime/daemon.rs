@@ -10,7 +10,7 @@ use tokio::{
 };
 
 use crate::{error::NihilphaseError, uvm::event_queue::EventQueue};
-use nihilapi::C2SMessage;
+use nihilipc::C2SMessage;
 
 use super::{proc_ctl::ProcessControlBuilder, shm::open_shm};
 

@@ -6,9 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-nihilapi.workspace = true
+nihilipc.workspace = true
 bincode.workspace = true
 nix.workspace = true
+tonic.workspace = true
 
 async-bincode = "0.7.2"
 clap = { version = "4.5.4", features = ["derive"] }

@@ -5,14 +5,14 @@ use std::{
 };
 
 use colored::Colorize;
-use nihilapi::{C2SMessage, ShmPath, UvmFileDescriptor};
+use nihilipc::{C2SMessage, ShmPath, UvmFileDescriptor};
 
 static COMM: OnceLock<Option<Mutex<UnixStream>>> = OnceLock::new();
 
 fn init_comm_inner() -> std::io::Result<UnixStream> {
     let mut comm = UnixStream::connect("/tmp/nihilphase.sock")?;
     let pid = std::process::id();
-    let message = C2SMessage::ClientHello(nihilapi::ClientHello { pid: pid as i32 });
+    let message = C2SMessage::ClientHello(nihilipc::ClientHello { pid: pid as i32 });
     comm.write_all(&construct_message(message))?;
     Ok(comm)
 }

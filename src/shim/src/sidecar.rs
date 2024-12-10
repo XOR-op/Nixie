@@ -6,7 +6,7 @@ use std::{
 
 use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
-use nihilapi::S2CMessage;
+use nihilipc::S2CMessage;
 
 use crate::schedule::SchedControl;
 

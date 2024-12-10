@@ -9,7 +9,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-nihilapi.workspace = true
+nihilipc.workspace = true
 bincode.workspace = true
 nix.workspace = true
 

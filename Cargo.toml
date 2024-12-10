@@ -1,8 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["src/daemon", "src/api", "src/shim"]
+members = ["src/daemon", "src/ipc", "src/shim"]
 
 [workspace.dependencies]
-nihilapi = { path = "src/api" }
+nihilipc = { path = "src/ipc" }
 bincode = "1.3.3"
 nix = { version = "0.28.0", features = ["fs", "user", "ioctl"] }
+tonic = "0.12.3"

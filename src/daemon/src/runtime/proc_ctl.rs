@@ -1,7 +1,7 @@
 #![allow(non_upper_case_globals)]
 use std::{collections::BTreeSet, os::fd::OwnedFd};
 
-use nihilapi::shm::ShmGuard;
+use nihilipc::shm::ShmGuard;
 use tokio::{
     io::{unix::AsyncFd, AsyncWriteExt},
     net::unix::OwnedWriteHalf as UnixWriteHalf,
@@ -98,7 +98,7 @@ impl ProcessControl {
                 //         tracing::error!("Failed to disable read duplication: {:?}", e);
                 //     }
                 // }
-                let msg = nihilapi::S2CMessage::SetReadDup(nihilapi::SetReadDupArgs {
+                let msg = nihilipc::S2CMessage::SetReadDup(nihilipc::SetReadDupArgs {
                     addr: entry.addr,
                     len: entry.len as u64,
                     value: false,
@@ -197,7 +197,7 @@ impl ProcessControlBuilder {
     }
 }
 
-fn serialize_msg(msg: nihilapi::S2CMessage) -> Vec<u8> {
+fn serialize_msg(msg: nihilipc::S2CMessage) -> Vec<u8> {
     let buf = bincode::serialize(&msg).unwrap();
     let length = buf.len() as u32;
     let length_buf = length.to_le_bytes();

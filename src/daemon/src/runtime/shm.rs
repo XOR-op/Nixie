@@ -1,6 +1,6 @@
 use std::ffi::CString;
 
-use nihilapi::shm::{Shm, ShmGuard};
+use nihilipc::shm::{Shm, ShmGuard};
 
 use nix::libc;
 
@@ -18,7 +18,7 @@ pub(crate) fn open_shm(path: String) -> Result<ShmGuard, NihilphaseError> {
         ));
     }
     let shm = ShmGuard::new(unsafe {
-        Shm::open_copy_at(shm_fd, nihilapi::shm::Shm::SHM_STRUCT_SIZE).map_err(|e| {
+        Shm::open_copy_at(shm_fd, nihilipc::shm::Shm::SHM_STRUCT_SIZE).map_err(|e| {
             NihilphaseError::Errno(nix::errno::Errno::from_raw(e), "open_shm(): mmap failed")
         })?
     });

@@ -1,6 +1,6 @@
 use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, CUdevice, CUstream};
-use nihilapi::shm::AllocationEntry;
+use nihilipc::shm::AllocationEntry;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
