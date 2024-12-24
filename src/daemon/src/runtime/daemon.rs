@@ -4,15 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use syscalls::{syscall, Sysno};
-use tokio::{
-    io::{unix::AsyncFd, AsyncReadExt},
-    net::UnixListener,
-};
+use tokio::net::UnixListener;
 
-use crate::{error::NihilphaseError, uvm::event_queue::EventQueue};
-use nihilipc::C2SMessage;
-
-use super::{proc_ctl::ProcessControlBuilder, shm::open_shm};
+use crate::{error::NihilphaseError, runtime::daemon_server::DaemonServer};
 
 pub struct Daemon {
     control_path: PathBuf,
@@ -51,80 +45,8 @@ impl Daemon {
         tracing::info!("Daemon started at {:?}", self.control_path);
         loop {
             let (stream, _) = controller.get_listener().accept().await?;
-            let dylib_path = self.dylib_path.clone();
-            tokio::spawn(async move {
-                match Self::serve_conn(stream, dylib_path).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::error!("Client[pid={}] {}", e.1.unwrap_or(-1), e.0);
-                    }
-                }
-            });
+            DaemonServer::launch(stream);
         }
-    }
-
-    async fn serve_conn(
-        stream: tokio::net::UnixStream,
-        dylib_path: String,
-    ) -> Result<(), (NihilphaseError, Option<i32>)> {
-        let mut length_buf = [0u8; 4];
-        let mut peer_pid = None;
-        let (mut uds_recv, uds_send) = stream.into_split();
-        let mut builder = ProcessControlBuilder::new(uds_send, dylib_path);
-
-        while uds_recv.read_exact(&mut length_buf).await.is_ok() {
-            // read entire message
-            let length = u32::from_le_bytes(length_buf);
-            let mut buf = vec![0u8; length as usize];
-            uds_recv
-                .read_exact(&mut buf)
-                .await
-                .map_err(|e| (NihilphaseError::from(e), peer_pid))?;
-            let message =
-                bincode::deserialize(&buf).map_err(|e| (NihilphaseError::from(e), peer_pid))?;
-
-            // make sure the peer process has registered itself
-            if peer_pid.is_none() && !matches!(message, C2SMessage::ClientHello(_)) {
-                return Err((
-                    NihilphaseError::Invalid("ClientHello message is required"),
-                    None,
-                ));
-            }
-            match message {
-                C2SMessage::ClientHello(hello) => {
-                    peer_pid = Some(hello.pid);
-                    tracing::info!("Client[pid={}] connected", hello.pid);
-                }
-                C2SMessage::UvmFd(fd) => {
-                    tracing::debug!("UvmFd: {:?}", fd);
-                    let (pid_fd, uvm_fd) =
-                        duplicate_peer_fd(peer_pid.unwrap(), fd.fd).map_err(|e| (e, peer_pid))?;
-                    let event_queue = EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))?;
-                    builder
-                        .with_pid(peer_pid.unwrap())
-                        .with_pid_fd(
-                            AsyncFd::new(pid_fd).map_err(|e| (NihilphaseError::Io(e), peer_pid))?,
-                        )
-                        .with_event_queue(event_queue);
-                    if let Some(ctl) = builder.build() {
-                        tokio::spawn(async move {
-                            ctl.run().await;
-                        });
-                    }
-                }
-                C2SMessage::ShmPath(path) => {
-                    let shmem = open_shm(path.path).map_err(|e| (e, peer_pid))?;
-                    builder.with_shm(shmem);
-                    if let Some(ctl) = builder.build() {
-                        tokio::spawn(async move {
-                            ctl.run().await;
-                        });
-                    }
-                }
-                C2SMessage::MemoryUsage(_) => todo!(),
-            }
-        }
-        Ok(())
     }
 }
 

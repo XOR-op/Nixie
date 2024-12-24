@@ -1,11 +1,9 @@
 #![allow(non_upper_case_globals)]
 use std::{collections::BTreeSet, os::fd::OwnedFd};
 
-use nihilipc::shm::ShmGuard;
-use tokio::{
-    io::{unix::AsyncFd, AsyncWriteExt},
-    net::unix::OwnedWriteHalf as UnixWriteHalf,
-};
+use nihilipc::{rpc::SidecarClient, shm::ShmGuard};
+use tarpc::context::Context;
+use tokio::io::unix::AsyncFd;
 
 use crate::{
     error::NihilphaseError,
@@ -17,8 +15,7 @@ pub(crate) struct ProcessControl {
     pid_fd: AsyncFd<OwnedFd>,
     event_queue: EventQueue,
     shm: ShmGuard,
-    rpc_sender: UnixWriteHalf,
-    dylib_path: String,
+    rpc_sender: SidecarClient,
 }
 
 impl ProcessControl {
@@ -85,27 +82,21 @@ impl ProcessControl {
             }
             drop(mapping);
             for entry in disabled {
-                // match inject_wrapper(
-                //     self.peer_pid,
-                //     self.dylib_path.clone(),
-                //     "_nihilphase_disable_read_duplication",
-                //     entry.addr,
-                //     entry.len as u64,
-                //     entry.device as u64,
-                // ) {
-                //     Ok(_) => {}
-                //     Err(e) => {
-                //         tracing::error!("Failed to disable read duplication: {:?}", e);
-                //     }
-                // }
-                let msg = nihilipc::S2CMessage::SetReadDup(nihilipc::SetReadDupArgs {
-                    addr: entry.addr,
-                    len: entry.len as u64,
-                    value: false,
-                    device: entry.device as i32,
-                });
-                let buf = serialize_msg(msg);
-                self.rpc_sender.write_all(&buf).await?;
+                if let Err(e) = self
+                    .rpc_sender
+                    .set_read_dup(
+                        Context::current(),
+                        nihilipc::SetReadDupArgs {
+                            addr: entry.addr,
+                            len: entry.len as u64,
+                            value: false,
+                            device: entry.device as i32,
+                        },
+                    )
+                    .await
+                {
+                    tracing::warn!("Failed to disable read duplication: {:?}", e);
+                }
             }
         }
 
@@ -126,19 +117,17 @@ pub(crate) struct ProcessControlBuilder {
     pid_fd: Option<AsyncFd<OwnedFd>>,
     event_queue: Option<EventQueue>,
     shm: Option<ShmGuard>,
-    msg_sender: Option<UnixWriteHalf>,
-    dylib_path: String,
+    msg_sender: Option<SidecarClient>,
 }
 
 impl ProcessControlBuilder {
-    pub fn new(msg_sender: UnixWriteHalf, dylib_path: String) -> Self {
+    pub fn new(msg_sender: SidecarClient) -> Self {
         Self {
             pid: None,
             pid_fd: None,
             event_queue: None,
             shm: None,
             msg_sender: Some(msg_sender),
-            dylib_path,
         }
     }
 
@@ -192,7 +181,6 @@ impl ProcessControlBuilder {
             event_queue: self.event_queue.take().unwrap(),
             shm: self.shm.take().unwrap(),
             rpc_sender: self.msg_sender.take().unwrap(),
-            dylib_path: self.dylib_path.clone(),
         })
     }
 }

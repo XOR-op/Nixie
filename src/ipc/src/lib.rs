@@ -2,24 +2,25 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
+pub mod rpc;
 pub mod shm;
 pub mod sync;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum C2SMessage {
-    ClientHello(ClientHello),
-    UvmFd(UvmFileDescriptor),
+    InitClient(InitClient),
+    UvmFd(UvmFd),
     ShmPath(ShmPath),
     MemoryUsage(MemoryUsageUpdate),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ClientHello {
+pub struct InitClient {
     pub pid: i32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct UvmFileDescriptor {
+pub struct UvmFd {
     pub fd: i32,
 }
 

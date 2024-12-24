@@ -5,14 +5,14 @@ use std::{
 };
 
 use colored::Colorize;
-use nihilipc::{C2SMessage, ShmPath, UvmFileDescriptor};
+use nihilipc::{C2SMessage, ShmPath, UvmFd};
 
 static COMM: OnceLock<Option<Mutex<UnixStream>>> = OnceLock::new();
 
 fn init_comm_inner() -> std::io::Result<UnixStream> {
     let mut comm = UnixStream::connect("/tmp/nihilphase.sock")?;
     let pid = std::process::id();
-    let message = C2SMessage::ClientHello(nihilipc::ClientHello { pid: pid as i32 });
+    let message = C2SMessage::InitClient(nihilipc::InitClient { pid: pid as i32 });
     comm.write_all(&construct_message(message))?;
     Ok(comm)
 }
@@ -37,7 +37,7 @@ pub(crate) fn notify_fd(fd: i32) {
         return;
     };
     let mut comm = lock.lock().unwrap();
-    let message = C2SMessage::UvmFd(UvmFileDescriptor { fd });
+    let message = C2SMessage::UvmFd(UvmFd { fd });
     if comm.write_all(&construct_message(message)).is_err() {
         eprintln!("Failed to send UvmFd message to Nihilphase Daemon")
     }

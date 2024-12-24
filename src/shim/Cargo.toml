@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 nihilipc.workspace = true
 bincode.workspace = true
 nix.workspace = true
+tarpc.workspace = true
 
 cudarc = { version = "0.10.0", default-features = false, features = [
     "std",

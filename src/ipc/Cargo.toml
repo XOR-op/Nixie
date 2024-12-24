@@ -9,5 +9,8 @@ edition = "2021"
 
 [dependencies]
 nix.workspace = true
+tarpc.workspace = true
+thiserror.workspace = true
 
-serde = { version = "1.0.203", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+futures = "0.3.31"
