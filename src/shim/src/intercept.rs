@@ -6,8 +6,6 @@ use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
 use crate::comm::notify_fd;
-use crate::schedule::SCHED_CTRL;
-use crate::sidecar::Sidecar;
 use crate::utils::size_to_string;
 use crate::{GenericData, GENERIC_DATA};
 
@@ -179,14 +177,6 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
     {
         let _ = UVM_FD.set(res);
         notify_fd(res);
-        if let Some(stream) = try_duplicate_comm() {
-            let sidecar = Sidecar::new(stream, &SCHED_CTRL);
-            std::thread::spawn(|| {
-                if let Err(e) = sidecar.run() {
-                    eprintln!("Sidecar error : {:?}", e);
-                }
-            });
-        }
     }
     return res;
 }

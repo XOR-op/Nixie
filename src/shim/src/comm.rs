@@ -1,10 +1,10 @@
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use colored::Colorize;
 use futures::StreamExt;
 use nihilipc::{
     rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
-    InitClient, SetReadDupArgs, ShmPath, UvmFd,
+    InitClient, S2CMessage, SetReadDupArgs, ShmPath, UvmFd,
 };
 use tarpc::{
     context::Context,
@@ -13,7 +13,15 @@ use tarpc::{
 };
 use tokio::net::UnixStream;
 
-use crate::msg::C2SMessage;
+use crate::{msg::C2SMessage, schedule, sidecar::Controller};
+
+macro_rules! chan_send {
+    ($result:expr) => {
+        if let Err(e) = $result {
+            eprintln!("Error at {}:{}: {:?}", file!(), line!(), e);
+        }
+    };
+}
 
 static COMM: OnceLock<Option<flume::Sender<C2SMessage>>> = OnceLock::new();
 
@@ -32,11 +40,7 @@ fn init_comm_inner() -> std::io::Result<flume::Sender<C2SMessage>> {
     Ok(tx)
 }
 
-async fn create_comm(
-    conn: UnixStream,
-    rx: flume::Receiver<C2SMessage>,
-) -> std::io::Result<DaemonClient> {
-    let pid = std::process::id() as i32;
+async fn create_comm(conn: UnixStream, p2s_rx: flume::Receiver<C2SMessage>) {
     let mut codec_builder = LengthDelimitedCodec::builder();
     codec_builder.max_frame_length(64 * 1024 * 1024);
     let framed = codec_builder.new_framed(conn);
@@ -45,7 +49,8 @@ async fn create_comm(
     tokio::spawn(inbound_fut);
     tokio::spawn(outbound_fut);
     let client = DaemonClient::new(Default::default(), client_ret).spawn();
-    let server = SidecarServer {};
+    let (d2s_tx, d2s_rx) = flume::unbounded();
+    let server = SidecarServer { sender: d2s_tx };
     tokio::spawn(
         BaseChannel::with_defaults(server_ret)
             .execute(server.serve())
@@ -53,16 +58,16 @@ async fn create_comm(
                 tokio::spawn(response);
             }),
     );
-    todo!("serve sidecar");
-    Ok(client)
+    let sidecar = Controller::new(p2s_rx, d2s_rx, client, &schedule::SCHED_CTRL);
+    sidecar.run().await
 }
 
 fn init_comm() -> Option<flume::Sender<C2SMessage>> {
     match init_comm_inner() {
         Ok(chan) => {
-            chan.send(C2SMessage::InitClient(InitClient {
+            chan_send!(chan.send(C2SMessage::InitClient(InitClient {
                 pid: std::process::id() as i32,
-            }));
+            })));
             Some(chan)
         }
         Err(e) => {
@@ -81,21 +86,23 @@ pub(crate) fn notify_fd(fd: i32) {
     let Some(chan) = COMM.get_or_init(|| init_comm()) else {
         return;
     };
-    chan.send(C2SMessage::UvmFd(UvmFd { fd }));
+    chan_send!(chan.send(C2SMessage::UvmFd(UvmFd { fd })));
 }
 
 pub(crate) fn nofity_shm(path: String) {
     let Some(chan) = COMM.get_or_init(|| init_comm()) else {
         return;
     };
-    chan.send(C2SMessage::ShmPath(ShmPath { path }));
+    chan_send!(chan.send(C2SMessage::ShmPath(ShmPath { path })));
 }
 
 #[derive(Clone)]
-pub(crate) struct SidecarServer {}
+pub(crate) struct SidecarServer {
+    sender: flume::Sender<S2CMessage>,
+}
 
 impl nihilipc::rpc::Sidecar for SidecarServer {
-    async fn set_read_dup(self, context: Context, params: SetReadDupArgs) -> () {
-        todo!()
+    async fn set_read_dup(self, _context: Context, params: SetReadDupArgs) -> () {
+        chan_send!(self.sender.send(S2CMessage::SetReadDup(params)));
     }
 }
