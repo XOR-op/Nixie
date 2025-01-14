@@ -5,7 +5,7 @@ use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
-use crate::comm::{notify_fd, try_duplicate_comm};
+use crate::comm::notify_fd;
 use crate::schedule::SCHED_CTRL;
 use crate::sidecar::Sidecar;
 use crate::utils::size_to_string;

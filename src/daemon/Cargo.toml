@@ -11,6 +11,7 @@ bincode.workspace = true
 nix.workspace = true
 tarpc.workspace = true
 thiserror.workspace = true
+futures.workspace = true
 
 async-bincode = "0.7.2"
 clap = { version = "4.5.4", features = ["derive"] }
@@ -38,4 +39,3 @@ tracing-subscriber = { version = "0.3.18", features = [
 chrono = "0.4.38"
 syscalls = { version = "0.6.18", features = ["x86_64"] }
 ringbuf = "0.4.1"
-futures = "0.3.31"

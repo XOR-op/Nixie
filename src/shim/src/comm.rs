@@ -1,25 +1,70 @@
-use std::{
-    io::Write,
-    os::unix::net::UnixStream,
-    sync::{Mutex, OnceLock},
-};
+use std::sync::{Mutex, OnceLock};
 
 use colored::Colorize;
-use nihilipc::{C2SMessage, ShmPath, UvmFd};
+use futures::StreamExt;
+use nihilipc::{
+    rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
+    InitClient, SetReadDupArgs, ShmPath, UvmFd,
+};
+use tarpc::{
+    context::Context,
+    server::{BaseChannel, Channel},
+    tokio_util::codec::LengthDelimitedCodec,
+};
+use tokio::net::UnixStream;
 
-static COMM: OnceLock<Option<Mutex<UnixStream>>> = OnceLock::new();
+use crate::msg::C2SMessage;
 
-fn init_comm_inner() -> std::io::Result<UnixStream> {
-    let mut comm = UnixStream::connect("/tmp/nihilphase.sock")?;
-    let pid = std::process::id();
-    let message = C2SMessage::InitClient(nihilipc::InitClient { pid: pid as i32 });
-    comm.write_all(&construct_message(message))?;
-    Ok(comm)
+static COMM: OnceLock<Option<flume::Sender<C2SMessage>>> = OnceLock::new();
+
+fn init_comm_inner() -> std::io::Result<flume::Sender<C2SMessage>> {
+    let (tx, rx) = flume::unbounded();
+    let conn = std::os::unix::net::UnixStream::connect("/tmp/nihilphase.sock")?;
+    conn.set_nonblocking(true)?;
+    let conn = tokio::net::UnixStream::from_std(conn)?;
+    std::thread::spawn(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(create_comm(conn, rx))
+    });
+    Ok(tx)
 }
 
-fn init_comm() -> Option<Mutex<UnixStream>> {
+async fn create_comm(
+    conn: UnixStream,
+    rx: flume::Receiver<C2SMessage>,
+) -> std::io::Result<DaemonClient> {
+    let pid = std::process::id() as i32;
+    let mut codec_builder = LengthDelimitedCodec::builder();
+    codec_builder.max_frame_length(64 * 1024 * 1024);
+    let framed = codec_builder.new_framed(conn);
+    let transport = tarpc::serde_transport::new(framed, tokio_serde::formats::Cbor::default());
+    let (server_ret, client_ret, inbound_fut, outbound_fut) = rpc_multiplex_twoway(transport);
+    tokio::spawn(inbound_fut);
+    tokio::spawn(outbound_fut);
+    let client = DaemonClient::new(Default::default(), client_ret).spawn();
+    let server = SidecarServer {};
+    tokio::spawn(
+        BaseChannel::with_defaults(server_ret)
+            .execute(server.serve())
+            .for_each(|response| async move {
+                tokio::spawn(response);
+            }),
+    );
+    todo!("serve sidecar");
+    Ok(client)
+}
+
+fn init_comm() -> Option<flume::Sender<C2SMessage>> {
     match init_comm_inner() {
-        Ok(comm) => Some(Mutex::new(comm)),
+        Ok(chan) => {
+            chan.send(C2SMessage::InitClient(InitClient {
+                pid: std::process::id() as i32,
+            }));
+            Some(chan)
+        }
         Err(e) => {
             eprintln!(
                 "{} {}: {}",
@@ -33,40 +78,24 @@ fn init_comm() -> Option<Mutex<UnixStream>> {
 }
 
 pub(crate) fn notify_fd(fd: i32) {
-    let Some(lock) = COMM.get_or_init(|| init_comm()) else {
+    let Some(chan) = COMM.get_or_init(|| init_comm()) else {
         return;
     };
-    let mut comm = lock.lock().unwrap();
-    let message = C2SMessage::UvmFd(UvmFd { fd });
-    if comm.write_all(&construct_message(message)).is_err() {
-        eprintln!("Failed to send UvmFd message to Nihilphase Daemon")
-    }
+    chan.send(C2SMessage::UvmFd(UvmFd { fd }));
 }
 
 pub(crate) fn nofity_shm(path: String) {
-    let Some(lock) = COMM.get_or_init(|| init_comm()) else {
+    let Some(chan) = COMM.get_or_init(|| init_comm()) else {
         return;
     };
-    let mut comm = lock.lock().unwrap();
-    let message = C2SMessage::ShmPath(ShmPath { path });
-    if comm.write_all(&construct_message(message)).is_err() {
-        eprintln!("Failed to send ShmPath message to Nihilphase Daemon")
+    chan.send(C2SMessage::ShmPath(ShmPath { path }));
+}
+
+#[derive(Clone)]
+pub(crate) struct SidecarServer {}
+
+impl nihilipc::rpc::Sidecar for SidecarServer {
+    async fn set_read_dup(self, context: Context, params: SetReadDupArgs) -> () {
+        todo!()
     }
-}
-
-fn construct_message(message: C2SMessage) -> Vec<u8> {
-    let buf = bincode::serialize(&message).unwrap();
-    let length = buf.len() as u32;
-    let length_buf = length.to_le_bytes();
-    let mut coalesced_buf = Vec::with_capacity(4 + buf.len());
-    coalesced_buf.extend_from_slice(&length_buf);
-    coalesced_buf.extend_from_slice(&buf);
-    coalesced_buf
-}
-
-pub(crate) fn try_duplicate_comm() -> Option<UnixStream> {
-    let Some(lock) = COMM.get_or_init(|| init_comm()) else {
-        return None;
-    };
-    lock.lock().unwrap().try_clone().ok()
 }
