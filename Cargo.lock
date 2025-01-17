@@ -596,7 +596,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nihilphased"
+name = "nihilphase"
 version = "0.1.0"
 dependencies = [
  "async-bincode",
@@ -608,6 +608,7 @@ dependencies = [
  "nihilipc",
  "nix",
  "ringbuf",
+ "serde",
  "syscalls",
  "tarpc",
  "thiserror 2.0.6",

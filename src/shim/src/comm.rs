@@ -29,13 +29,22 @@ fn init_comm_inner() -> std::io::Result<flume::Sender<C2SMessage>> {
     let (tx, rx) = flume::unbounded();
     let conn = std::os::unix::net::UnixStream::connect("/tmp/nihilphase.sock")?;
     conn.set_nonblocking(true)?;
-    let conn = tokio::net::UnixStream::from_std(conn)?;
     std::thread::spawn(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
-            .block_on(create_comm(conn, rx))
+            .block_on(async {
+                match tokio::net::UnixStream::from_std(conn) {
+                    Ok(conn) => create_comm(conn, rx).await,
+                    Err(e) => eprintln!(
+                        "Tokio UnixStream failed to initialize at {}:{}: {:?}",
+                        file!(),
+                        line!(),
+                        e
+                    ),
+                }
+            })
     });
     Ok(tx)
 }

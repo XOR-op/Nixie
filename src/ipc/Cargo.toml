@@ -11,6 +11,6 @@ edition = "2021"
 nix.workspace = true
 tarpc.workspace = true
 thiserror.workspace = true
+serde.workspace = true
 
-serde = { version = "1", features = ["derive"] }
 futures = "0.3.31"

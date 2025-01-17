@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
-use crate::inject::*;
 use clap::Parser;
+use control::client::ControlClient;
 
+mod control;
 mod error;
+#[deprecated]
 mod inject;
 mod logging;
 mod runtime;
@@ -18,10 +20,10 @@ struct PrefetchArgs {
 }
 
 #[derive(Debug, Parser)]
-struct AttributeArgs {
+struct ReadDupArgs {
     // set read duplicatoin attribute
-    #[arg(short, long, alias = "read-dup")]
-    pub read_dup: Option<bool>,
+    #[arg(short, long)]
+    pub set: bool,
     #[arg(short, long, default_value = "0")]
     pub limit: u64,
     #[command(flatten)]
@@ -35,57 +37,47 @@ struct StartArgs {
 }
 
 #[derive(Debug, Parser)]
-#[clap(name = "nihilphased", about = "", version = env!("CARGO_PKG_VERSION"))]
+#[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
-    Start(StartArgs),
+    Start,
     Prefetch(PrefetchArgs),
-    Attribute(AttributeArgs),
+    ReadDup(ReadDupArgs),
 }
 
 #[derive(Debug, Parser)]
 struct CliArgs {
     #[arg(short, long)]
-    pub pid: u64,
-    #[arg(long, alias = "dylib-path")]
-    pub dylib_path: Option<String>,
+    pub pid: i32,
 }
-
-fn resolve_dylib_path(path: Option<String>) -> String {
-    path.unwrap_or("./target/release/libcuda_hook.so".to_string())
-}
-
-fn inject(cli: CliArgs, func_sym: &str, arg1: u64, arg2: u64, arg3: u64) {
-    dbg!(inject_wrapper(
-        cli.pid as i32,
-        resolve_dylib_path(cli.dylib_path),
-        func_sym,
-        arg1,
-        arg2,
-        arg3,
-    )
-    .ok());
-}
-
 fn main() {
     let args: Args = Args::parse();
-    match args {
-        Args::Start(args) => {
-            let runtime = runtime::Daemon::new(resolve_dylib_path(args.dylib_path));
-            runtime.start();
-        }
-        Args::Prefetch(args) => {
-            inject(args.cli, "_nihilphase_prefetch", args.limit, 0, 0);
-        }
-        Args::Attribute(args) => {
-            if let Some(read_dup) = args.read_dup {
-                inject(
-                    args.cli,
-                    "_nihilphase_advise_read_mostly",
-                    read_dup as u64,
-                    args.limit,
-                    0,
-                );
+    if matches!(args, Args::Start) {
+        let runtime = runtime::Daemon::new();
+        runtime.start();
+        std::process::exit(0);
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        match args {
+            Args::Prefetch(args) => {
+                let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
+                    .await
+                    .unwrap();
+                client.prefetch(Some(args.limit)).await.unwrap();
             }
-        }
-    };
+            Args::ReadDup(args) => {
+                let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
+                    .await
+                    .unwrap();
+                client
+                    .set_read_dup(Some(args.limit), args.set)
+                    .await
+                    .unwrap();
+            }
+            Args::Start => unreachable!(),
+        };
+    });
 }

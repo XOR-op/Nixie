@@ -1,5 +1,5 @@
 [package]
-name = "nihilphased"
+name = "nihilphase"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,6 +12,7 @@ nix.workspace = true
 tarpc.workspace = true
 thiserror.workspace = true
 futures.workspace = true
+serde.workspace = true
 
 async-bincode = "0.7.2"
 clap = { version = "4.5.4", features = ["derive"] }

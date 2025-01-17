@@ -10,14 +10,12 @@ use crate::{error::NihilphaseError, runtime::daemon_server::DaemonServer};
 
 pub struct Daemon {
     control_path: PathBuf,
-    dylib_path: String,
 }
 
 impl Daemon {
-    pub fn new(dylib_path: String) -> Self {
+    pub fn new() -> Self {
         Self {
             control_path: PathBuf::from("/tmp/nihilphase.sock"),
-            dylib_path,
         }
     }
 

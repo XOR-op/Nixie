@@ -12,4 +12,6 @@ pub enum NihilphaseError {
     Invalid(&'static str),
     #[error("Invalid: {0}")]
     Invalid2(String),
+    #[error("RPC Client error: {0}")]
+    RpcClient(#[from] tarpc::client::RpcError),
 }
