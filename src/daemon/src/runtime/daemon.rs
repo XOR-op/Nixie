@@ -1,21 +1,30 @@
+use hashlink::LinkedHashMap;
 use nix::libc::c_int;
 use std::{
     os::fd::{FromRawFd, OwnedFd},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use syscalls::{syscall, Sysno};
-use tokio::net::UnixListener;
+use tokio::{
+    net::UnixListener,
+    sync::{mpsc, Mutex},
+};
 
 use crate::{error::NihilphaseError, runtime::daemon_server::DaemonServer};
 
+use super::daemon_server::DaemonServerHandle;
+
 pub struct Daemon {
     control_path: PathBuf,
+    processes: Arc<Mutex<LinkedHashMap<i32, DaemonServerHandle>>>,
 }
 
 impl Daemon {
     pub fn new() -> Self {
         Self {
             control_path: PathBuf::from("/tmp/nihilphase.sock"),
+            processes: Arc::new(Mutex::new(LinkedHashMap::new())),
         }
     }
 
@@ -28,7 +37,7 @@ impl Daemon {
             .unwrap();
         let r: Result<(), NihilphaseError> = rt.block_on(async move {
             tokio::select! {
-                r = self.mainloop() => r,
+                r = self.run() => r,
                 _ = tokio::signal::ctrl_c() => Ok(())
             }
         });
@@ -38,12 +47,40 @@ impl Daemon {
         }
     }
 
-    async fn mainloop(self) -> Result<(), NihilphaseError> {
-        let controller = UnixListenerGuard::new(self.control_path.as_path())?;
-        tracing::info!("Daemon started at {:?}", self.control_path);
+    async fn run(self) -> Result<(), NihilphaseError> {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tokio::spawn(Self::spawner(self.control_path, tx));
+        let list_handle = self.processes.clone();
+        tokio::spawn(async move {
+            while let Some(handle) = rx.recv().await {
+                list_handle.lock().await.insert(handle.pid(), handle);
+            }
+        });
+
+        // control logic
+        loop {
+            todo!()
+        }
+
+        Ok(())
+    }
+
+    async fn spawner(
+        control_path: PathBuf,
+        ret_tx: mpsc::UnboundedSender<DaemonServerHandle>,
+    ) -> Result<(), NihilphaseError> {
+        let controller = UnixListenerGuard::new(control_path.as_path())?;
+        tracing::info!("Daemon started at {:?}", control_path);
         loop {
             let (stream, _) = controller.get_listener().accept().await?;
-            DaemonServer::launch(stream);
+            let future = DaemonServer::launch(stream);
+            let tx = ret_tx.clone();
+            tokio::spawn(async move {
+                let val = future.await;
+                if let Some(val) = val {
+                    let _ = tx.send(val);
+                }
+            });
         }
     }
 }

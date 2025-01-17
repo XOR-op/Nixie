@@ -79,7 +79,7 @@ impl EventQueue {
         }
     }
 
-    pub fn enable_event(&self, event_type: UvmEventType) -> Result<(), NihilphaseError> {
+    pub fn enable_event(&mut self, event_type: UvmEventType) -> Result<(), NihilphaseError> {
         let mut args = UvmToolsEventQueueEnableEventsParams {
             event_type_flags: 1 << event_type as u64,
             rm_status: 0,

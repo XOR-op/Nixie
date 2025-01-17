@@ -3,8 +3,10 @@ use futures::StreamExt;
 use nihilipc::rpc::{rpc_multiplex_twoway, Daemon, SidecarClient};
 use nix::libc::c_int;
 use std::{
+    future::Future,
     os::fd::{FromRawFd, OwnedFd},
     sync::Arc,
+    task::{ready, Poll},
 };
 use syscalls::{syscall, Sysno};
 use tarpc::{
@@ -12,7 +14,12 @@ use tarpc::{
     server::{BaseChannel, Channel},
     tokio_util::codec::LengthDelimitedCodec,
 };
-use tokio::{io::unix::AsyncFd, net::UnixStream, sync::Mutex};
+use tokio::{
+    io::unix::AsyncFd,
+    net::UnixStream,
+    sync::{mpsc, Mutex},
+    task::JoinHandle,
+};
 
 use super::proc_ctl::ProcessControlBuilder;
 
@@ -53,13 +60,56 @@ macro_rules! checked {
     };
 }
 
+pub(super) struct DaemonServerHandleFuture {
+    client: SidecarClient,
+    pid: Option<i32>,
+    task_rx: mpsc::Receiver<(JoinHandle<()>, i32)>,
+}
+
+impl Future for DaemonServerHandleFuture {
+    type Output = Option<DaemonServerHandle>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Self::Output> {
+        let val = ready!(self.task_rx.poll_recv(cx));
+        return Poll::Ready(val.map(|(task, pid)| DaemonServerHandle {
+            client: self.client.clone(),
+            pid,
+            task,
+        }));
+    }
+}
+
+pub(crate) struct DaemonServerHandle {
+    client: SidecarClient,
+    pid: i32,
+    task: JoinHandle<()>,
+}
+
+impl DaemonServerHandle {
+    pub fn is_closed(&self) -> bool {
+        self.task.is_finished()
+    }
+
+    pub fn client(&self) -> SidecarClient {
+        self.client.clone()
+    }
+
+    pub fn pid(&self) -> i32 {
+        self.pid
+    }
+}
+
+/// For each client process, we have a corresponding daemon server to manage its state.
 #[derive(Clone)]
 pub(crate) struct DaemonServer {
     state: Arc<Mutex<ServerState>>,
 }
 
 impl DaemonServer {
-    pub fn launch(conn: UnixStream) {
+    pub fn launch(conn: UnixStream) -> DaemonServerHandleFuture {
         // construct a bidirectional RPC tunnel based on single UDS connection
         let mut codec_builder = LengthDelimitedCodec::builder();
         codec_builder.max_frame_length(64 * 1024 * 1024);
@@ -70,10 +120,13 @@ impl DaemonServer {
         tokio::spawn(outbound_fut);
         // daemon to client
         let client = SidecarClient::new(Default::default(), client_ret).spawn();
+        let client_handle = client.clone();
+        let (handle_tx, handle_rx) = mpsc::channel(1);
         // client to daemon
         let server = Self {
             state: Arc::new(Mutex::new(ServerState::Start(StateOfStarting {
                 rpc_client: client,
+                ret: handle_tx,
             }))),
         };
         tokio::spawn(
@@ -83,20 +136,27 @@ impl DaemonServer {
                     tokio::spawn(response);
                 }),
         );
+        DaemonServerHandleFuture {
+            client: client_handle,
+            pid: None,
+            task_rx: handle_rx,
+        }
     }
 }
 
-struct DaemonServerState {
-    client_pid: i32,
+struct StateOfStarting {
+    rpc_client: SidecarClient,
+    ret: mpsc::Sender<(JoinHandle<()>, i32)>,
 }
 
 struct StateOfBuilding {
     client_pid: i32,
     builder: ProcessControlBuilder,
+    ret: mpsc::Sender<(JoinHandle<()>, i32)>,
 }
 
-struct StateOfStarting {
-    rpc_client: SidecarClient,
+struct DaemonServerState {
+    client_pid: i32,
 }
 
 enum ServerState {
@@ -126,6 +186,7 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         *state_guard = ServerState::Building(StateOfBuilding {
             client_pid: params.pid,
             builder,
+            ret: state.ret.clone(),
         });
     }
 
@@ -143,9 +204,11 @@ impl nihilipc::rpc::Daemon for DaemonServer {
             ))
             .with_event_queue(event_queue);
         if let Some(ctl) = state.builder.build() {
-            tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 ctl.run().await;
             });
+            // should no have problem since state transition only happens once
+            let _ = state.ret.try_send((task, peer_pid));
             *state_guard = ServerState::Launched(DaemonServerState {
                 client_pid: peer_pid,
             });
@@ -159,9 +222,10 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         let shmem = checked!(open_shm(params.path).map_err(|e| (e, peer_pid)));
         state.builder.with_shm(shmem);
         if let Some(ctl) = state.builder.build() {
-            tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 ctl.run().await;
             });
+            let _ = state.ret.try_send((task, peer_pid));
             *state_guard = ServerState::Launched(DaemonServerState {
                 client_pid: peer_pid,
             });
