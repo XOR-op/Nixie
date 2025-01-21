@@ -3,7 +3,7 @@ use tokio_serde::formats::Cbor;
 
 use crate::error::NihilphaseError;
 
-use super::{ControllableClient, PrefetchMsg, SetReadDupMsg};
+use super::{ControllableClient, PrefetchMsg, ReadDupMsg};
 
 pub(crate) struct ControlClient {
     client: ControllableClient,
@@ -21,15 +21,11 @@ impl ControlClient {
         Ok(Self { client, pid })
     }
 
-    pub async fn set_read_dup(
-        &self,
-        size_low: Option<u64>,
-        set: bool,
-    ) -> Result<(), NihilphaseError> {
+    pub async fn read_dup(&self, size_low: Option<u64>, set: bool) -> Result<(), NihilphaseError> {
         self.client
-            .set_read_dup(
+            .read_dup(
                 tarpc::context::current(),
-                SetReadDupMsg {
+                ReadDupMsg {
                     pid: self.pid,
                     size_low,
                     size_high: None,

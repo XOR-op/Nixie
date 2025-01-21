@@ -1,4 +1,7 @@
-use crate::{error::NihilphaseError, runtime::shm::open_shm, uvm::event_queue::EventQueue};
+use crate::{
+    control::ReadDupMsg, error::NihilphaseError, runtime::shm::open_shm,
+    uvm::event_queue::EventQueue,
+};
 use futures::StreamExt;
 use nihilipc::rpc::{rpc_multiplex_twoway, Daemon, SidecarClient};
 use nix::libc::c_int;
@@ -23,10 +26,29 @@ use tokio::{
 
 use super::proc_ctl::ProcessControlBuilder;
 
-macro_rules! extract_guard {
+// macro_rules! extract_guard {
+//     ($state:expr, $expected:path, $funcname: literal) => {
+//         match &mut *$state {
+//             $expected(val) => val,
+//             _ => {
+//                 tracing::error!("[{}] bad state: {}", $funcname, $state.state_name());
+//                 return;
+//             }
+//         }
+//     };
+// }
+
+macro_rules! extract_guard_and_swap {
     ($state:expr, $expected:path, $funcname: literal) => {
-        match &mut *$state {
-            $expected(val) => val,
+        match &*$state {
+            $expected(_) => {
+                let state = std::mem::replace(&mut *$state, ServerState::Partial);
+                if let $expected(val) = state {
+                    val
+                } else {
+                    unreachable!()
+                }
+            }
             _ => {
                 tracing::error!("[{}] bad state: {}", $funcname, $state.state_name());
                 return;
@@ -64,6 +86,7 @@ pub(super) struct DaemonServerHandleFuture {
     client: SidecarClient,
     pid: Option<i32>,
     task_rx: mpsc::Receiver<(JoinHandle<()>, i32)>,
+    inst_tx: mpsc::UnboundedSender<ReadDupMsg>,
 }
 
 impl Future for DaemonServerHandleFuture {
@@ -78,6 +101,7 @@ impl Future for DaemonServerHandleFuture {
             client: self.client.clone(),
             pid,
             task,
+            inst_tx: self.inst_tx.clone(),
         }));
     }
 }
@@ -86,6 +110,8 @@ pub(crate) struct DaemonServerHandle {
     client: SidecarClient,
     pid: i32,
     task: JoinHandle<()>,
+    /// TX to ProcessControl
+    inst_tx: mpsc::UnboundedSender<ReadDupMsg>,
 }
 
 impl DaemonServerHandle {
@@ -99,6 +125,10 @@ impl DaemonServerHandle {
 
     pub fn pid(&self) -> i32 {
         self.pid
+    }
+
+    pub fn inst_tx(&self) -> mpsc::UnboundedSender<ReadDupMsg> {
+        self.inst_tx.clone()
     }
 }
 
@@ -122,11 +152,13 @@ impl DaemonServer {
         let client = SidecarClient::new(Default::default(), client_ret).spawn();
         let client_handle = client.clone();
         let (handle_tx, handle_rx) = mpsc::channel(1);
+        let (inst_tx, inst_rx) = mpsc::unbounded_channel();
         // client to daemon
         let server = Self {
             state: Arc::new(Mutex::new(ServerState::Start(StateOfStarting {
                 rpc_client: client,
                 ret: handle_tx,
+                inst_rx,
             }))),
         };
         tokio::spawn(
@@ -140,12 +172,14 @@ impl DaemonServer {
             client: client_handle,
             pid: None,
             task_rx: handle_rx,
+            inst_tx,
         }
     }
 }
 
 struct StateOfStarting {
     rpc_client: SidecarClient,
+    inst_rx: mpsc::UnboundedReceiver<ReadDupMsg>,
     ret: mpsc::Sender<(JoinHandle<()>, i32)>,
 }
 
@@ -163,6 +197,8 @@ enum ServerState {
     Start(StateOfStarting),
     Building(StateOfBuilding),
     Launched(DaemonServerState),
+    // Used for ownership workaround
+    Partial,
 }
 
 impl ServerState {
@@ -171,6 +207,7 @@ impl ServerState {
             ServerState::Start(_) => "Start",
             ServerState::Building(_) => "Building",
             ServerState::Launched(_) => "Launched",
+            ServerState::Partial => "Inconsistent state when lock is hold",
         }
     }
 }
@@ -178,10 +215,10 @@ impl ServerState {
 impl nihilipc::rpc::Daemon for DaemonServer {
     async fn init_client(self, _ctx: Context, params: nihilipc::InitClient) {
         let mut state_guard = self.state.lock().await;
-        let state = extract_guard!(state_guard, ServerState::Start, "init_client");
+        let state = extract_guard_and_swap!(state_guard, ServerState::Start, "init_client");
         let rpc_client = state.rpc_client.clone();
         tracing::info!("Client[pid={}] connected", params.pid);
-        let mut builder = ProcessControlBuilder::new(rpc_client);
+        let mut builder = ProcessControlBuilder::new(rpc_client, state.inst_rx);
         builder.with_pid(params.pid);
         *state_guard = ServerState::Building(StateOfBuilding {
             client_pid: params.pid,
@@ -192,7 +229,7 @@ impl nihilipc::rpc::Daemon for DaemonServer {
 
     async fn set_uvm_fd(self, _ctx: Context, params: nihilipc::UvmFd) {
         let mut state_guard = self.state.lock().await;
-        let state = extract_guard!(state_guard, ServerState::Building, "set_uvm_fd");
+        let mut state = extract_guard_and_swap!(state_guard, ServerState::Building, "set_uvm_fd");
         let peer_pid = state.client_pid;
         let (pid_fd, uvm_fd) =
             checked!(duplicate_peer_fd(peer_pid, params.fd).map_err(|e| (e, peer_pid)));
@@ -212,12 +249,14 @@ impl nihilipc::rpc::Daemon for DaemonServer {
             *state_guard = ServerState::Launched(DaemonServerState {
                 client_pid: peer_pid,
             });
+        } else {
+            *state_guard = ServerState::Building(state);
         }
     }
 
     async fn set_shm_path(self, _ctx: Context, params: nihilipc::ShmPath) {
         let mut state_guard = self.state.lock().await;
-        let state = extract_guard!(state_guard, ServerState::Building, "set_uvm_fd");
+        let mut state = extract_guard_and_swap!(state_guard, ServerState::Building, "set_uvm_fd");
         let peer_pid = state.client_pid;
         let shmem = checked!(open_shm(params.path).map_err(|e| (e, peer_pid)));
         state.builder.with_shm(shmem);
@@ -229,6 +268,8 @@ impl nihilipc::rpc::Daemon for DaemonServer {
             *state_guard = ServerState::Launched(DaemonServerState {
                 client_pid: peer_pid,
             });
+        } else {
+            *state_guard = ServerState::Building(state);
         }
     }
 }

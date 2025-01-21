@@ -4,7 +4,7 @@ use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
 use nihilipc::{rpc::DaemonClient, S2CMessage};
 
-use crate::{msg::C2SMessage, schedule::SchedControl};
+use crate::{msg::C2SMessage, schedule::SchedControl, snippet};
 
 pub(crate) struct Controller {
     process_recv: flume::Receiver<C2SMessage>,
@@ -62,7 +62,7 @@ impl Controller {
                     }
                 }
                 SidecarSelect::Daemon(msg) => match msg {
-                    S2CMessage::SetReadDup(args) => {
+                    S2CMessage::ReadDup(args) => {
                         ctxs.set_current_ctx(args.device);
                         eprintln!(
                             "{} {}: =>{} address={:#x}, len={:#x}, device={}",
@@ -74,6 +74,18 @@ impl Controller {
                             args.device
                         );
                         advise_read_mostly_for(args.value, args.addr, args.len, args.device);
+                    }
+                    S2CMessage::Prefetch(args) => {
+                        ctxs.set_current_ctx(args.device);
+                        eprintln!(
+                            "{} {}: address={}, len={:#x}, device={}",
+                            "[libcuda_hook]".bold(),
+                            "rpc_prefetch".blue(),
+                            "#TODO".yellow(),
+                            args.len,
+                            "#TODO".yellow(),
+                        );
+                        snippet::_nihilphase_prefetch(args.len);
                     }
                     S2CMessage::GrantRunningToken(args) => {
                         eprintln!(
@@ -155,6 +167,7 @@ impl Drop for CudaContextGuard {
     }
 }
 
+// TODO: check address in client side; should read allocation record before calling
 fn advise_read_mostly_for(read_mostly: bool, address: u64, length: u64, device: i32) {
     let res = unsafe {
         cudarc::driver::sys::cuMemAdvise(

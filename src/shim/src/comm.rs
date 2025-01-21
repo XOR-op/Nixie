@@ -4,7 +4,7 @@ use colored::Colorize;
 use futures::StreamExt;
 use nihilipc::{
     rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
-    InitClient, S2CMessage, SetReadDupArgs, ShmPath, UvmFd,
+    InitClient, PrefetchArgs, ReadDupArgs, S2CMessage, ShmPath, UvmFd,
 };
 use tarpc::{
     context::Context,
@@ -111,7 +111,11 @@ pub(crate) struct SidecarServer {
 }
 
 impl nihilipc::rpc::Sidecar for SidecarServer {
-    async fn set_read_dup(self, _context: Context, params: SetReadDupArgs) -> () {
-        chan_send!(self.sender.send(S2CMessage::SetReadDup(params)));
+    async fn read_dup(self, _context: Context, params: ReadDupArgs) -> () {
+        chan_send!(self.sender.send(S2CMessage::ReadDup(params)));
+    }
+
+    async fn prefetch(self, _context: Context, params: PrefetchArgs) -> () {
+        chan_send!(self.sender.send(S2CMessage::Prefetch(params)));
     }
 }

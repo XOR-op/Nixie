@@ -1,4 +1,6 @@
+use futures::StreamExt;
 use hashlink::LinkedHashMap;
+use nihilipc::PrefetchArgs;
 use nix::libc::c_int;
 use std::{
     os::fd::{FromRawFd, OwnedFd},
@@ -6,29 +8,53 @@ use std::{
     sync::Arc,
 };
 use syscalls::{syscall, Sysno};
+use tarpc::{
+    context::Context,
+    server::{BaseChannel, Channel},
+    tokio_util::codec::LengthDelimitedCodec,
+};
 use tokio::{
     net::UnixListener,
-    sync::{mpsc, Mutex},
+    sync::{mpsc, RwLock},
 };
 
-use crate::{error::NihilphaseError, runtime::daemon_server::DaemonServer};
+use crate::{
+    control::{self, Controllable, PrefetchMsg, ReadDupMsg},
+    error::NihilphaseError,
+    runtime::daemon_server::DaemonServer,
+};
 
 use super::daemon_server::DaemonServerHandle;
 
+#[derive(Clone)]
+struct DaemonData {
+    processes: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
+}
+
+impl DaemonData {
+    pub fn new() -> Self {
+        Self {
+            processes: Arc::new(RwLock::new(LinkedHashMap::new())),
+        }
+    }
+}
+
 pub struct Daemon {
+    daemon_path: PathBuf,
     control_path: PathBuf,
-    processes: Arc<Mutex<LinkedHashMap<i32, DaemonServerHandle>>>,
+    data: Arc<DaemonData>,
 }
 
 impl Daemon {
     pub fn new() -> Self {
         Self {
-            control_path: PathBuf::from("/tmp/nihilphase.sock"),
-            processes: Arc::new(Mutex::new(LinkedHashMap::new())),
+            daemon_path: PathBuf::from("/tmp/nihilphase.sock"),
+            control_path: PathBuf::from(control::CONTROL_PATH),
+            data: Arc::new(DaemonData::new()),
         }
     }
 
-    pub fn start(self) {
+    pub fn run(self) {
         crate::logging::init_tracing();
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
@@ -37,7 +63,7 @@ impl Daemon {
             .unwrap();
         let r: Result<(), NihilphaseError> = rt.block_on(async move {
             tokio::select! {
-                r = self.run() => r,
+                r = self.run_body() => r,
                 _ = tokio::signal::ctrl_c() => Ok(())
             }
         });
@@ -47,30 +73,45 @@ impl Daemon {
         }
     }
 
-    async fn run(self) -> Result<(), NihilphaseError> {
+    async fn run_body(self) -> Result<(), NihilphaseError> {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        tokio::spawn(Self::spawner(self.control_path, tx));
-        let list_handle = self.processes.clone();
+        tokio::spawn(Self::handle_processes(self.daemon_path, tx));
+        let list_handle = self.data.processes.clone();
         tokio::spawn(async move {
             while let Some(handle) = rx.recv().await {
-                list_handle.lock().await.insert(handle.pid(), handle);
+                list_handle.write().await.insert(handle.pid(), handle);
             }
         });
 
-        // control logic
-        loop {
-            todo!()
+        let listener = UnixListener::bind(&self.control_path)?;
+
+        // listen for client
+        while let Ok((stream, _)) = listener.accept().await {
+            let conn = tarpc::serde_transport::new(
+                LengthDelimitedCodec::builder().new_framed(stream),
+                tarpc::tokio_serde::formats::Cbor::default(),
+            );
+            let server = ControllableDaemon {
+                data: self.data.clone(),
+            };
+            tokio::spawn(
+                BaseChannel::with_defaults(conn)
+                    .execute(server.serve())
+                    .for_each(|response| async move {
+                        tokio::spawn(response);
+                    }),
+            );
         }
 
         Ok(())
     }
 
-    async fn spawner(
-        control_path: PathBuf,
+    async fn handle_processes(
+        daemon_path: PathBuf,
         ret_tx: mpsc::UnboundedSender<DaemonServerHandle>,
     ) -> Result<(), NihilphaseError> {
-        let controller = UnixListenerGuard::new(control_path.as_path())?;
-        tracing::info!("Daemon started at {:?}", control_path);
+        let controller = UnixListenerGuard::new(daemon_path.as_path())?;
+        tracing::info!("Daemon started at {:?}", daemon_path);
         loop {
             let (stream, _) = controller.get_listener().accept().await?;
             let future = DaemonServer::launch(stream);
@@ -82,6 +123,47 @@ impl Daemon {
                 }
             });
         }
+    }
+}
+
+#[derive(Clone)]
+struct ControllableDaemon {
+    data: Arc<DaemonData>,
+}
+
+impl Controllable for ControllableDaemon {
+    async fn list_processes(self, _context: Context) {
+        todo!()
+    }
+
+    async fn read_dup(self, _context: Context, args: ReadDupMsg) {
+        let guard = self.data.processes.read().await;
+        let Some(handle) = guard.get(&args.pid) else {
+            return;
+        };
+        let inst_tx = handle.inst_tx();
+        drop(guard);
+        let _ = inst_tx.send(args);
+    }
+
+    async fn prefetch(self, _context: Context, args: PrefetchMsg) {
+        let guard = self.data.processes.read().await;
+        let Some(handle) = guard.get(&args.pid) else {
+            return;
+        };
+        let client = handle.client();
+        drop(guard);
+        tracing::warn!("prefetch half implemented: %addr and %device");
+        let _ = client
+            .prefetch(
+                Context::current(),
+                PrefetchArgs {
+                    addr: 0,
+                    len: args.size_low.unwrap_or(0),
+                    device: 0,
+                },
+            )
+            .await;
     }
 }
 

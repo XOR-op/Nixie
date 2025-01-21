@@ -30,16 +30,24 @@ pub struct MemoryUsageUpdate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum S2CMessage {
-    SetReadDup(SetReadDupArgs),
+    ReadDup(ReadDupArgs),
+    Prefetch(PrefetchArgs),
     GrantRunningToken(GrantRunningTokenArgs),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct SetReadDupArgs {
+pub struct ReadDupArgs {
     pub addr: u64,
     pub len: u64,
     pub device: i32,
     pub value: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PrefetchArgs {
+    pub addr: u64,
+    pub len: u64,
+    pub device: i32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

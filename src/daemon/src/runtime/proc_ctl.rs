@@ -1,11 +1,15 @@
 #![allow(non_upper_case_globals)]
 use std::{collections::BTreeSet, os::fd::OwnedFd};
 
-use nihilipc::{rpc::SidecarClient, shm::ShmGuard};
+use nihilipc::{
+    rpc::SidecarClient,
+    shm::{AllocationEntry, ShmGuard},
+};
 use tarpc::context::Context;
-use tokio::io::unix::AsyncFd;
+use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use crate::{
+    control::ReadDupMsg,
     error::NihilphaseError,
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
@@ -16,6 +20,7 @@ pub(crate) struct ProcessControl {
     event_queue: EventQueue,
     shm: ShmGuard,
     rpc_sender: SidecarClient,
+    inst_rx: mpsc::UnboundedReceiver<ReadDupMsg>,
 }
 
 impl ProcessControl {
@@ -81,23 +86,7 @@ impl ProcessControl {
                 }
             }
             drop(mapping);
-            for entry in disabled {
-                if let Err(e) = self
-                    .rpc_sender
-                    .set_read_dup(
-                        Context::current(),
-                        nihilipc::SetReadDupArgs {
-                            addr: entry.addr,
-                            len: entry.len as u64,
-                            value: false,
-                            device: entry.device as i32,
-                        },
-                    )
-                    .await
-                {
-                    tracing::warn!("Failed to disable read duplication: {:?}", e);
-                }
-            }
+            self.batched_read_dup(disabled.iter(), false).await;
         }
 
         // if !fault_tree.is_empty() {
@@ -110,6 +99,43 @@ impl ProcessControl {
         // }
         Ok(n_completed)
     }
+
+    async fn handle_inst(&mut self, inst: ReadDupMsg) {
+        let mapping = self.shm.inner.ptr_mapping.lock();
+        let mut modified = BTreeSet::new();
+        for entry in mapping.iter() {
+            if inst.size_low.is_none_or(|low| low <= entry.len as u64)
+                || inst.size_high.is_none_or(|high| high >= entry.len as u64)
+            {
+                modified.insert(entry.clone());
+            }
+        }
+        drop(mapping);
+        self.batched_read_dup(modified.iter(), inst.set).await;
+    }
+
+    async fn batched_read_dup<'a, I>(&self, iter: I, set: bool)
+    where
+        I: Iterator<Item = &'a AllocationEntry>,
+    {
+        for entry in iter {
+            if let Err(e) = self
+                .rpc_sender
+                .read_dup(
+                    Context::current(),
+                    nihilipc::ReadDupArgs {
+                        addr: entry.addr,
+                        len: entry.len as u64,
+                        value: set,
+                        device: entry.device,
+                    },
+                )
+                .await
+            {
+                tracing::warn!("Failed to set read duplication: {:?}", e);
+            }
+        }
+    }
 }
 
 pub(crate) struct ProcessControlBuilder {
@@ -118,16 +144,18 @@ pub(crate) struct ProcessControlBuilder {
     event_queue: Option<EventQueue>,
     shm: Option<ShmGuard>,
     msg_sender: Option<SidecarClient>,
+    inst_rx: Option<mpsc::UnboundedReceiver<ReadDupMsg>>,
 }
 
 impl ProcessControlBuilder {
-    pub fn new(msg_sender: SidecarClient) -> Self {
+    pub fn new(msg_sender: SidecarClient, inst_rx: mpsc::UnboundedReceiver<ReadDupMsg>) -> Self {
         Self {
             pid: None,
             pid_fd: None,
             event_queue: None,
             shm: None,
             msg_sender: Some(msg_sender),
+            inst_rx: Some(inst_rx),
         }
     }
 
@@ -169,8 +197,10 @@ impl ProcessControlBuilder {
             && self.event_queue.is_some()
             && self.shm.is_some()
             && self.msg_sender.is_some()
+            && self.inst_rx.is_some()
     }
 
+    // use mutable reference to self to allow failed try
     pub fn build(&mut self) -> Option<ProcessControl> {
         if !self.ready() {
             return None;
@@ -181,6 +211,7 @@ impl ProcessControlBuilder {
             event_queue: self.event_queue.take().unwrap(),
             shm: self.shm.take().unwrap(),
             rpc_sender: self.msg_sender.take().unwrap(),
+            inst_rx: self.inst_rx.take().unwrap(),
         })
     }
 }

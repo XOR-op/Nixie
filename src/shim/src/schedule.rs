@@ -26,10 +26,12 @@ impl SchedControl {
         }
     }
 
+    #[allow(dead_code)]
     pub fn wait_until_schedulable(&self) {
         let mut allowed_running_until = self.allow_running_until.lock().unwrap();
         while SystemTime::now() > *allowed_running_until {
             allowed_running_until = self.cond_var.wait(allowed_running_until).unwrap();
         }
+        unimplemented!()
     }
 }

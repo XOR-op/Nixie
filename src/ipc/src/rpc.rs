@@ -1,4 +1,4 @@
-use crate::{InitClient, SetReadDupArgs, ShmPath, UvmFd};
+use crate::{InitClient, PrefetchArgs, ReadDupArgs, ShmPath, UvmFd};
 use futures::future::{AbortHandle, Abortable};
 use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,9 @@ pub trait Daemon {
 
 #[tarpc::service]
 pub trait Sidecar {
-    async fn set_read_dup(params: SetReadDupArgs);
+    async fn read_dup(params: ReadDupArgs);
+
+    async fn prefetch(params: PrefetchArgs);
 }
 
 // -------------------------- multiplexing --------------------------

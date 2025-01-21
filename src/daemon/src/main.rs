@@ -31,15 +31,9 @@ struct ReadDupArgs {
 }
 
 #[derive(Debug, Parser)]
-struct StartArgs {
-    #[arg(long, alias = "dylib-path")]
-    pub dylib_path: Option<String>,
-}
-
-#[derive(Debug, Parser)]
 #[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
-    Start,
+    Daemon,
     Prefetch(PrefetchArgs),
     ReadDup(ReadDupArgs),
 }
@@ -51,9 +45,13 @@ struct CliArgs {
 }
 fn main() {
     let args: Args = Args::parse();
-    if matches!(args, Args::Start) {
+    if matches!(args, Args::Daemon) {
+        if !is_root::is_root() {
+            eprintln!("Error: nihilphase daemon must be run as root");
+            std::process::exit(1);
+        }
         let runtime = runtime::Daemon::new();
-        runtime.start();
+        runtime.run();
         std::process::exit(0);
     }
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -72,12 +70,9 @@ fn main() {
                 let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
                     .await
                     .unwrap();
-                client
-                    .set_read_dup(Some(args.limit), args.set)
-                    .await
-                    .unwrap();
+                client.read_dup(Some(args.limit), args.set).await.unwrap();
             }
-            Args::Start => unreachable!(),
+            Args::Daemon => unreachable!(),
         };
     });
 }
