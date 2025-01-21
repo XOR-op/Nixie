@@ -33,8 +33,7 @@ impl ProcessControl {
 
     async fn run_inner(mut self) -> Result<(), NihilphaseError> {
         self.event_queue
-            .enable_event(UvmEventType_UvmEventTypeGpuFault)
-            .map_err(|e| NihilphaseError::from(e))?;
+            .enable_event(UvmEventType_UvmEventTypeGpuFault)?;
 
         tracing::info!("Listen events from process [pid={}]", self.peer_pid);
         loop {

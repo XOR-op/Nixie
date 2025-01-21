@@ -1,5 +1,7 @@
 use crate::{
-    control::ReadDupMsg, error::NihilphaseError, runtime::shm::open_shm,
+    control::ReadDupMsg,
+    error::{DaemonError, UvmError},
+    runtime::shm::open_shm,
     uvm::event_queue::EventQueue,
 };
 use futures::StreamExt;
@@ -237,7 +239,7 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         state
             .builder
             .with_pid_fd(checked!(
-                AsyncFd::new(pid_fd).map_err(|e| (NihilphaseError::Io(e), peer_pid))
+                AsyncFd::new(pid_fd).map_err(|e| (UvmError::Io("Create PID fd", e), peer_pid))
             ))
             .with_event_queue(event_queue);
         if let Some(ctl) = state.builder.build() {
@@ -274,13 +276,13 @@ impl nihilipc::rpc::Daemon for DaemonServer {
     }
 }
 
-fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), NihilphaseError> {
+fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), DaemonError> {
     let pid_fd = match unsafe { syscall!(Sysno::pidfd_open, pid, nix::libc::PIDFD_NONBLOCK) } {
         Ok(fd) => fd as c_int,
         Err(e) => {
-            return Err(NihilphaseError::Errno(
-                nix::errno::Errno::from_raw(e.into_raw()),
+            return Err(DaemonError::Errno(
                 "pidfd_open",
+                nix::errno::Errno::from_raw(e.into_raw()),
             ));
         }
     };
@@ -292,9 +294,9 @@ fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), Nih
         }
         Err(e) => {
             let _ = nix::unistd::close(pid_fd);
-            Err(NihilphaseError::Errno(
-                nix::errno::Errno::from_raw(e.into_raw()),
+            Err(DaemonError::Errno(
                 "pidfd_getfd",
+                nix::errno::Errno::from_raw(e.into_raw()),
             ))
         }
     }

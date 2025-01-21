@@ -1,13 +1,10 @@
 use futures::StreamExt;
 use hashlink::LinkedHashMap;
 use nihilipc::PrefetchArgs;
-use nix::libc::c_int;
 use std::{
-    os::fd::{FromRawFd, OwnedFd},
     path::{Path, PathBuf},
     sync::Arc,
 };
-use syscalls::{syscall, Sysno};
 use tarpc::{
     context::Context,
     server::{BaseChannel, Channel},
@@ -20,11 +17,11 @@ use tokio::{
 
 use crate::{
     control::{self, Controllable, PrefetchMsg, ReadDupMsg},
-    error::NihilphaseError,
+    error::{DaemonError, NihilphaseError},
     runtime::daemon_server::DaemonServer,
 };
 
-use super::daemon_server::DaemonServerHandle;
+use super::{daemon_server::DaemonServerHandle, socket_chown};
 
 #[derive(Clone)]
 struct DaemonData {
@@ -83,7 +80,9 @@ impl Daemon {
             }
         });
 
-        let listener = UnixListener::bind(&self.control_path)?;
+        let listener = UnixListener::bind(&self.control_path)
+            .map_err(|e| DaemonError::Io("bind control listener", e))?;
+        socket_chown(&self.control_path)?;
 
         // listen for client
         while let Ok((stream, _)) = listener.accept().await {
@@ -109,11 +108,15 @@ impl Daemon {
     async fn handle_processes(
         daemon_path: PathBuf,
         ret_tx: mpsc::UnboundedSender<DaemonServerHandle>,
-    ) -> Result<(), NihilphaseError> {
+    ) -> Result<(), DaemonError> {
         let controller = UnixListenerGuard::new(daemon_path.as_path())?;
         tracing::info!("Daemon started at {:?}", daemon_path);
         loop {
-            let (stream, _) = controller.get_listener().accept().await?;
+            let (stream, _) = controller
+                .get_listener()
+                .accept()
+                .await
+                .map_err(|e| DaemonError::Io("accept connection", e))?;
             let future = DaemonServer::launch(stream);
             let tx = ret_tx.clone();
             tokio::spawn(async move {
@@ -166,33 +169,6 @@ impl Controllable for ControllableDaemon {
             .await;
     }
 }
-
-fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), NihilphaseError> {
-    let pid_fd = match unsafe { syscall!(Sysno::pidfd_open, pid, nix::libc::PIDFD_NONBLOCK) } {
-        Ok(fd) => fd as c_int,
-        Err(e) => {
-            return Err(NihilphaseError::Errno(
-                nix::errno::Errno::from_raw(e.into_raw()),
-                "pidfd_open",
-            ));
-        }
-    };
-    match unsafe { syscall!(Sysno::pidfd_getfd, pid_fd, remote_fd, 0) } {
-        Ok(fd) => {
-            let pid_fd = unsafe { OwnedFd::from_raw_fd(pid_fd) };
-            let uvm_fd = unsafe { OwnedFd::from_raw_fd(fd as c_int) };
-            Ok((pid_fd, uvm_fd))
-        }
-        Err(e) => {
-            let _ = nix::unistd::close(pid_fd);
-            Err(NihilphaseError::Errno(
-                nix::errno::Errno::from_raw(e.into_raw()),
-                "pidfd_getfd",
-            ))
-        }
-    }
-}
-
 // Utils
 
 struct UnixListenerGuard {
@@ -201,12 +177,13 @@ struct UnixListenerGuard {
 }
 
 impl UnixListenerGuard {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, NihilphaseError> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, DaemonError> {
         let path = path.as_ref().to_path_buf();
-        let listener = UnixListener::bind(&path)?;
+        let listener =
+            UnixListener::bind(&path).map_err(|e| DaemonError::Io("bind listener", e))?;
         if let Some((_, uid, gid)) = get_user_info() {
             nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))
-                .map_err(|e| NihilphaseError::Errno(e, "chown"))?;
+                .map_err(|e| DaemonError::Errno("chown listener", e))?;
         }
         Ok(Self {
             path,

@@ -1,17 +1,32 @@
+use nix::errno::Errno;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum NihilphaseError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Bincode error: {0}")]
-    Bincode(#[from] bincode::Error),
-    #[error("Unix error: {0} for {1}")]
-    Errno(nix::errno::Errno, &'static str),
-    #[error("Invalid: {0}")]
-    Invalid(&'static str),
-    #[error("Invalid: {0}")]
-    Invalid2(String),
-    #[error("RPC Client error: {0}")]
-    RpcClient(#[from] tarpc::client::RpcError),
+    #[error("Daemon: {0}")]
+    Daemon(#[from] DaemonError),
+    #[error("Uvm: {0}")]
+    Uvm(#[from] UvmError),
+}
+
+#[derive(Debug, Error)]
+pub enum DaemonError {
+    #[error("{0}: IO error {1}")]
+    Io(&'static str, std::io::Error),
+    #[error("{0}: error with {1}")]
+    Errno(&'static str, nix::errno::Errno),
+    #[error("{0}: RPC error {1}")]
+    ClientRpc(&'static str, tarpc::client::RpcError),
+}
+
+#[derive(Debug, Error)]
+pub enum UvmError {
+    #[error("Assertion failed: {0}")]
+    Assertion(&'static str),
+    #[error("{0} failed with error: {1}")]
+    LibError(&'static str, Errno),
+    #[error("{0} failed with error: {1}, (version?: {2})")]
+    DriverError(&'static str, i32, u32),
+    #[error("{0} failed with IO error: {1}")]
+    Io(&'static str, std::io::Error),
 }

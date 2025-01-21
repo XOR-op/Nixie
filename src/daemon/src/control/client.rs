@@ -1,7 +1,7 @@
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::error::NihilphaseError;
+use crate::error::DaemonError;
 
 use super::{ControllableClient, PrefetchMsg, ReadDupMsg};
 
@@ -11,8 +11,10 @@ pub(crate) struct ControlClient {
 }
 
 impl ControlClient {
-    pub async fn new(path: &str, pid: i32) -> Result<Self, NihilphaseError> {
-        let conn = tokio::net::UnixStream::connect(path).await?;
+    pub async fn new(path: &str, pid: i32) -> Result<Self, DaemonError> {
+        let conn = tokio::net::UnixStream::connect(path)
+            .await
+            .map_err(|e| DaemonError::Io("Failed to connect to control socket", e))?;
         let conn = tarpc::serde_transport::new(
             LengthDelimitedCodec::builder().new_framed(conn),
             Cbor::default(),
@@ -21,7 +23,7 @@ impl ControlClient {
         Ok(Self { client, pid })
     }
 
-    pub async fn read_dup(&self, size_low: Option<u64>, set: bool) -> Result<(), NihilphaseError> {
+    pub async fn read_dup(&self, size_low: Option<u64>, set: bool) -> Result<(), DaemonError> {
         self.client
             .read_dup(
                 tarpc::context::current(),
@@ -32,11 +34,12 @@ impl ControlClient {
                     set,
                 },
             )
-            .await?;
+            .await
+            .map_err(|e| DaemonError::ClientRpc("read_dup", e))?;
         Ok(())
     }
 
-    pub async fn prefetch(&self, size_low: Option<u64>) -> Result<(), NihilphaseError> {
+    pub async fn prefetch(&self, size_low: Option<u64>) -> Result<(), DaemonError> {
         self.client
             .prefetch(
                 tarpc::context::current(),
@@ -47,7 +50,8 @@ impl ControlClient {
                     to_gpu: true,
                 },
             )
-            .await?;
+            .await
+            .map_err(|e| DaemonError::ClientRpc("prefetch", e))?;
         Ok(())
     }
 }

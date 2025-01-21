@@ -14,7 +14,7 @@ mod uvm;
 #[derive(Debug, Parser)]
 struct PrefetchArgs {
     #[arg(short, long, default_value = "0")]
-    pub limit: u64,
+    pub filter: u64,
     #[command(flatten)]
     pub cli: CliArgs,
 }
@@ -25,7 +25,7 @@ struct ReadDupArgs {
     #[arg(short, long)]
     pub set: bool,
     #[arg(short, long, default_value = "0")]
-    pub limit: u64,
+    pub filter: u64,
     #[command(flatten)]
     pub cli: CliArgs,
 }
@@ -64,13 +64,13 @@ fn main() {
                 let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
                     .await
                     .unwrap();
-                client.prefetch(Some(args.limit)).await.unwrap();
+                client.prefetch(Some(args.filter)).await.unwrap();
             }
             Args::ReadDup(args) => {
                 let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
                     .await
                     .unwrap();
-                client.read_dup(Some(args.limit), args.set).await.unwrap();
+                client.read_dup(Some(args.filter), args.set).await.unwrap();
             }
             Args::Daemon => unreachable!(),
         };
