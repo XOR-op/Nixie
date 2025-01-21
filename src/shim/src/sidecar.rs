@@ -4,7 +4,10 @@ use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
 use nihilipc::{rpc::DaemonClient, S2CMessage};
 
-use crate::{msg::C2SMessage, schedule::SchedControl, snippet};
+use crate::{
+    info_eprintln, msg::C2SMessage, schedule::SchedControl, snippet, utils::should_log,
+    warn_eprintln,
+};
 
 pub(crate) struct Controller {
     process_recv: flume::Receiver<C2SMessage>,
@@ -53,7 +56,7 @@ impl Controller {
                         }
                         C2SMessage::MemoryUsage(_msg) => unimplemented!("MemoryUsage"),
                     } {
-                        eprintln!(
+                        warn_eprintln!(
                             "{} {}: {}",
                             "[libcuda_hook]".bold(),
                             "Failed to send message to daemon".red(),
@@ -64,7 +67,7 @@ impl Controller {
                 SidecarSelect::Daemon(msg) => match msg {
                     S2CMessage::ReadDup(args) => {
                         ctxs.set_current_ctx(args.device);
-                        eprintln!(
+                        info_eprintln!(
                             "{} {}: =>{} address={:#x}, len={:#x}, device={}",
                             "[libcuda_hook]".bold(),
                             "rpc_read_duplication".blue(),
@@ -77,7 +80,7 @@ impl Controller {
                     }
                     S2CMessage::Prefetch(args) => {
                         ctxs.set_current_ctx(args.device);
-                        eprintln!(
+                        info_eprintln!(
                             "{} {}: address={}, len={:#x}, device={}",
                             "[libcuda_hook]".bold(),
                             "rpc_prefetch".blue(),
@@ -88,7 +91,7 @@ impl Controller {
                         snippet::_nihilphase_prefetch(args.len);
                     }
                     S2CMessage::GrantRunningToken(args) => {
-                        eprintln!(
+                        info_eprintln!(
                             "{} {}: time={:?}",
                             "[libcuda_hook]".bold(),
                             "UNIMPLEMENTED rpc_grant_running_token".red(),
@@ -99,7 +102,7 @@ impl Controller {
                 },
             }
         }
-        eprintln!("Sidecar controller exited")
+        info_eprintln!("Sidecar controller exited")
     }
 
     async fn select_on_recv(&self) -> Option<SidecarSelect> {
@@ -129,13 +132,14 @@ impl CudaContextGuard {
                     cudarc::driver::sys::cuDevicePrimaryCtxRetain(&mut ctx as *mut _, device_idx)
                 };
                 if res != cudaError_enum::CUDA_SUCCESS {
-                    eprintln!(
+                    warn_eprintln!(
                         "Failed to retain context for device {}: {:?}",
-                        device_idx, res
+                        device_idx,
+                        res
                     );
                 }
                 e.insert(ctx);
-                eprintln!(
+                info_eprintln!(
                     "{} {}: device={}",
                     "[libcuda_hook]".bold(),
                     "init_dev_ctx".blue(),
@@ -150,7 +154,7 @@ impl CudaContextGuard {
         let ctx = self.get_dev_ctx(device_idx);
         let res = unsafe { cudarc::driver::sys::cuCtxSetCurrent(ctx) };
         if res != cudaError_enum::CUDA_SUCCESS {
-            eprintln!("Failed to set current context: {:?}", res);
+            warn_eprintln!("Failed to set current context: {:?}", res);
         }
     }
 }
@@ -160,7 +164,7 @@ impl Drop for CudaContextGuard {
         self.cuda_ctxs.keys().for_each(|dev| {
             let res = unsafe { cudarc::driver::sys::cuDevicePrimaryCtxRelease_v2(*dev) };
             if res != cudaError_enum::CUDA_SUCCESS {
-                eprintln!("Failed to release context: {:?}", res);
+                warn_eprintln!("Failed to release context: {:?}", res);
             }
         });
         self.cuda_ctxs.clear();
@@ -182,6 +186,6 @@ fn advise_read_mostly_for(read_mostly: bool, address: u64, length: u64, device: 
         )
     };
     if res != cudaError_enum::CUDA_SUCCESS {
-        eprintln!("Failed to set read mostly: {:?}", res);
+        warn_eprintln!("Failed to set read mostly: {:?}", res);
     }
 }

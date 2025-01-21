@@ -2,7 +2,10 @@ use colored::Colorize;
 use cudarc::driver::sys::{cuMemPrefetchAsync, cuStreamCreate, cudaError_enum, CUdevice};
 use std::sync::mpsc;
 
-use crate::{utils::size_to_string, CuStreamWrapper, GENERIC_DATA, PREFETCH_REQ_QUEUE, STREAM_VEC};
+use crate::{
+    info_eprintln, utils::should_log, utils::size_to_string, warn_eprintln, CuStreamWrapper,
+    GENERIC_DATA, PREFETCH_REQ_QUEUE, STREAM_VEC,
+};
 
 fn prefetch_impl(size_mb: u64) {
     let streams = STREAM_VEC.get().unwrap();
@@ -20,11 +23,11 @@ fn prefetch_impl(size_mb: u64) {
             let res =
                 unsafe { cuMemPrefetchAsync(ptr, size, CUdevice::from(0), streams[stream_idx].0) };
             if res != cudaError_enum::CUDA_SUCCESS {
-                eprintln!("Failed to prefetch memory: {:?}", res);
+                warn_eprintln!("Failed to prefetch memory: {:?}", res);
             }
             prefetch_cnt += 1;
             stream_idx = (stream_idx + 1) % streams.len();
-            eprintln!(
+            info_eprintln!(
                 "Prefetch: size={}, time={:?}",
                 size_to_string(size),
                 start.elapsed()
@@ -62,11 +65,11 @@ pub extern "C" fn _nihilphase_prefetch(size_mb: u64) -> u64 {
                 }
                 prefetch_impl(len);
             }
-            eprintln!("WARN: Prefetch thread exited");
+            warn_eprintln!("WARN: Prefetch thread exited");
         });
         sender
     });
-    eprintln!(
+    info_eprintln!(
         "{} {}: size={}MB",
         "[libcuda_hook]".bold(),
         "_nihilphase_prefetch".blue(),
@@ -78,7 +81,7 @@ pub extern "C" fn _nihilphase_prefetch(size_mb: u64) -> u64 {
 
 #[no_mangle]
 pub extern "C" fn _nihilphase_advise_read_mostly(read_mostly: bool, size_threshold_mb: u64) -> u64 {
-    eprintln!(
+    info_eprintln!(
         "{} {}: read_mostly={}, size_threshold={}MB",
         "[libcuda_hook]".bold(),
         "_nihilphase_advise_read_mostly".blue(),
@@ -104,7 +107,7 @@ pub extern "C" fn _nihilphase_advise_read_mostly(read_mostly: bool, size_thresho
                 entry.device,
             );
             if res != cudaError_enum::CUDA_SUCCESS {
-                eprintln!("Failed to set read mostly: {:?}", res);
+                warn_eprintln!("Failed to set read mostly: {:?}", res);
             }
         }
     }
@@ -117,7 +120,7 @@ pub extern "C" fn _nihilphase_disable_read_duplication(
     length: u64,
     device: u64,
 ) -> u64 {
-    eprintln!(
+    info_eprintln!(
         "{} {}: address={:#018x}, length={}, device={}",
         "[libcuda_hook]".bold(),
         "_nihilphase_disable_read_duplication".blue(),
@@ -134,7 +137,7 @@ pub extern "C" fn _nihilphase_disable_read_duplication(
         )
     };
     if res != cudaError_enum::CUDA_SUCCESS {
-        eprintln!("Failed to unset read mostly: {:?}", res);
+        warn_eprintln!("Failed to unset read mostly: {:?}", res);
         return 1;
     }
     0

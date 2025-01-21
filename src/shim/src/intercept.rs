@@ -6,8 +6,8 @@ use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
 use crate::comm::notify_fd;
-use crate::utils::size_to_string;
-use crate::{GenericData, GENERIC_DATA};
+use crate::utils::{should_log, size_to_string};
+use crate::{info_eprintln, warn_eprintln, GenericData, GENERIC_DATA};
 
 #[repr(C)]
 pub struct CudaDim3 {
@@ -47,7 +47,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         }
         std::mem::transmute(func)
     });
-    eprintln!("cudaMalloc: {} Entering", size);
+    warn_eprintln!("cudaMalloc: {} Entering", size);
     let res = malloc_func(dev_ptr, size, 0x01);
     if res == cudaError_enum::CUDA_SUCCESS {
         let device_id = {
@@ -80,7 +80,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             device: device_id,
         });
         let total_size = ptr_mapping.iter().map(|pr| pr.len).sum();
-        eprintln!(
+        info_eprintln!(
             "{} {}: at={}, size={}, total_size={}, count={}",
             "[libcuda_hook]".bold(),
             "cudaMalloc".green(),
@@ -110,9 +110,9 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     if let Some(idx) = idx {
         mapping.remove(idx);
     } else {
-        eprintln!("Failed to find ptr mapping for {}", dev_ptr as u64);
+        warn_eprintln!("Failed to find ptr mapping for {}", dev_ptr as u64);
     }
-    eprintln!(
+    info_eprintln!(
         "{} {}: at={:#018x}",
         "[libcuda_hook]".bold(),
         "cudaFree".green(),
@@ -141,7 +141,7 @@ pub extern "C" fn cudaLaunchKernel(
     const ANSI_BOLD: &'static str = "\x1b[1m";
     const ANSI_GREEN: &'static str = "\x1b[0;32m";
     const ANSI_RESET: &'static str = "\x1b[0m";
-    println!(
+    info_eprintln!(
         "{}[libcudahook] ({}) {}cudaLaunchKernel{}: gridDim=({},{},{}), blockDim=({},{},{}), sharedMem={}",
         ANSI_BOLD,
         chrono::Local::now().format("%H:%M:%S%.6f"),
