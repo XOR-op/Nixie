@@ -9,10 +9,12 @@ use tarpc::context::Context;
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use crate::{
-    control::ReadDupMsg,
+    control::AllocationData,
     error::NihilphaseError,
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
+
+use super::{ProcCtlReq, ProcessMetadata};
 
 pub(crate) struct ProcessControl {
     peer_pid: i32,
@@ -20,7 +22,7 @@ pub(crate) struct ProcessControl {
     event_queue: EventQueue,
     shm: ShmGuard,
     rpc_sender: SidecarClient,
-    inst_rx: mpsc::UnboundedReceiver<ReadDupMsg>,
+    inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
 }
 
 impl ProcessControl {
@@ -41,6 +43,9 @@ impl ProcessControl {
                 // _ = self.event_queue.ready() => {
                 _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
                     self.process_event().await?;
+                }
+                Some(inst) = self.inst_rx.recv() => {
+                    self.handle_inst(inst).await;
                 }
                 _ = self.pid_fd.readable() => {
                     break;
@@ -99,18 +104,41 @@ impl ProcessControl {
         Ok(n_completed)
     }
 
-    async fn handle_inst(&mut self, inst: ReadDupMsg) {
-        let mapping = self.shm.inner.ptr_mapping.lock();
-        let mut modified = BTreeSet::new();
-        for entry in mapping.iter() {
-            if inst.size_low.is_none_or(|low| low <= entry.len as u64)
-                || inst.size_high.is_none_or(|high| high >= entry.len as u64)
-            {
-                modified.insert(entry.clone());
+    async fn handle_inst(&mut self, inst: ProcCtlReq) {
+        match inst {
+            ProcCtlReq::ReadDup(inst) => {
+                let mapping = self.shm.inner.ptr_mapping.lock();
+                let mut modified = BTreeSet::new();
+                for entry in mapping.iter() {
+                    if inst.size_low.is_none_or(|low| low <= entry.len as u64)
+                        || inst.size_high.is_none_or(|high| high >= entry.len as u64)
+                    {
+                        modified.insert(entry.clone());
+                    }
+                }
+                drop(mapping);
+                self.batched_read_dup(modified.iter(), inst.set).await;
+            }
+            ProcCtlReq::List(param) => {
+                let mut allocations = Vec::new();
+                let mapping = self.shm.inner.ptr_mapping.lock();
+                for entry in mapping.iter() {
+                    allocations.push(AllocationData {
+                        size: entry.len as u64,
+                        device: entry.device,
+                        read_only: false,
+                    });
+                }
+                drop(mapping);
+                let _ = param
+                    .ret_tx
+                    .send(ProcessMetadata {
+                        pid: self.peer_pid,
+                        allocations,
+                    })
+                    .await;
             }
         }
-        drop(mapping);
-        self.batched_read_dup(modified.iter(), inst.set).await;
     }
 
     async fn batched_read_dup<'a, I>(&self, iter: I, set: bool)
@@ -143,11 +171,11 @@ pub(crate) struct ProcessControlBuilder {
     event_queue: Option<EventQueue>,
     shm: Option<ShmGuard>,
     msg_sender: Option<SidecarClient>,
-    inst_rx: Option<mpsc::UnboundedReceiver<ReadDupMsg>>,
+    inst_rx: Option<mpsc::UnboundedReceiver<ProcCtlReq>>,
 }
 
 impl ProcessControlBuilder {
-    pub fn new(msg_sender: SidecarClient, inst_rx: mpsc::UnboundedReceiver<ReadDupMsg>) -> Self {
+    pub fn new(msg_sender: SidecarClient, inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>) -> Self {
         Self {
             pid: None,
             pid_fd: None,

@@ -5,6 +5,7 @@ members = ["src/daemon", "src/ipc", "src/shim"]
 [workspace.dependencies]
 nihilipc = { path = "src/ipc" }
 bincode = "1.3.3"
+colored = "2.1.0"
 futures = "0.3.31"
 nix = { version = "0.29.0", features = ["fs", "user", "ioctl"] }
 serde = { version = "1", features = ["derive"] }

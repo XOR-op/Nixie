@@ -5,6 +5,7 @@ use control::client::ControlClient;
 
 mod control;
 mod error;
+mod general;
 #[deprecated]
 mod inject;
 mod logging;
@@ -36,6 +37,7 @@ enum Args {
     Daemon,
     Prefetch(PrefetchArgs),
     ReadDup(ReadDupArgs),
+    List,
 }
 
 #[derive(Debug, Parser)]
@@ -71,6 +73,10 @@ fn main() {
                     .await
                     .unwrap();
                 client.read_dup(Some(args.filter), args.set).await.unwrap();
+            }
+            Args::List => {
+                let client = ControlClient::new(control::CONTROL_PATH, 0).await.unwrap();
+                client.list_processes().await.unwrap();
             }
             Args::Daemon => unreachable!(),
         };

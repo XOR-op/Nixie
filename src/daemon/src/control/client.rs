@@ -1,7 +1,8 @@
+use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::error::DaemonError;
+use crate::{error::DaemonError, general::pretty_size};
 
 use super::{ControllableClient, PrefetchMsg, ReadDupMsg};
 
@@ -52,6 +53,45 @@ impl ControlClient {
             )
             .await
             .map_err(|e| DaemonError::ClientRpc("prefetch", e))?;
+        Ok(())
+    }
+
+    pub async fn list_processes(&self) -> Result<(), DaemonError> {
+        let processes = self
+            .client
+            .list_processes(tarpc::context::current())
+            .await
+            .map_err(|e| DaemonError::ClientRpc("list_processes", e))?;
+        println!("Active processes: {}", processes.len());
+        for process in processes {
+            let group_by_device =
+                process
+                    .allocations
+                    .iter()
+                    .fold(std::collections::BTreeMap::new(), |mut acc, a| {
+                        acc.entry(a.device).or_insert(Vec::new()).push(a.clone());
+                        acc
+                    });
+            let process_name = std::fs::read_to_string(format!("/proc/{}/comm", process.pid))
+                .map(|s| s.trim().to_string())
+                .ok();
+            println!(
+                "[{}]{}:",
+                process.pid.to_string().yellow(),
+                process_name
+                    .map_or("".to_string(), |s| format!(" {}", s))
+                    .green()
+            );
+            for (device, allocations) in group_by_device {
+                let alloc_size = allocations.iter().map(|a| a.size).sum::<u64>();
+                println!(
+                    "{} #alloc = {}, size = {}",
+                    format!("<Device {}>", device).cyan(),
+                    format!("{}", allocations.len()).yellow(),
+                    pretty_size(alloc_size).blue()
+                )
+            }
+        }
         Ok(())
     }
 }

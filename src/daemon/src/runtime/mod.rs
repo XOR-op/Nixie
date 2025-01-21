@@ -8,7 +8,11 @@ use std::path::Path;
 
 pub use daemon::Daemon;
 
-use crate::error::DaemonError;
+use crate::{
+    control::{ProcessMetadata, ReadDupMsg},
+    error::DaemonError,
+    general::CallParameter,
+};
 
 fn get_user() -> Option<nix::unistd::User> {
     if let Ok(n) = std::env::var("SUDO_USER") {
@@ -32,4 +36,9 @@ fn socket_chown<P: AsRef<Path>>(path: P) -> Result<(), DaemonError> {
             .map_err(|e| DaemonError::Errno("chown", e))?;
     }
     Ok(())
+}
+
+pub(crate) enum ProcCtlReq {
+    ReadDup(ReadDupMsg),
+    List(CallParameter<(), ProcessMetadata>),
 }

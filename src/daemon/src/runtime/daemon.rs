@@ -18,10 +18,11 @@ use tokio::{
 use crate::{
     control::{self, Controllable, PrefetchMsg, ReadDupMsg},
     error::{DaemonError, NihilphaseError},
-    runtime::daemon_server::DaemonServer,
+    general::{CallFuture, CallParameter},
+    runtime::{daemon_server::DaemonServer, ProcCtlReq},
 };
 
-use super::{daemon_server::DaemonServerHandle, socket_chown};
+use super::{daemon_server::DaemonServerHandle, socket_chown, ProcessMetadata};
 
 #[derive(Clone)]
 struct DaemonData {
@@ -80,12 +81,10 @@ impl Daemon {
             }
         });
 
-        let listener = UnixListener::bind(&self.control_path)
-            .map_err(|e| DaemonError::Io("bind control listener", e))?;
-        socket_chown(&self.control_path)?;
+        let listener_guard = UnixListenerGuard::new(&self.control_path)?;
 
         // listen for client
-        while let Ok((stream, _)) = listener.accept().await {
+        while let Ok((stream, _)) = listener_guard.get_listener().accept().await {
             let conn = tarpc::serde_transport::new(
                 LengthDelimitedCodec::builder().new_framed(stream),
                 tarpc::tokio_serde::formats::Cbor::default(),
@@ -135,8 +134,21 @@ struct ControllableDaemon {
 }
 
 impl Controllable for ControllableDaemon {
-    async fn list_processes(self, _context: Context) {
-        todo!()
+    async fn list_processes(self, _context: Context) -> Vec<ProcessMetadata> {
+        let guard = self.data.processes.read().await;
+        let handles: Vec<mpsc::UnboundedSender<ProcCtlReq>> =
+            guard.values().map(|h| h.inst_tx()).collect();
+        drop(guard);
+        let futs: Vec<CallFuture<ProcessMetadata>> = handles
+            .into_iter()
+            .map(|tx| {
+                let (para, fut) = CallParameter::new(());
+                let _ = tx.send(ProcCtlReq::List(para));
+                fut
+            })
+            .collect();
+        let results = futures::future::join_all(futs).await;
+        results.into_iter().flatten().collect()
     }
 
     async fn read_dup(self, _context: Context, args: ReadDupMsg) {
@@ -146,7 +158,7 @@ impl Controllable for ControllableDaemon {
         };
         let inst_tx = handle.inst_tx();
         drop(guard);
-        let _ = inst_tx.send(args);
+        let _ = inst_tx.send(ProcCtlReq::ReadDup(args));
     }
 
     async fn prefetch(self, _context: Context, args: PrefetchMsg) {
@@ -181,10 +193,7 @@ impl UnixListenerGuard {
         let path = path.as_ref().to_path_buf();
         let listener =
             UnixListener::bind(&path).map_err(|e| DaemonError::Io("bind listener", e))?;
-        if let Some((_, uid, gid)) = get_user_info() {
-            nix::unistd::chown(&path, Some(uid.into()), Some(gid.into()))
-                .map_err(|e| DaemonError::Errno("chown listener", e))?;
-        }
+        socket_chown(&path)?;
         Ok(Self {
             path,
             listener: Some(listener),
@@ -202,21 +211,4 @@ impl Drop for UnixListenerGuard {
             tracing::error!("Error when removing unix domain socket: {}", e)
         }
     }
-}
-
-fn get_user_info() -> Option<(String, nix::libc::uid_t, nix::libc::gid_t)> {
-    let user_name = unsafe { nix::libc::getlogin() };
-    if user_name.is_null() {
-        return None;
-    }
-    let name = unsafe { std::ffi::CStr::from_ptr(user_name) }
-        .to_string_lossy()
-        .into_owned();
-    let user_info = unsafe { nix::libc::getpwnam(user_name) };
-    if user_info.is_null() {
-        return None;
-    }
-    let uid = unsafe { (*user_info).pw_uid };
-    let gid = unsafe { (*user_info).pw_gid };
-    Some((name, uid, gid))
 }

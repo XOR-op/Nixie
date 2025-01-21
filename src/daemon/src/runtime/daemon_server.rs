@@ -1,5 +1,4 @@
 use crate::{
-    control::ReadDupMsg,
     error::{DaemonError, UvmError},
     runtime::shm::open_shm,
     uvm::event_queue::EventQueue,
@@ -26,19 +25,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use super::proc_ctl::ProcessControlBuilder;
-
-// macro_rules! extract_guard {
-//     ($state:expr, $expected:path, $funcname: literal) => {
-//         match &mut *$state {
-//             $expected(val) => val,
-//             _ => {
-//                 tracing::error!("[{}] bad state: {}", $funcname, $state.state_name());
-//                 return;
-//             }
-//         }
-//     };
-// }
+use super::{proc_ctl::ProcessControlBuilder, ProcCtlReq};
 
 macro_rules! extract_guard_and_swap {
     ($state:expr, $expected:path, $funcname: literal) => {
@@ -88,7 +75,7 @@ pub(super) struct DaemonServerHandleFuture {
     client: SidecarClient,
     pid: Option<i32>,
     task_rx: mpsc::Receiver<(JoinHandle<()>, i32)>,
-    inst_tx: mpsc::UnboundedSender<ReadDupMsg>,
+    inst_tx: mpsc::UnboundedSender<ProcCtlReq>,
 }
 
 impl Future for DaemonServerHandleFuture {
@@ -113,7 +100,7 @@ pub(crate) struct DaemonServerHandle {
     pid: i32,
     task: JoinHandle<()>,
     /// TX to ProcessControl
-    inst_tx: mpsc::UnboundedSender<ReadDupMsg>,
+    inst_tx: mpsc::UnboundedSender<ProcCtlReq>,
 }
 
 impl DaemonServerHandle {
@@ -129,7 +116,7 @@ impl DaemonServerHandle {
         self.pid
     }
 
-    pub fn inst_tx(&self) -> mpsc::UnboundedSender<ReadDupMsg> {
+    pub fn inst_tx(&self) -> mpsc::UnboundedSender<ProcCtlReq> {
         self.inst_tx.clone()
     }
 }
@@ -181,7 +168,7 @@ impl DaemonServer {
 
 struct StateOfStarting {
     rpc_client: SidecarClient,
-    inst_rx: mpsc::UnboundedReceiver<ReadDupMsg>,
+    inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
     ret: mpsc::Sender<(JoinHandle<()>, i32)>,
 }
 
