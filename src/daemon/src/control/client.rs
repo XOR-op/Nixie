@@ -76,11 +76,12 @@ impl ControlClient {
                 .map(|s| s.trim().to_string())
                 .ok();
             println!(
-                "[{}]{}:",
+                "[{}]{}: num_fault = {}",
                 process.pid.to_string().yellow(),
                 process_name
                     .map_or("".to_string(), |s| format!(" {}", s))
-                    .green()
+                    .green(),
+                process.num_fault.to_string().blue()
             );
             for (device, allocations) in group_by_device {
                 let alloc_size = allocations.iter().map(|a| a.size).sum::<u64>();

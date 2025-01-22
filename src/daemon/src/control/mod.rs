@@ -33,6 +33,7 @@ pub(crate) struct PrefetchMsg {
 pub(crate) struct ProcessMetadata {
     pub pid: i32,
     pub allocations: Vec<AllocationData>,
+    pub num_fault: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

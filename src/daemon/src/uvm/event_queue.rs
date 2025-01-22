@@ -115,7 +115,7 @@ impl EventQueue {
         &self.uvm_tools_handle
     }
 
-    pub fn read_events<F>(&mut self, mut callback: F) -> u32
+    pub fn read_events<F>(&mut self, mut callback: F) -> (u32, u32)
     where
         F: FnMut(&UvmEventEntry_V1) -> bool,
     {
@@ -124,10 +124,13 @@ impl EventQueue {
         let put_behind = unsafe { std::ptr::read_volatile(self.put_behind_ptr()) };
         let get_behind = unsafe { std::ptr::read_volatile(self.get_behind_ptr()) };
         if put_behind == get_behind {
-            return 0;
+            return (0, 0);
         }
         // We make sure we have some events to read
         unsafe { std::ptr::write_volatile(self.get_ahead_ptr_mut(), put_behind) };
+
+        let num_fault = (self.event_buffer.len() as u32 + put_behind - get_behind)
+            & (self.event_buffer.len() as u32 - 1);
 
         // Read events
         for i in circular_buffer_index_range(get_behind, put_behind, self.event_buffer.len() as u32)
@@ -141,7 +144,7 @@ impl EventQueue {
         // update get_behind
         unsafe { std::ptr::write_volatile(self.get_behind_ptr_mut(), put_behind) };
 
-        completed
+        (completed, num_fault)
     }
 }
 

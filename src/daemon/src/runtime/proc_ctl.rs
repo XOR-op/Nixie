@@ -23,6 +23,7 @@ pub(crate) struct ProcessControl {
     shm: ShmGuard,
     rpc_sender: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
+    num_fault: u64,
 }
 
 impl ProcessControl {
@@ -58,7 +59,7 @@ impl ProcessControl {
 
     async fn process_event(&mut self) -> Result<u32, NihilphaseError> {
         let mut fault_tree = BTreeSet::new();
-        let n_completed = self.event_queue.read_events(|event| {
+        let (n_completed, num_fault) = self.event_queue.read_events(|event| {
             let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
             match event_type as u32 {
                 UvmEventType_UvmEventTypeGpuFault => {
@@ -78,6 +79,7 @@ impl ProcessControl {
                 }
             }
         });
+        self.num_fault += num_fault as u64;
         // disable read duplication
         if !fault_tree.is_empty() {
             let mapping = self.shm.inner.ptr_mapping.lock();
@@ -135,6 +137,7 @@ impl ProcessControl {
                     .send(ProcessMetadata {
                         pid: self.peer_pid,
                         allocations,
+                        num_fault: self.num_fault,
                     })
                     .await;
             }
@@ -239,6 +242,7 @@ impl ProcessControlBuilder {
             shm: self.shm.take().unwrap(),
             rpc_sender: self.msg_sender.take().unwrap(),
             inst_rx: self.inst_rx.take().unwrap(),
+            num_fault: 0,
         })
     }
 }
