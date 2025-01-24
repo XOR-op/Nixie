@@ -13,7 +13,8 @@ use tarpc::{
 };
 use tokio::net::UnixStream;
 
-use crate::{msg::C2SMessage, schedule, sidecar::Controller};
+use super::{controller::Controller, msg::C2SMessage};
+use crate::schedule;
 
 macro_rules! chan_send {
     ($result:expr) => {

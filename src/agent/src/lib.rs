@@ -12,9 +12,7 @@ use std::{
 
 mod comm;
 mod intercept;
-mod msg;
 mod schedule;
-mod sidecar;
 mod snippet;
 mod utils;
 

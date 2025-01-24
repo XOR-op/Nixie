@@ -4,11 +4,10 @@ use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
 use nihilipc::{rpc::DaemonClient, S2CMessage};
 
-use crate::{
-    info_eprintln, msg::C2SMessage, schedule::SchedControl, snippet, utils::should_log,
-    warn_eprintln,
-};
+use super::msg::C2SMessage;
+use crate::{info_eprintln, schedule::SchedControl, snippet, utils::should_log, warn_eprintln};
 
+/// handler for agent<->daemon communication
 pub(crate) struct Controller {
     process_recv: flume::Receiver<C2SMessage>,
     daemon_recv: flume::Receiver<S2CMessage>,

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src/daemon", "src/ipc", "src/shim"]
+members = ["src/daemon", "src/ipc", "src/agent"]
 
 [workspace.dependencies]
 nihilipc = { path = "src/ipc" }
