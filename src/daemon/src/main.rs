@@ -84,7 +84,10 @@ fn main() {
                 let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
                     .await
                     .unwrap();
-                client.prefetch(Some(args.filter)).await.unwrap();
+                client
+                    .prefetch(matches!(args.dest, DeviceArgs::GPU), Some(args.filter))
+                    .await
+                    .unwrap();
             }
             Args::ReadDup(args) => {
                 let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)

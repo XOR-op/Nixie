@@ -1,5 +1,5 @@
 use colored::Colorize;
-use cudarc::driver::sys::{cuMemPrefetchAsync, cuStreamCreate, cudaError_enum, CUdevice};
+use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
 use std::sync::mpsc;
 
 use crate::{
@@ -21,7 +21,7 @@ fn prefetch_impl(size_mb: u64) {
         if size >= 1024 * 1024 * size_mb as usize {
             let start = std::time::Instant::now();
             let res = unsafe {
-                cuMemPrefetchAsync(
+                cuda_lib().cuMemPrefetchAsync(
                     ptr,
                     size,
                     CUdevice::from(pair.device),
@@ -49,7 +49,7 @@ pub extern "C" fn _nihilphase_prefetch(size_mb: u64) -> u64 {
         for _ in 0..8 {
             let mut stream = std::ptr::null_mut();
             let res = unsafe {
-                cuStreamCreate(
+                cuda_lib().cuStreamCreate(
                     &mut stream,
                     cudarc::driver::sys::CUstream_flags_enum::CU_STREAM_NON_BLOCKING as u32,
                 )
@@ -102,7 +102,7 @@ pub extern "C" fn _nihilphase_advise_read_mostly(read_mostly: bool, size_thresho
                 continue;
             }
             cadidate_cnt += 1;
-            let res = cudarc::driver::sys::cuMemAdvise(
+            let res = cuda_lib().cuMemAdvise(
                 entry.addr,
                 entry.len,
                 if read_mostly {
@@ -135,7 +135,7 @@ pub extern "C" fn _nihilphase_disable_read_duplication(
         device
     );
     let res = unsafe {
-        cudarc::driver::sys::cuMemAdvise(
+        cuda_lib().cuMemAdvise(
             address,
             length as usize,
             cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY,

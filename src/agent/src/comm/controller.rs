@@ -1,7 +1,7 @@
 use std::collections::{hash_map::Entry, HashMap};
 
 use colored::Colorize;
-use cudarc::driver::sys::{cudaError_enum, CUcontext, CUdevice};
+use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUcontext, CUdevice};
 use nihilipc::{rpc::DaemonClient, S2CMessage};
 
 use super::msg::C2SMessage;
@@ -127,9 +127,8 @@ impl CudaContextGuard {
             Entry::Occupied(e) => *e.get(),
             Entry::Vacant(e) => {
                 let mut ctx = std::ptr::null_mut();
-                let res = unsafe {
-                    cudarc::driver::sys::cuDevicePrimaryCtxRetain(&mut ctx as *mut _, device_idx)
-                };
+                let res =
+                    unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut ctx as *mut _, device_idx) };
                 if res != cudaError_enum::CUDA_SUCCESS {
                     warn_eprintln!(
                         "Failed to retain context for device {}: {:?}",
@@ -151,7 +150,7 @@ impl CudaContextGuard {
 
     fn set_current_ctx(&mut self, device_idx: CUdevice) {
         let ctx = self.get_dev_ctx(device_idx);
-        let res = unsafe { cudarc::driver::sys::cuCtxSetCurrent(ctx) };
+        let res = unsafe { cuda_lib().cuCtxSetCurrent(ctx) };
         if res != cudaError_enum::CUDA_SUCCESS {
             warn_eprintln!("Failed to set current context: {:?}", res);
         }
@@ -161,7 +160,7 @@ impl CudaContextGuard {
 impl Drop for CudaContextGuard {
     fn drop(&mut self) {
         self.cuda_ctxs.keys().for_each(|dev| {
-            let res = unsafe { cudarc::driver::sys::cuDevicePrimaryCtxRelease_v2(*dev) };
+            let res = unsafe { cuda_lib().cuDevicePrimaryCtxRelease_v2(*dev) };
             if res != cudaError_enum::CUDA_SUCCESS {
                 warn_eprintln!("Failed to release context: {:?}", res);
             }
@@ -173,7 +172,7 @@ impl Drop for CudaContextGuard {
 // TODO: check address in client side; should read allocation record before calling
 fn advise_read_mostly_for(read_mostly: bool, address: u64, length: u64, device: i32) {
     let res = unsafe {
-        cudarc::driver::sys::cuMemAdvise(
+        cuda_lib().cuMemAdvise(
             address,
             length as usize,
             if read_mostly {

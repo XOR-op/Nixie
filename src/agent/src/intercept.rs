@@ -1,5 +1,5 @@
 use colored::Colorize;
-use cudarc::driver::sys::{cudaError_enum, CUdevice, CUstream};
+use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice, CUstream};
 use nihilipc::shm::AllocationEntry;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
@@ -52,7 +52,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     if res == cudaError_enum::CUDA_SUCCESS {
         let device_id = {
             let mut device_id = CUdevice::default();
-            let res = unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id as *mut _) };
+            let res = unsafe { cuda_lib().cuCtxGetDevice(&mut device_id as *mut _) };
             if res != cudaError_enum::CUDA_SUCCESS {
                 panic!("Failed to get device id: {:?}", res);
             }

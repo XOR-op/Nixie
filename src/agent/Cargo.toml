@@ -19,9 +19,10 @@ colored.workspace = true
 tokio = { version = "1.38.0", features = ["rt", "net", "macros"] }
 tokio-serde = { version = "0.9.0", features = ["serde_cbor", "cbor"] }
 
-cudarc = { version = "0.10.0", default-features = false, features = [
+cudarc = { version = "0.13.0", default-features = false, features = [
     "std",
     "driver",
+    "cuda-version-from-build-system",
 ] }
 uuid = { version = "1.8.0", features = ["v4"] }
 chrono = "0.4.38"
