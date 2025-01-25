@@ -11,8 +11,8 @@ fn prefetch_impl(size_mb: u64) {
     let streams = STREAM_VEC.get().unwrap();
     let mut prefetch_cnt = 0;
     let mut stream_idx = 0;
-    let ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
-    for pair in ptr_mapping.iter() {
+    let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
+    for pair in ptr_mapping.iter_mut() {
         if prefetch_cnt > streams.len() * 40 {
             break;
         }
@@ -28,6 +28,7 @@ fn prefetch_impl(size_mb: u64) {
                     streams[stream_idx].0,
                 )
             };
+            pair.is_on_gpu = true;
             if res != cudaError_enum::CUDA_SUCCESS {
                 warn_eprintln!("Failed to prefetch memory: {:?}", res);
             }
@@ -42,8 +43,7 @@ fn prefetch_impl(size_mb: u64) {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn _nihilphase_prefetch(size_mb: u64) -> u64 {
+pub fn filtered_prefetch(size_mb: u64) -> u64 {
     let _ = STREAM_VEC.get_or_init(|| {
         let mut vec = Vec::new();
         for _ in 0..8 {
@@ -82,69 +82,5 @@ pub extern "C" fn _nihilphase_prefetch(size_mb: u64) -> u64 {
         size_mb
     );
     dbg!(sender.send(size_mb).ok());
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn _nihilphase_advise_read_mostly(read_mostly: bool, size_threshold_mb: u64) -> u64 {
-    info_eprintln!(
-        "{} {}: read_mostly={}, size_threshold={}MB",
-        "[libcuda_hook]".bold(),
-        "_nihilphase_advise_read_mostly".blue(),
-        format!("{}", read_mostly).yellow(),
-        size_threshold_mb
-    );
-    let mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
-    let mut cadidate_cnt = 0;
-    unsafe {
-        for entry in mapping.iter() {
-            if entry.len < (size_threshold_mb as usize * 1024 * 1024) {
-                continue;
-            }
-            cadidate_cnt += 1;
-            let res = cuda_lib().cuMemAdvise(
-                entry.addr,
-                entry.len,
-                if read_mostly {
-                    cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
-                } else {
-                    cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
-                },
-                entry.device,
-            );
-            if res != cudaError_enum::CUDA_SUCCESS {
-                warn_eprintln!("Failed to set read mostly: {:?}", res);
-            }
-        }
-    }
-    cadidate_cnt
-}
-
-#[no_mangle]
-pub extern "C" fn _nihilphase_disable_read_duplication(
-    address: u64,
-    length: u64,
-    device: u64,
-) -> u64 {
-    info_eprintln!(
-        "{} {}: address={:#018x}, length={}, device={}",
-        "[libcuda_hook]".bold(),
-        "_nihilphase_disable_read_duplication".blue(),
-        address,
-        length,
-        device
-    );
-    let res = unsafe {
-        cuda_lib().cuMemAdvise(
-            address,
-            length as usize,
-            cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY,
-            device as i32,
-        )
-    };
-    if res != cudaError_enum::CUDA_SUCCESS {
-        warn_eprintln!("Failed to unset read mostly: {:?}", res);
-        return 1;
-    }
     0
 }

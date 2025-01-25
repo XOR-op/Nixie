@@ -15,6 +15,8 @@ pub struct AllocationEntry {
     pub addr: u64,
     pub len: usize,
     pub device: i32,
+    pub is_readonly: bool,
+    pub is_on_gpu: bool,
 }
 
 impl Shm {
@@ -158,7 +160,15 @@ impl<T, const N: usize> ShmVec<T, N> {
         &self.data[..self.len as usize]
     }
 
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.data[..self.len as usize]
+    }
+
     pub fn iter(&self) -> core::slice::Iter<'_, T> {
         self.as_slice().iter()
+    }
+
+    pub fn iter_mut(&mut self) -> core::slice::IterMut<'_, T> {
+        self.as_mut_slice().iter_mut()
     }
 }

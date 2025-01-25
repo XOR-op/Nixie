@@ -37,7 +37,7 @@ pub enum S2CMessage {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ReadDupArgs {
-    pub addr: u64,
+    // pub addr: u64,
     pub len: u64,
     pub device: i32,
     pub value: bool,

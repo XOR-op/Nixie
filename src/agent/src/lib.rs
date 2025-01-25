@@ -12,8 +12,8 @@ use std::{
 
 mod comm;
 mod intercept;
+mod prefetch;
 mod schedule;
-mod snippet;
 mod utils;
 
 struct CuStreamWrapper(CUstream);
@@ -115,5 +115,12 @@ impl<'a> FusedPtrMapping<'a> {
 
     pub fn iter(&self) -> impl Iterator<Item = &AllocationEntry> {
         self.shm.as_slice().iter().chain(self.overflowed.iter())
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut AllocationEntry> {
+        self.shm
+            .as_mut_slice()
+            .iter_mut()
+            .chain(self.overflowed.iter_mut())
     }
 }

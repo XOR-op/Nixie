@@ -5,7 +5,9 @@ use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUcontext, CUdevice};
 use nihilipc::{rpc::DaemonClient, S2CMessage};
 
 use super::msg::C2SMessage;
-use crate::{info_eprintln, schedule::SchedControl, snippet, utils::should_log, warn_eprintln};
+use crate::{
+    info_eprintln, prefetch, schedule::SchedControl, utils::should_log, warn_eprintln, GENERIC_DATA,
+};
 
 /// handler for agent<->daemon communication
 pub(crate) struct Controller {
@@ -67,15 +69,15 @@ impl Controller {
                     S2CMessage::ReadDup(args) => {
                         ctxs.set_current_ctx(args.device);
                         info_eprintln!(
-                            "{} {}: =>{} address={:#x}, len={:#x}, device={}",
+                            "{} {}: =>{} address={}, len={}, device={}",
                             "[libcuda_hook]".bold(),
                             "rpc_read_duplication".blue(),
                             args.value,
-                            args.addr,
+                            "#TODO".yellow(),
                             args.len,
-                            args.device
+                            "#TODO".yellow(),
                         );
-                        advise_read_mostly_for(args.value, args.addr, args.len, args.device);
+                        set_readonly(args.value, args.len);
                     }
                     S2CMessage::Prefetch(args) => {
                         ctxs.set_current_ctx(args.device);
@@ -87,7 +89,7 @@ impl Controller {
                             args.len,
                             "#TODO".yellow(),
                         );
-                        snippet::_nihilphase_prefetch(args.len);
+                        prefetch::filtered_prefetch(args.len);
                     }
                     S2CMessage::GrantRunningToken(args) => {
                         info_eprintln!(
@@ -169,8 +171,41 @@ impl Drop for CudaContextGuard {
     }
 }
 
+fn set_readonly(readonly: bool, size_mb: u64) {
+    let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
+    for entry in ptr_mapping.iter_mut() {
+        let ptr = entry.addr;
+        let size = entry.len;
+        if size >= 1024 * 1024 * size_mb as usize {
+            let res = unsafe {
+                cuda_lib().cuMemAdvise(
+                    ptr as u64,
+                    size as usize,
+                    if readonly {
+                        cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
+                    } else {
+                        cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
+                    },
+                    entry.device,
+                )
+            };
+            if res != cudaError_enum::CUDA_SUCCESS {
+                warn_eprintln!("Failed to set read mostly: {:?}", res);
+            }
+            entry.is_readonly = readonly;
+            info_eprintln!(
+                "Set readonly: address={:#018x}, size={}, readonly={}",
+                ptr,
+                size,
+                readonly
+            );
+        }
+    }
+}
+
+#[allow(dead_code)]
 // TODO: check address in client side; should read allocation record before calling
-fn advise_read_mostly_for(read_mostly: bool, address: u64, length: u64, device: i32) {
+fn set_readonly_single(read_mostly: bool, address: u64, length: u64, device: i32) {
     let res = unsafe {
         cuda_lib().cuMemAdvise(
             address,

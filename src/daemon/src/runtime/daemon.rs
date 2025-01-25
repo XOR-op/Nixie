@@ -154,6 +154,7 @@ impl Controllable for ControllableDaemon {
     async fn read_dup(self, _context: Context, args: ReadDupMsg) {
         let guard = self.data.processes.read().await;
         let Some(handle) = guard.get(&args.pid) else {
+            tracing::warn!("read_dup: pid {} not found", args.pid);
             return;
         };
         let inst_tx = handle.inst_tx();

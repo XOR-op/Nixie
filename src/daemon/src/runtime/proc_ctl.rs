@@ -109,17 +109,32 @@ impl ProcessControl {
     async fn handle_inst(&mut self, inst: ProcCtlReq) {
         match inst {
             ProcCtlReq::ReadDup(inst) => {
-                let mapping = self.shm.inner.ptr_mapping.lock();
-                let mut modified = BTreeSet::new();
-                for entry in mapping.iter() {
-                    if inst.size_low.is_none_or(|low| low <= entry.len as u64)
-                        || inst.size_high.is_none_or(|high| high >= entry.len as u64)
-                    {
-                        modified.insert(entry.clone());
-                    }
+                // Some expected behavior, disable for testing now
+                // let mapping = self.shm.inner.ptr_mapping.lock();
+                // let mut modified = BTreeSet::new();
+                // for entry in mapping.iter() {
+                //     if inst.size_low.is_none_or(|low| low <= entry.len as u64)
+                //         || inst.size_high.is_none_or(|high| high >= entry.len as u64)
+                //     {
+                //         modified.insert(entry.clone());
+                //     }
+                // }
+                // drop(mapping);
+                // self.batched_read_dup(modified.iter(), inst.set).await;
+                if let Err(e) = self
+                    .rpc_sender
+                    .read_dup(
+                        Context::current(),
+                        nihilipc::ReadDupArgs {
+                            len: inst.size_low.unwrap_or(0) as u64,
+                            value: inst.set,
+                            device: 0, // TODO: real device
+                        },
+                    )
+                    .await
+                {
+                    tracing::warn!("Failed to set read duplication: {:?}", e);
                 }
-                drop(mapping);
-                self.batched_read_dup(modified.iter(), inst.set).await;
             }
             ProcCtlReq::List(param) => {
                 let mut allocations = Vec::new();
@@ -128,7 +143,7 @@ impl ProcessControl {
                     allocations.push(AllocationData {
                         size: entry.len as u64,
                         device: entry.device,
-                        read_only: false,
+                        read_only: entry.is_readonly,
                     });
                 }
                 drop(mapping);
@@ -154,7 +169,7 @@ impl ProcessControl {
                 .read_dup(
                     Context::current(),
                     nihilipc::ReadDupArgs {
-                        addr: entry.addr,
+                        // addr: entry.addr,
                         len: entry.len as u64,
                         value: set,
                         device: entry.device,
