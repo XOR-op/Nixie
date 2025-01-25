@@ -20,8 +20,14 @@ fn prefetch_impl(size_mb: u64) {
         let size = pair.len;
         if size >= 1024 * 1024 * size_mb as usize {
             let start = std::time::Instant::now();
-            let res =
-                unsafe { cuMemPrefetchAsync(ptr, size, CUdevice::from(0), streams[stream_idx].0) };
+            let res = unsafe {
+                cuMemPrefetchAsync(
+                    ptr,
+                    size,
+                    CUdevice::from(pair.device),
+                    streams[stream_idx].0,
+                )
+            };
             if res != cudaError_enum::CUDA_SUCCESS {
                 warn_eprintln!("Failed to prefetch memory: {:?}", res);
             }

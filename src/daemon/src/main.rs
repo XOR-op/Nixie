@@ -12,8 +12,30 @@ mod logging;
 mod runtime;
 mod uvm;
 
+#[derive(clap::ValueEnum, Debug, Parser, Clone, Copy, Default)]
+enum DeviceArgs {
+    CPU,
+    #[default]
+    GPU,
+}
+
 #[derive(Debug, Parser)]
 struct PrefetchArgs {
+    /// only prefetch memory regions with size larger than filter
+    #[arg(short, long, default_value = "0")]
+    pub filter: u64,
+    #[arg(short, long)]
+    pub dest: DeviceArgs,
+    #[command(flatten)]
+    pub cli: CliArgs,
+}
+
+#[derive(Debug, Parser)]
+struct ReadDupArgs {
+    /// set read duplicatoin attribute
+    #[arg(short, long)]
+    pub set: bool,
+    /// only show memory regions with size larger than filter
     #[arg(short, long, default_value = "0")]
     pub filter: u64,
     #[command(flatten)]
@@ -21,14 +43,10 @@ struct PrefetchArgs {
 }
 
 #[derive(Debug, Parser)]
-struct ReadDupArgs {
-    // set read duplicatoin attribute
-    #[arg(short, long)]
-    pub set: bool,
-    #[arg(short, long, default_value = "0")]
-    pub filter: u64,
-    #[command(flatten)]
-    pub cli: CliArgs,
+struct ListArgs {
+    /// Show detailed information
+    #[arg(short, long, default_value = "false")]
+    pub verbose: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -37,7 +55,7 @@ enum Args {
     Daemon,
     Prefetch(PrefetchArgs),
     ReadDup(ReadDupArgs),
-    List,
+    List(ListArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -74,9 +92,9 @@ fn main() {
                     .unwrap();
                 client.read_dup(Some(args.filter), args.set).await.unwrap();
             }
-            Args::List => {
+            Args::List(args) => {
                 let client = ControlClient::new(control::CONTROL_PATH, 0).await.unwrap();
-                client.list_processes().await.unwrap();
+                client.list_processes(args.verbose).await.unwrap();
             }
             Args::Daemon => unreachable!(),
         };

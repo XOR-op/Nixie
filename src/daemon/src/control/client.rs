@@ -40,7 +40,7 @@ impl ControlClient {
         Ok(())
     }
 
-    pub async fn prefetch(&self, size_low: Option<u64>) -> Result<(), DaemonError> {
+    pub async fn prefetch(&self, to_gpu: bool, size_low: Option<u64>) -> Result<(), DaemonError> {
         self.client
             .prefetch(
                 tarpc::context::current(),
@@ -48,7 +48,7 @@ impl ControlClient {
                     pid: self.pid,
                     size_low,
                     size_high: None,
-                    to_gpu: true,
+                    to_gpu,
                 },
             )
             .await
@@ -56,12 +56,13 @@ impl ControlClient {
         Ok(())
     }
 
-    pub async fn list_processes(&self) -> Result<(), DaemonError> {
+    pub async fn list_processes(&self, verbose: bool) -> Result<(), DaemonError> {
         let processes = self
             .client
             .list_processes(tarpc::context::current())
             .await
             .map_err(|e| DaemonError::ClientRpc("list_processes", e))?;
+        // print info
         println!("Active processes: {}", processes.len());
         for process in processes {
             let group_by_device =
@@ -84,13 +85,29 @@ impl ControlClient {
                 process.num_fault.to_string().blue()
             );
             for (device, allocations) in group_by_device {
+                // print aggregated per device info
                 let alloc_size = allocations.iter().map(|a| a.size).sum::<u64>();
                 println!(
                     "{} #alloc = {}, size = {}",
                     format!("<Device {}>", device).cyan(),
                     format!("{}", allocations.len()).yellow(),
                     pretty_size(alloc_size).blue()
-                )
+                );
+                if verbose {
+                    // print each allocation info
+                    for (idx, a) in allocations.into_iter().enumerate() {
+                        println!(
+                            "\t{}: size = {}, readonly = {}",
+                            format!("<Allocation {}>", idx).cyan(),
+                            pretty_size(a.size).blue(),
+                            if a.read_only {
+                                "T".bright_green()
+                            } else {
+                                "F".bright_red()
+                            }
+                        )
+                    }
+                }
             }
         }
         Ok(())
