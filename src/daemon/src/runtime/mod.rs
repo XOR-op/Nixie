@@ -9,7 +9,7 @@ use std::path::Path;
 pub use daemon::Daemon;
 
 use crate::{
-    control::{ProcessMetadata, ReadDupMsg},
+    control::{AttrMsg, ProcessMetadata},
     error::DaemonError,
     general::CallParameter,
 };
@@ -39,6 +39,6 @@ fn socket_chown<P: AsRef<Path>>(path: P) -> Result<(), DaemonError> {
 }
 
 pub(crate) enum ProcCtlReq {
-    ReadDup(ReadDupMsg),
+    SetAttr(AttrMsg),
     List(CallParameter<(), ProcessMetadata>),
 }

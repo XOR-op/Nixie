@@ -1,4 +1,4 @@
-use crate::{InitClient, PrefetchArgs, ReadDupArgs, ShmPath, UvmFd};
+use crate::{AttrArgs, InitClient, PrefetchArgs, ShmPath, UvmFd};
 use futures::future::{AbortHandle, Abortable};
 use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub trait Daemon {
 
 #[tarpc::service]
 pub trait Sidecar {
-    async fn read_dup(params: ReadDupArgs);
+    async fn set_attr(params: AttrArgs);
 
     async fn prefetch(params: PrefetchArgs);
 }

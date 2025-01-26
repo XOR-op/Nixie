@@ -2,7 +2,7 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUcontext, CUdevice};
-use nihilipc::{rpc::DaemonClient, S2CMessage};
+use nihilipc::{rpc::DaemonClient, AttrType, S2CMessage};
 
 use super::msg::C2SMessage;
 use crate::{
@@ -69,19 +69,26 @@ impl Controller {
                     S2CMessage::ReadDup(args) => {
                         ctxs.set_current_ctx(args.device);
                         info_eprintln!(
-                            "{} {}: =>{} address={}, len={}, device={}",
+                            "{} {}: {:?}=>{:?} address={}, len={}, device={}",
                             "[libcuda_hook]".bold(),
-                            "rpc_read_duplication".blue(),
+                            "rpc_set_attribute".blue(),
                             args.value,
+                            args.will_set,
                             args.addr
                                 .map_or_else(|| "None".to_string(), |x| format!("{:#x}", x)),
                             args.len,
-                            "#TODO".yellow(),
+                            args.device,
                         );
                         if let Some(addr) = args.addr {
-                            set_readonly_single(args.value, addr, args.len, args.device);
+                            set_attribute_single(
+                                args.value,
+                                args.will_set,
+                                addr,
+                                args.len,
+                                args.device,
+                            );
                         } else {
-                            set_readonly(args.value, args.len)
+                            set_attribute(args.value, args.will_set, args.len)
                         }
                     }
                     S2CMessage::Prefetch(args) => {
@@ -176,7 +183,7 @@ impl Drop for CudaContextGuard {
     }
 }
 
-fn set_readonly(readonly: bool, size_mb: u64) {
+fn set_attribute(attr_val: AttrType, will_set: bool, size_mb: u64) {
     let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
     for entry in ptr_mapping.iter_mut() {
         let ptr = entry.addr;
@@ -186,31 +193,39 @@ fn set_readonly(readonly: bool, size_mb: u64) {
                 cuda_lib().cuMemAdvise(
                     ptr as u64,
                     size as usize,
-                    if readonly {
-                        cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
-                    } else {
-                        cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
-                    },
+                    compute_cu_advise(attr_val, will_set),
                     entry.device,
                 )
             };
             if res != cudaError_enum::CUDA_SUCCESS {
                 warn_eprintln!("Failed to set read mostly: {:?}", res);
             }
-            entry.is_readonly = readonly;
+            match attr_val {
+                AttrType::ReadDup => {
+                    entry.is_readonly = will_set;
+                }
+                AttrType::PrefLoc => {}
+                AttrType::AccessedBy => {}
+            }
             info_eprintln!(
-                "Set readonly: address={:#018x}, size={}, readonly={}",
+                "Set {:?}: address={:#018x}, size={}, value={}",
+                attr_val,
                 ptr,
                 size,
-                readonly
+                will_set
             );
         }
     }
 }
 
-#[allow(dead_code)]
 // TODO: check address in client side; should read allocation record before calling
-fn set_readonly_single(read_mostly: bool, address: u64, length: u64, device: i32) {
+fn set_attribute_single(
+    attr_val: AttrType,
+    will_set: bool,
+    address: u64,
+    length: u64,
+    device: i32,
+) {
     let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
     let entry = ptr_mapping.iter_mut().find(|entry| {
         entry.addr <= address
@@ -222,23 +237,26 @@ fn set_readonly_single(read_mostly: bool, address: u64, length: u64, device: i32
             cuda_lib().cuMemAdvise(
                 address,
                 length as usize,
-                if read_mostly {
-                    cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
-                } else {
-                    cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
-                },
+                compute_cu_advise(attr_val, will_set),
                 device,
             )
         };
         if res != cudaError_enum::CUDA_SUCCESS {
             warn_eprintln!("Failed to set read mostly: {:?}", res);
         }
-        entry.is_readonly = read_mostly;
+        match attr_val {
+            AttrType::ReadDup => {
+                entry.is_readonly = will_set;
+            }
+            AttrType::PrefLoc => {}
+            AttrType::AccessedBy => {}
+        };
         info_eprintln!(
-            "Set readonly: address={:#018x}, size={}, readonly={}",
+            "Set {:?}: address={:#018x}, size={}, value={}",
+            attr_val,
             address,
             length,
-            read_mostly
+            will_set
         );
     } else {
         warn_eprintln!(
@@ -247,5 +265,31 @@ fn set_readonly_single(read_mostly: bool, address: u64, length: u64, device: i32
             length,
             device
         );
+    }
+}
+
+fn compute_cu_advise(attr_val: AttrType, will_set: bool) -> cudarc::driver::sys::CUmem_advise_enum {
+    match attr_val {
+        AttrType::ReadDup => {
+            if will_set {
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
+            } else {
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
+            }
+        }
+        AttrType::PrefLoc => {
+            if will_set {
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_PREFERRED_LOCATION
+            } else {
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION
+            }
+        }
+        AttrType::AccessedBy => {
+            if will_set {
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_ACCESSED_BY
+            } else {
+                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_ACCESSED_BY
+            }
+        }
     }
 }

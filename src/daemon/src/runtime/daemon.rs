@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use crate::{
-    control::{self, Controllable, PrefetchMsg, ReadDupMsg},
+    control::{self, AttrMsg, Controllable, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
     general::{CallFuture, CallParameter},
     runtime::{daemon_server::DaemonServer, ProcCtlReq},
@@ -151,7 +151,7 @@ impl Controllable for ControllableDaemon {
         results.into_iter().flatten().collect()
     }
 
-    async fn read_dup(self, _context: Context, args: ReadDupMsg) {
+    async fn set_attr(self, _context: Context, args: AttrMsg) {
         let guard = self.data.processes.read().await;
         let Some(handle) = guard.get(&args.pid) else {
             tracing::warn!("read_dup: pid {} not found", args.pid);
@@ -159,7 +159,7 @@ impl Controllable for ControllableDaemon {
         };
         let inst_tx = handle.inst_tx();
         drop(guard);
-        let _ = inst_tx.send(ProcCtlReq::ReadDup(args));
+        let _ = inst_tx.send(ProcCtlReq::SetAttr(args));
     }
 
     async fn prefetch(self, _context: Context, args: PrefetchMsg) {

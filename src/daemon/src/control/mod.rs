@@ -1,5 +1,6 @@
 pub mod client;
 
+use nihilipc::AttrType;
 use serde::{Deserialize, Serialize};
 
 pub static CONTROL_PATH: &str = "/tmp/nihilphase-ctl.sock";
@@ -8,16 +9,17 @@ pub static CONTROL_PATH: &str = "/tmp/nihilphase-ctl.sock";
 pub(crate) trait Controllable {
     async fn list_processes() -> Vec<ProcessMetadata>;
 
-    async fn read_dup(args: ReadDupMsg);
+    async fn set_attr(args: AttrMsg);
 
     async fn prefetch(args: PrefetchMsg);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ReadDupMsg {
+pub(crate) struct AttrMsg {
     pub pid: i32,
     pub size_low: Option<u64>,
     pub size_high: Option<u64>,
+    pub attr: AttrType,
     pub set: bool,
 }
 

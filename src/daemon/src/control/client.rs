@@ -4,7 +4,7 @@ use tokio_serde::formats::Cbor;
 
 use crate::{error::DaemonError, general::pretty_size};
 
-use super::{ControllableClient, PrefetchMsg, ReadDupMsg};
+use super::{AttrMsg, ControllableClient, PrefetchMsg};
 
 pub(crate) struct ControlClient {
     client: ControllableClient,
@@ -26,12 +26,13 @@ impl ControlClient {
 
     pub async fn read_dup(&self, size_low: Option<u64>, set: bool) -> Result<(), DaemonError> {
         self.client
-            .read_dup(
+            .set_attr(
                 tarpc::context::current(),
-                ReadDupMsg {
+                AttrMsg {
                     pid: self.pid,
                     size_low,
                     size_high: None,
+                    attr: nihilipc::AttrType::ReadDup,
                     set,
                 },
             )

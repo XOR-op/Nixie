@@ -109,7 +109,7 @@ impl ProcessControl {
 
     async fn handle_inst(&mut self, inst: ProcCtlReq) {
         match inst {
-            ProcCtlReq::ReadDup(inst) => {
+            ProcCtlReq::SetAttr(inst) => {
                 // Some expected behavior, disable for testing now
                 // let mapping = self.shm.inner.ptr_mapping.lock();
                 // let mut modified = BTreeSet::new();
@@ -124,12 +124,13 @@ impl ProcessControl {
                 // self.batched_read_dup(modified.iter(), inst.set).await;
                 if let Err(e) = self
                     .rpc_sender
-                    .read_dup(
+                    .set_attr(
                         Context::current(),
-                        nihilipc::ReadDupArgs {
+                        nihilipc::AttrArgs {
                             addr: None,
                             len: inst.size_low.unwrap_or(0) as u64,
-                            value: inst.set,
+                            value: inst.attr,
+                            will_set: inst.set,
                             device: 0, // TODO: real device
                         },
                     )
@@ -168,12 +169,13 @@ impl ProcessControl {
         for entry in iter {
             if let Err(e) = self
                 .rpc_sender
-                .read_dup(
+                .set_attr(
                     Context::current(),
-                    nihilipc::ReadDupArgs {
+                    nihilipc::AttrArgs {
                         addr: Some(entry.addr),
                         len: entry.len as u64,
-                        value: set,
+                        value: nihilipc::AttrType::ReadDup,
+                        will_set: set,
                         device: entry.device,
                     },
                 )
