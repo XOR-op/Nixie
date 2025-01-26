@@ -80,10 +80,10 @@ impl ProcessControl {
             }
         });
         self.num_fault += num_fault as u64;
+        let mut disabled = BTreeSet::new();
         // disable read duplication
         if !fault_tree.is_empty() {
             let mapping = self.shm.inner.ptr_mapping.lock();
-            let mut disabled = BTreeSet::new();
             for entry in mapping.iter() {
                 let start = entry.addr;
                 let end = entry.addr + entry.len as u64;
@@ -95,14 +95,15 @@ impl ProcessControl {
             self.batched_read_dup(disabled.iter(), false).await;
         }
 
-        // if !fault_tree.is_empty() {
-        //     tracing::info!(
-        //         "[pid={}] Received {} events: write_fault={}",
-        //         self.peer_pid,
-        //         n_completed,
-        //         fault_tree.len()
-        //     );
-        // }
+        if !fault_tree.is_empty() {
+            tracing::trace!(
+                "[pid={}] Received {} events: write_fault={}, num_disable={}",
+                self.peer_pid,
+                n_completed,
+                fault_tree.len(),
+                disabled.len()
+            );
+        }
         Ok(n_completed)
     }
 
@@ -126,6 +127,7 @@ impl ProcessControl {
                     .read_dup(
                         Context::current(),
                         nihilipc::ReadDupArgs {
+                            addr: None,
                             len: inst.size_low.unwrap_or(0) as u64,
                             value: inst.set,
                             device: 0, // TODO: real device
@@ -169,7 +171,7 @@ impl ProcessControl {
                 .read_dup(
                     Context::current(),
                     nihilipc::ReadDupArgs {
-                        // addr: entry.addr,
+                        addr: Some(entry.addr),
                         len: entry.len as u64,
                         value: set,
                         device: entry.device,

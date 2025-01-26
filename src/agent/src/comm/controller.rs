@@ -73,11 +73,16 @@ impl Controller {
                             "[libcuda_hook]".bold(),
                             "rpc_read_duplication".blue(),
                             args.value,
-                            "#TODO".yellow(),
+                            args.addr
+                                .map_or_else(|| "None".to_string(), |x| format!("{:#x}", x)),
                             args.len,
                             "#TODO".yellow(),
                         );
-                        set_readonly(args.value, args.len);
+                        if let Some(addr) = args.addr {
+                            set_readonly_single(args.value, addr, args.len, args.device);
+                        } else {
+                            set_readonly(args.value, args.len)
+                        }
                     }
                     S2CMessage::Prefetch(args) => {
                         ctxs.set_current_ctx(args.device);
@@ -206,19 +211,41 @@ fn set_readonly(readonly: bool, size_mb: u64) {
 #[allow(dead_code)]
 // TODO: check address in client side; should read allocation record before calling
 fn set_readonly_single(read_mostly: bool, address: u64, length: u64, device: i32) {
-    let res = unsafe {
-        cuda_lib().cuMemAdvise(
+    let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
+    let entry = ptr_mapping.iter_mut().find(|entry| {
+        entry.addr <= address
+            && entry.addr + entry.len as u64 >= address + length
+            && entry.device == device
+    });
+    if let Some(entry) = entry {
+        let res = unsafe {
+            cuda_lib().cuMemAdvise(
+                address,
+                length as usize,
+                if read_mostly {
+                    cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
+                } else {
+                    cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
+                },
+                device,
+            )
+        };
+        if res != cudaError_enum::CUDA_SUCCESS {
+            warn_eprintln!("Failed to set read mostly: {:?}", res);
+        }
+        entry.is_readonly = read_mostly;
+        info_eprintln!(
+            "Set readonly: address={:#018x}, size={}, readonly={}",
             address,
-            length as usize,
-            if read_mostly {
-                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY
-            } else {
-                cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY
-            },
-            device,
-        )
-    };
-    if res != cudaError_enum::CUDA_SUCCESS {
-        warn_eprintln!("Failed to set read mostly: {:?}", res);
+            length,
+            read_mostly
+        );
+    } else {
+        warn_eprintln!(
+            "Failed to find entry: address={:#018x}, size={}, device={}",
+            address,
+            length,
+            device
+        );
     }
 }
