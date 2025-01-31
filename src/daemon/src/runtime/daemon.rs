@@ -54,6 +54,13 @@ impl Daemon {
 
     pub fn run(self) {
         crate::logging::init_tracing();
+        tracing::info!("Starting daemon...");
+        if unsafe { cudarc::driver::sys::lib().cuInit(0) }
+            != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS
+        {
+            tracing::error!("Failed to initialize CUDA");
+            return;
+        }
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .enable_all()
