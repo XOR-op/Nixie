@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use clap::Parser;
+use colored::Colorize;
 use control::client::ControlClient;
 
 mod control;
@@ -11,6 +12,18 @@ mod inject;
 mod logging;
 mod runtime;
 mod uvm;
+
+macro_rules! check_error {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("{}: {}", "Error".red(), e);
+                std::process::exit(1);
+            }
+        }
+    };
+}
 
 #[derive(clap::ValueEnum, Debug, Parser, Clone, Copy, Default)]
 enum DeviceArgs {
@@ -96,31 +109,28 @@ fn main() {
     rt.block_on(async {
         match args {
             Args::Prefetch(args) => {
-                let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
-                    .await
-                    .unwrap();
+                let client =
+                    check_error!(ControlClient::new(control::CONTROL_PATH, args.cli.pid).await);
                 client
                     .prefetch(matches!(args.dest, DeviceArgs::GPU), Some(args.filter))
                     .await
                     .unwrap();
             }
             Args::ReadDup(args) => {
-                let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
-                    .await
-                    .unwrap();
+                let client =
+                    check_error!(ControlClient::new(control::CONTROL_PATH, args.cli.pid).await);
                 client.read_dup(Some(args.filter), args.set).await.unwrap();
             }
             Args::ReduceMove(args) => {
-                let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
-                    .await
-                    .unwrap();
+                let client =
+                    check_error!(ControlClient::new(control::CONTROL_PATH, args.cli.pid).await);
                 client
                     .reduce_move(args.low_filter, args.high_filter, args.set)
                     .await
                     .unwrap();
             }
             Args::List(args) => {
-                let client = ControlClient::new(control::CONTROL_PATH, 0).await.unwrap();
+                let client = check_error!(ControlClient::new(control::CONTROL_PATH, 0).await);
                 client.list_processes(args.verbose).await.unwrap();
             }
             Args::Daemon => unreachable!(),
