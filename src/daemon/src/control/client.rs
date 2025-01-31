@@ -41,6 +41,28 @@ impl ControlClient {
         Ok(())
     }
 
+    pub async fn reduce_move(
+        &self,
+        size_low: Option<u64>,
+        size_high: Option<u64>,
+        set: bool,
+    ) -> Result<(), DaemonError> {
+        self.client
+            .set_attr(
+                tarpc::context::current(),
+                AttrMsg {
+                    pid: self.pid,
+                    size_low,
+                    size_high,
+                    attr: nihilipc::AttrType::AccessedBy,
+                    set,
+                },
+            )
+            .await
+            .map_err(|e| DaemonError::ClientRpc("reduce_move", e))?;
+        Ok(())
+    }
+
     pub async fn prefetch(&self, to_gpu: bool, size_low: Option<u64>) -> Result<(), DaemonError> {
         self.client
             .prefetch(
@@ -98,19 +120,24 @@ impl ControlClient {
                     // print each allocation info
                     for (idx, a) in allocations.into_iter().enumerate() {
                         println!(
-                            "\t{}: size = {}, readonly = {}",
+                            "\t{}: size = {}, readonly = {}, move_reduced = {}",
                             format!("<Allocation {}>", idx).cyan(),
                             pretty_size(a.size).blue(),
-                            if a.read_only {
-                                "T".bright_green()
-                            } else {
-                                "F".bright_red()
-                            }
+                            colored_bool(a.readonly),
+                            colored_bool(a.move_reduced)
                         )
                     }
                 }
             }
         }
         Ok(())
+    }
+}
+
+fn colored_bool(b: bool) -> colored::ColoredString {
+    if b {
+        "T".bright_green()
+    } else {
+        "F".bright_red()
     }
 }

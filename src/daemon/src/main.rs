@@ -43,6 +43,20 @@ struct ReadDupArgs {
 }
 
 #[derive(Debug, Parser)]
+struct ReduceMoveArgs {
+    /// set read duplicatoin attribute
+    #[arg(short, long)]
+    pub set: bool,
+    /// only show memory regions with size larger than filter
+    #[arg(short, long)]
+    pub low_filter: Option<u64>,
+    #[arg(short, long)]
+    pub high_filter: Option<u64>,
+    #[command(flatten)]
+    pub cli: CliArgs,
+}
+
+#[derive(Debug, Parser)]
 struct ListArgs {
     /// Show detailed information
     #[arg(short, long, default_value = "false")]
@@ -55,6 +69,7 @@ enum Args {
     Daemon,
     Prefetch(PrefetchArgs),
     ReadDup(ReadDupArgs),
+    ReduceMove(ReduceMoveArgs),
     List(ListArgs),
 }
 
@@ -94,6 +109,15 @@ fn main() {
                     .await
                     .unwrap();
                 client.read_dup(Some(args.filter), args.set).await.unwrap();
+            }
+            Args::ReduceMove(args) => {
+                let client = ControlClient::new(control::CONTROL_PATH, args.cli.pid)
+                    .await
+                    .unwrap();
+                client
+                    .reduce_move(args.low_filter, args.high_filter, args.set)
+                    .await
+                    .unwrap();
             }
             Args::List(args) => {
                 let client = ControlClient::new(control::CONTROL_PATH, 0).await.unwrap();

@@ -205,7 +205,9 @@ fn set_attribute(attr_val: AttrType, will_set: bool, size_mb: u64) {
                     entry.is_readonly = will_set;
                 }
                 AttrType::PrefLoc => {}
-                AttrType::AccessedBy => {}
+                AttrType::AccessedBy => {
+                    entry.is_move_reduced = will_set;
+                }
             }
             info_eprintln!(
                 "Set {:?}: address={:#018x}, size={}, value={}",
@@ -249,7 +251,9 @@ fn set_attribute_single(
                 entry.is_readonly = will_set;
             }
             AttrType::PrefLoc => {}
-            AttrType::AccessedBy => {}
+            AttrType::AccessedBy => {
+                entry.is_move_reduced = will_set;
+            }
         };
         info_eprintln!(
             "Set {:?}: address={:#018x}, size={}, value={}",

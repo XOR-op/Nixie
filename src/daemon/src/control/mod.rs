@@ -42,5 +42,6 @@ pub(crate) struct ProcessMetadata {
 pub(crate) struct AllocationData {
     pub size: u64,
     pub device: i32,
-    pub read_only: bool, // TODO: Implement
+    pub readonly: bool,
+    pub move_reduced: bool,
 }

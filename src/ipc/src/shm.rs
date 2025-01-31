@@ -16,6 +16,8 @@ pub struct AllocationEntry {
     pub len: usize,
     pub device: i32,
     pub is_readonly: bool,
+    /// ACCESSED_BY with GPU device
+    pub is_move_reduced: bool,
     pub is_on_gpu: bool,
 }
 

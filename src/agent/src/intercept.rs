@@ -79,6 +79,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             len: size,
             device: device_id,
             is_readonly: false,
+            is_move_reduced: false,
             is_on_gpu: true,
         });
         let total_size = ptr_mapping.iter().map(|pr| pr.len).sum();

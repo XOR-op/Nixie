@@ -146,7 +146,8 @@ impl ProcessControl {
                     allocations.push(AllocationData {
                         size: entry.len as u64,
                         device: entry.device,
-                        read_only: entry.is_readonly,
+                        readonly: entry.is_readonly,
+                        move_reduced: entry.is_move_reduced,
                     });
                 }
                 drop(mapping);
