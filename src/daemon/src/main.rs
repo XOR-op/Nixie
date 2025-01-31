@@ -36,37 +36,43 @@ enum DeviceArgs {
 struct PrefetchArgs {
     /// only prefetch memory regions with size larger than filter
     #[arg(short, long, default_value = "0")]
-    pub filter: u64,
+    pub low_filter: Option<u64>,
     #[arg(short, long)]
     pub dest: DeviceArgs,
     #[command(flatten)]
-    pub cli: CliArgs,
+    pub proc: ProcArgs,
 }
 
 #[derive(Debug, Parser)]
 struct ReadDupArgs {
     /// set read duplicatoin attribute
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "unset")]
     pub set: bool,
+    /// unset read duplicatoin attribute
+    #[arg(short, long, conflicts_with = "set")]
+    pub unset: bool,
     /// only show memory regions with size larger than filter
-    #[arg(short, long, default_value = "0")]
-    pub filter: u64,
+    #[arg(short, long)]
+    pub low_filter: Option<u64>,
     #[command(flatten)]
-    pub cli: CliArgs,
+    pub proc: ProcArgs,
 }
 
 #[derive(Debug, Parser)]
 struct ReduceMoveArgs {
-    /// set read duplicatoin attribute
-    #[arg(short, long)]
+    /// set accessed by attribute
+    #[arg(short, long, conflicts_with = "unset")]
     pub set: bool,
+    /// unset accessed by attribute
+    #[arg(short, long, conflicts_with = "set")]
+    pub unset: bool,
     /// only show memory regions with size larger than filter
     #[arg(short, long)]
     pub low_filter: Option<u64>,
     #[arg(short, long)]
     pub high_filter: Option<u64>,
     #[command(flatten)]
-    pub cli: CliArgs,
+    pub proc: ProcArgs,
 }
 
 #[derive(Debug, Parser)]
@@ -86,11 +92,23 @@ enum Args {
     List(ListArgs),
 }
 
-#[derive(Debug, Parser)]
-struct CliArgs {
-    #[arg(short, long)]
-    pub pid: i32,
+#[derive(Debug, Parser, Clone, Copy)]
+struct ProcArgs {
+    #[arg(short, long, conflicts_with = "idx")]
+    pub pid: Option<i32>,
+    #[arg(short, long, conflicts_with = "pid")]
+    pub idx: Option<u32>,
 }
+
+impl ProcArgs {
+    fn empty() -> Self {
+        Self {
+            pid: Some(0),
+            idx: None,
+        }
+    }
+}
+
 fn main() {
     let args: Args = Args::parse();
     if matches!(args, Args::Daemon) {
@@ -110,30 +128,46 @@ fn main() {
         match args {
             Args::Prefetch(args) => {
                 let client =
-                    check_error!(ControlClient::new(control::CONTROL_PATH, args.cli.pid).await);
+                    check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
                 client
-                    .prefetch(matches!(args.dest, DeviceArgs::GPU), Some(args.filter))
+                    .prefetch(matches!(args.dest, DeviceArgs::GPU), args.low_filter)
                     .await
                     .unwrap();
             }
             Args::ReadDup(args) => {
+                let is_set = is_set(args.set, args.unset);
                 let client =
-                    check_error!(ControlClient::new(control::CONTROL_PATH, args.cli.pid).await);
-                client.read_dup(Some(args.filter), args.set).await.unwrap();
+                    check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
+                client.read_dup(args.low_filter, is_set).await.unwrap();
             }
             Args::ReduceMove(args) => {
+                let is_set = is_set(args.set, args.unset);
                 let client =
-                    check_error!(ControlClient::new(control::CONTROL_PATH, args.cli.pid).await);
+                    check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
+                if args.high_filter.is_some() {
+                    eprintln!("{}[] high filter is not supported yet", "[Warn]".yellow());
+                }
                 client
-                    .reduce_move(args.low_filter, args.high_filter, args.set)
+                    .reduce_move(args.low_filter, args.high_filter, is_set)
                     .await
                     .unwrap();
             }
             Args::List(args) => {
-                let client = check_error!(ControlClient::new(control::CONTROL_PATH, 0).await);
+                let client = check_error!(
+                    ControlClient::new(control::CONTROL_PATH, ProcArgs::empty()).await
+                );
                 client.list_processes(args.verbose).await.unwrap();
             }
             Args::Daemon => unreachable!(),
         };
     });
+}
+
+fn is_set(set: bool, unset: bool) -> bool {
+    if set ^ unset {
+        set
+    } else {
+        eprintln!("{}: set or unset must be specified", "Error".red());
+        std::process::exit(1);
+    }
 }

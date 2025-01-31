@@ -141,6 +141,10 @@ struct ControllableDaemon {
 }
 
 impl Controllable for ControllableDaemon {
+    async fn list_pid(self, _context: Context) -> Vec<i32> {
+        self.data.processes.read().await.keys().copied().collect()
+    }
+
     async fn list_processes(self, _context: Context) -> Vec<ProcessMetadata> {
         let guard = self.data.processes.read().await;
         let handles: Vec<mpsc::UnboundedSender<ProcCtlReq>> =
@@ -161,7 +165,7 @@ impl Controllable for ControllableDaemon {
     async fn set_attr(self, _context: Context, args: AttrMsg) {
         let guard = self.data.processes.read().await;
         let Some(handle) = guard.get(&args.pid) else {
-            tracing::warn!("read_dup: pid {} not found", args.pid);
+            tracing::warn!("set_attr: pid {} not found", args.pid);
             return;
         };
         let inst_tx = handle.inst_tx();

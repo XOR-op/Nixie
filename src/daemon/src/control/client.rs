@@ -2,7 +2,7 @@ use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::{error::DaemonError, general::pretty_size};
+use crate::{error::DaemonError, general::pretty_size, ProcArgs};
 
 use super::{AttrMsg, ControllableClient, PrefetchMsg};
 
@@ -12,7 +12,7 @@ pub(crate) struct ControlClient {
 }
 
 impl ControlClient {
-    pub async fn new(path: &str, pid: i32) -> Result<Self, DaemonError> {
+    pub async fn new(path: &str, pid: ProcArgs) -> Result<Self, DaemonError> {
         let conn = tokio::net::UnixStream::connect(path)
             .await
             .map_err(|e| DaemonError::Io("Failed to connect to control socket", e))?;
@@ -21,7 +21,33 @@ impl ControlClient {
             Cbor::default(),
         );
         let client = ControllableClient::new(Default::default(), conn).spawn();
-        Ok(Self { client, pid })
+        match pid {
+            ProcArgs {
+                pid: Some(pid),
+                idx: None,
+            } => Ok(Self { client, pid }),
+            ProcArgs {
+                pid: None,
+                idx: Some(idx),
+            } => {
+                let r = client
+                    .list_pid(tarpc::context::current())
+                    .await
+                    .map_err(|e| DaemonError::ClientRpc("list_pid", e))?;
+                if let Some(pid) = r.get(idx as usize) {
+                    Ok(Self { client, pid: *pid })
+                } else {
+                    Err(DaemonError::Errno(
+                        "Invalid process index",
+                        nix::errno::Errno::EINVAL,
+                    ))
+                }
+            }
+            _ => Err(DaemonError::Errno(
+                "-p(--pid) or -i(--idx) must be specified amd cannot be used together",
+                nix::errno::Errno::EINVAL,
+            )),
+        }
     }
 
     pub async fn read_dup(&self, size_low: Option<u64>, set: bool) -> Result<(), DaemonError> {

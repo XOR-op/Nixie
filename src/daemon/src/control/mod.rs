@@ -7,6 +7,8 @@ pub static CONTROL_PATH: &str = "/tmp/nihilphase-ctl.sock";
 
 #[tarpc::service]
 pub(crate) trait Controllable {
+    async fn list_pid() -> Vec<i32>;
+
     async fn list_processes() -> Vec<ProcessMetadata>;
 
     async fn set_attr(args: AttrMsg);
