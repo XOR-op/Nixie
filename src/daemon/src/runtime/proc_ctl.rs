@@ -14,13 +14,14 @@ use crate::{
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
 
-use super::{ProcCtlReq, ProcessMetadata};
+use super::{daemon_server::DeviceOrdinalMapping, ProcCtlReq, ProcessMetadata};
 
 pub(crate) struct ProcessControl {
     peer_pid: i32,
     pid_fd: AsyncFd<OwnedFd>,
     event_queue: EventQueue,
     shm: ShmGuard,
+    dev_mapping: DeviceOrdinalMapping,
     rpc_sender: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
     num_fault: u64,
@@ -145,7 +146,7 @@ impl ProcessControl {
                 for entry in mapping.iter() {
                     allocations.push(AllocationData {
                         size: entry.len as u64,
-                        device: entry.device,
+                        device: self.dev_mapping.visible_to_real(entry.device),
                         readonly: entry.is_readonly,
                         move_reduced: entry.is_move_reduced,
                     });
@@ -188,11 +189,12 @@ impl ProcessControl {
     }
 }
 
-pub(crate) struct ProcessControlBuilder {
+pub(super) struct ProcessControlBuilder {
     pid: Option<i32>,
     pid_fd: Option<AsyncFd<OwnedFd>>,
     event_queue: Option<EventQueue>,
     shm: Option<ShmGuard>,
+    dev_mapping: Option<DeviceOrdinalMapping>,
     msg_sender: Option<SidecarClient>,
     inst_rx: Option<mpsc::UnboundedReceiver<ProcCtlReq>>,
 }
@@ -204,6 +206,7 @@ impl ProcessControlBuilder {
             pid_fd: None,
             event_queue: None,
             shm: None,
+            dev_mapping: None,
             msg_sender: Some(msg_sender),
             inst_rx: Some(inst_rx),
         }
@@ -241,11 +244,20 @@ impl ProcessControlBuilder {
         self
     }
 
+    pub fn with_dev_mapping(&mut self, dev_mapping: DeviceOrdinalMapping) -> &mut Self {
+        if self.dev_mapping.is_some() {
+            tracing::warn!("dev_mapping is already set");
+        }
+        self.dev_mapping = Some(dev_mapping);
+        self
+    }
+
     pub fn ready(&self) -> bool {
         self.pid.is_some()
             && self.pid_fd.is_some()
             && self.event_queue.is_some()
             && self.shm.is_some()
+            && self.dev_mapping.is_some()
             && self.msg_sender.is_some()
             && self.inst_rx.is_some()
     }
@@ -260,6 +272,7 @@ impl ProcessControlBuilder {
             pid_fd: self.pid_fd.take().unwrap(),
             event_queue: self.event_queue.take().unwrap(),
             shm: self.shm.take().unwrap(),
+            dev_mapping: self.dev_mapping.take().unwrap(),
             rpc_sender: self.msg_sender.take().unwrap(),
             inst_rx: self.inst_rx.take().unwrap(),
             num_fault: 0,

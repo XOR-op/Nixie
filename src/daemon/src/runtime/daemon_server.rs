@@ -3,10 +3,12 @@ use crate::{
     runtime::shm::open_shm,
     uvm::event_queue::EventQueue,
 };
+use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
 use nihilipc::rpc::{rpc_multiplex_twoway, Daemon, SidecarClient};
 use nix::libc::c_int;
 use std::{
+    collections::HashMap,
     future::Future,
     os::fd::{FromRawFd, OwnedFd},
     sync::Arc,
@@ -74,7 +76,7 @@ macro_rules! checked {
 pub(super) struct DaemonServerHandleFuture {
     client: SidecarClient,
     pid: Option<i32>,
-    task_rx: mpsc::Receiver<(JoinHandle<()>, i32)>,
+    task_rx: mpsc::Receiver<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
     inst_tx: mpsc::UnboundedSender<ProcCtlReq>,
 }
 
@@ -86,9 +88,10 @@ impl Future for DaemonServerHandleFuture {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Self::Output> {
         let val = ready!(self.task_rx.poll_recv(cx));
-        return Poll::Ready(val.map(|(task, pid)| DaemonServerHandle {
+        return Poll::Ready(val.map(|(task, pid, dev_mapping)| DaemonServerHandle {
             client: self.client.clone(),
             pid,
+            dev_mapping,
             task,
             inst_tx: self.inst_tx.clone(),
         }));
@@ -98,6 +101,7 @@ impl Future for DaemonServerHandleFuture {
 pub(crate) struct DaemonServerHandle {
     client: SidecarClient,
     pid: i32,
+    dev_mapping: DeviceOrdinalMapping,
     task: JoinHandle<()>,
     /// TX to ProcessControl
     inst_tx: mpsc::UnboundedSender<ProcCtlReq>,
@@ -169,13 +173,13 @@ impl DaemonServer {
 struct StateOfStarting {
     rpc_client: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
-    ret: mpsc::Sender<(JoinHandle<()>, i32)>,
+    ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
 }
 
 struct StateOfBuilding {
     client_pid: i32,
     builder: ProcessControlBuilder,
-    ret: mpsc::Sender<(JoinHandle<()>, i32)>,
+    ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
 }
 
 struct DaemonServerState {
@@ -202,7 +206,7 @@ impl ServerState {
 }
 
 impl nihilipc::rpc::Daemon for DaemonServer {
-    async fn init_client(self, _ctx: Context, params: nihilipc::InitClient) {
+    async fn handshake(self, _ctx: Context, params: nihilipc::Handshake) {
         let mut state_guard = self.state.lock().await;
         let state = extract_guard_and_swap!(state_guard, ServerState::Start, "init_client");
         let rpc_client = state.rpc_client.clone();
@@ -216,9 +220,11 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         });
     }
 
-    async fn set_uvm_fd(self, _ctx: Context, params: nihilipc::UvmFd) {
+    async fn initialize(self, _ctx: Context, params: nihilipc::InitInfo) {
         let mut state_guard = self.state.lock().await;
-        let mut state = extract_guard_and_swap!(state_guard, ServerState::Building, "set_uvm_fd");
+        let mut state = extract_guard_and_swap!(state_guard, ServerState::Building, "initialize");
+
+        // duplicate UVM fd from agent process
         let peer_pid = state.client_pid;
         let (pid_fd, uvm_fd) =
             checked!(duplicate_peer_fd(peer_pid, params.fd).map_err(|e| (e, peer_pid)));
@@ -229,35 +235,27 @@ impl nihilipc::rpc::Daemon for DaemonServer {
                 AsyncFd::new(pid_fd).map_err(|e| (UvmError::Io("Create PID fd", e), peer_pid))
             ))
             .with_event_queue(event_queue);
+
+        // open shared memory
+        let shmem = checked!(open_shm(params.shm_path).map_err(|e| (e, peer_pid)));
+        state.builder.with_shm(shmem);
+
+        // parse CUDA_VISIBLE_DEVICES
+        let device_mapping =
+            checked!(DeviceOrdinalMapping::new(&params.visible_devices).map_err(|e| (e, peer_pid)));
+        state.builder.with_dev_mapping(device_mapping.clone());
+
         if let Some(ctl) = state.builder.build() {
             let task = tokio::spawn(async move {
                 ctl.run().await;
             });
             // should no have problem since state transition only happens once
-            let _ = state.ret.try_send((task, peer_pid));
+            let _ = state.ret.try_send((task, peer_pid, device_mapping));
             *state_guard = ServerState::Launched(DaemonServerState {
                 client_pid: peer_pid,
             });
         } else {
-            *state_guard = ServerState::Building(state);
-        }
-    }
-
-    async fn set_shm_path(self, _ctx: Context, params: nihilipc::ShmPath) {
-        let mut state_guard = self.state.lock().await;
-        let mut state = extract_guard_and_swap!(state_guard, ServerState::Building, "set_uvm_fd");
-        let peer_pid = state.client_pid;
-        let shmem = checked!(open_shm(params.path).map_err(|e| (e, peer_pid)));
-        state.builder.with_shm(shmem);
-        if let Some(ctl) = state.builder.build() {
-            let task = tokio::spawn(async move {
-                ctl.run().await;
-            });
-            let _ = state.ret.try_send((task, peer_pid));
-            *state_guard = ServerState::Launched(DaemonServerState {
-                client_pid: peer_pid,
-            });
-        } else {
+            tracing::error!("Failed to build process control");
             *state_guard = ServerState::Building(state);
         }
     }
@@ -285,6 +283,75 @@ fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), Dae
                 "pidfd_getfd",
                 nix::errno::Errno::from_raw(e.into_raw()),
             ))
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+
+pub(super) struct DeviceOrdinalMapping {
+    real_to_visible: HashMap<i32, i32>,
+    visible_to_real: HashMap<i32, i32>,
+}
+
+impl DeviceOrdinalMapping {
+    pub fn new(visible_devices: &str) -> Result<Self, DaemonError> {
+        let mut real_to_visible = HashMap::new();
+        let mut visible_to_real = HashMap::new();
+        if visible_devices.is_empty() {
+            // no CUDA_VISIBLE_DEVICES set, use default mapping
+            let num_dev = {
+                let mut num_dev = 0;
+                let res = unsafe { cuda_lib().cuDeviceGetCount(&mut num_dev as *mut _) };
+                if res != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+                    return Err(DaemonError::Cuda("cuDeviceGetCount", res));
+                }
+                num_dev
+            };
+            for i in 0..num_dev {
+                real_to_visible.insert(i as i32, i as i32);
+                visible_to_real.insert(i as i32, i as i32);
+            }
+        } else {
+            for (visible_dev, real_str) in visible_devices.split(',').enumerate() {
+                let real_dev = if let Ok(dev) = real_str.parse::<i32>() {
+                    dev
+                } else {
+                    // TODO: support UUID
+                    return Err(DaemonError::Cuda(
+                        if real_str.starts_with("GPU-") {
+                            "UUID is not supported yet"
+                        } else {
+                            "parse visible devices"
+                        },
+                        cudarc::driver::sys::cudaError_enum::CUDA_ERROR_INVALID_VALUE,
+                    ));
+                };
+                real_to_visible.insert(real_dev, visible_dev as i32);
+                visible_to_real.insert(visible_dev as i32, real_dev);
+            }
+        }
+        Ok(Self {
+            real_to_visible,
+            visible_to_real,
+        })
+    }
+
+    pub fn real_to_visible(&self, real: i32) -> i32 {
+        if let Some(dev) = self.real_to_visible.get(&real) {
+            *dev
+        } else {
+            tracing::error!("Invalid real device ordinal: {}", real);
+            0
+        }
+    }
+
+    pub fn visible_to_real(&self, visible: i32) -> i32 {
+        if let Some(dev) = self.visible_to_real.get(&visible) {
+            *dev
+        } else {
+            tracing::error!("Invalid visible device ordinal: {}", visible);
+            0
         }
     }
 }

@@ -1,4 +1,3 @@
-use comm::nofity_shm;
 use cudarc::driver::sys::CUstream;
 use nihilipc::{
     shm::{AllocationEntry, Shm, ShmGuard, ShmVec},
@@ -46,15 +45,9 @@ impl GenericData {
         }
     }
 
-    pub fn new() -> Self {
-        let uuid = uuid::Uuid::new_v4();
-        let path = format!(
-            "/nihilphase_ipc-{}-{}.shm",
-            std::process::id(),
-            uuid.to_string().split_at(8).0
-        );
-        let cpath = CString::new(path.clone()).unwrap();
-        eprintln!("Creating shared memory at {}", path);
+    pub fn new(path: &str) -> Self {
+        let cpath = CString::new(path).unwrap();
+        info_eprintln!("Creating shared memory at {}", path);
         let shm_fd = unsafe {
             libc::shm_open(
                 cpath.as_ptr(),
@@ -77,7 +70,6 @@ impl GenericData {
         unsafe {
             libc::close(shm_fd);
         }
-        nofity_shm(path);
 
         let overflowed_ptr_mapping = Mutex::new(Vec::new());
         Self {

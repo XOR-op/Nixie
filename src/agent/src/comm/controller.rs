@@ -5,9 +5,7 @@ use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUcontext, CUdevice};
 use nihilipc::{rpc::DaemonClient, AttrType, S2CMessage};
 
 use super::msg::C2SMessage;
-use crate::{
-    info_eprintln, prefetch, schedule::SchedControl, utils::should_log, warn_eprintln, GENERIC_DATA,
-};
+use crate::{info_eprintln, prefetch, schedule::SchedControl, warn_eprintln, GENERIC_DATA};
 
 /// handler for agent<->daemon communication
 pub(crate) struct Controller {
@@ -40,19 +38,14 @@ impl Controller {
             match msg {
                 SidecarSelect::Process(msg) => {
                     if let Err(e) = match msg {
-                        C2SMessage::InitClient(msg) => {
+                        C2SMessage::Handshake(msg) => {
                             self.daemon_client
-                                .init_client(tarpc::context::current(), msg)
+                                .handshake(tarpc::context::current(), msg)
                                 .await
                         }
-                        C2SMessage::UvmFd(msg) => {
+                        C2SMessage::InitInfo(msg) => {
                             self.daemon_client
-                                .set_uvm_fd(tarpc::context::current(), msg)
-                                .await
-                        }
-                        C2SMessage::ShmPath(msg) => {
-                            self.daemon_client
-                                .set_shm_path(tarpc::context::current(), msg)
+                                .initialize(tarpc::context::current(), msg)
                                 .await
                         }
                         C2SMessage::MemoryUsage(_msg) => unimplemented!("MemoryUsage"),

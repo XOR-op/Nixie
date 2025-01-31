@@ -4,7 +4,7 @@ use colored::Colorize;
 use futures::StreamExt;
 use nihilipc::{
     rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
-    AttrArgs, InitClient, PrefetchArgs, S2CMessage, ShmPath, UvmFd,
+    AttrArgs, Handshake, InitInfo, PrefetchArgs, S2CMessage,
 };
 use tarpc::{
     context::Context,
@@ -75,7 +75,7 @@ async fn create_comm(conn: UnixStream, p2s_rx: flume::Receiver<C2SMessage>) {
 fn init_comm() -> Option<flume::Sender<C2SMessage>> {
     match init_comm_inner() {
         Ok(chan) => {
-            chan_send!(chan.send(C2SMessage::InitClient(InitClient {
+            chan_send!(chan.send(C2SMessage::Handshake(Handshake {
                 pid: std::process::id() as i32,
             })));
             Some(chan)
@@ -92,18 +92,15 @@ fn init_comm() -> Option<flume::Sender<C2SMessage>> {
     }
 }
 
-pub(crate) fn notify_fd(fd: i32) {
+pub(crate) fn notify_init_info(fd: i32, shm_path: String, visible_devices: String) {
     let Some(chan) = COMM.get_or_init(|| init_comm()) else {
         return;
     };
-    chan_send!(chan.send(C2SMessage::UvmFd(UvmFd { fd })));
-}
-
-pub(crate) fn nofity_shm(path: String) {
-    let Some(chan) = COMM.get_or_init(|| init_comm()) else {
-        return;
-    };
-    chan_send!(chan.send(C2SMessage::ShmPath(ShmPath { path })));
+    chan_send!(chan.send(C2SMessage::InitInfo(InitInfo {
+        fd,
+        shm_path,
+        visible_devices
+    })));
 }
 
 #[derive(Clone)]

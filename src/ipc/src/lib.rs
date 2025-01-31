@@ -7,18 +7,15 @@ pub mod shm;
 pub mod sync;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct InitClient {
+pub struct Handshake {
     pub pid: i32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct UvmFd {
-    pub fd: i32,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShmPath {
-    pub path: String,
+pub struct InitInfo {
+    pub fd: i32,
+    pub shm_path: String,
+    pub visible_devices: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

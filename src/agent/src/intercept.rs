@@ -5,8 +5,8 @@ use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
-use crate::comm::notify_fd;
-use crate::utils::{should_log, size_to_string};
+use crate::comm::notify_init_info;
+use crate::utils::size_to_string;
 use crate::{info_eprintln, warn_eprintln, GenericData, GENERIC_DATA};
 
 #[repr(C)]
@@ -61,20 +61,31 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             device_id
         };
 
-        // CUDA libraries initialized; send UVM FD to daemon
-        // TODO: coalesce two IPCs into one
-        if VALID_UVM_FD.get().is_none() {
-            let list = UVM_FD_CANDIDATES.lock().unwrap();
-            if let Some(fd) = list.first().copied() {
-                let _ = VALID_UVM_FD.set(fd);
-                notify_fd(fd);
-            } else {
-                warn_eprintln!("Failed to find valid UVM FD");
-            }
-        }
-        // record ptr mapping
         let mut ptr_mapping = GENERIC_DATA
-            .get_or_init(|| GenericData::new())
+            .get_or_init(|| {
+                // CUDA libraries initialized; send UVM FD to daemon
+                assert!(VALID_UVM_FD.get().is_none(), "UVM FD already set");
+                let list = UVM_FD_CANDIDATES.lock().unwrap();
+                let uvm_fd = if let Some(fd) = list.first().copied() {
+                    let _ = VALID_UVM_FD.set(fd);
+                    fd
+                } else {
+                    warn_eprintln!("Failed to find valid UVM FD");
+                    -1
+                };
+                // And create ptr mapping
+                let uuid = uuid::Uuid::new_v4();
+                let path = format!(
+                    "/nihilphase_ipc-{}-{}.shm",
+                    std::process::id(),
+                    uuid.to_string().split_at(8).0
+                );
+                let result = GenericData::new(&path);
+                let cuda_visible_devices =
+                    std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default();
+                notify_init_info(uvm_fd, path, cuda_visible_devices);
+                result
+            })
             .lock_ptr_mapping();
         ptr_mapping.push(AllocationEntry {
             addr: unsafe { *dev_ptr as u64 },
@@ -108,15 +119,16 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         }
         std::mem::transmute(func)
     });
-    let mut mapping = GENERIC_DATA
-        .get_or_init(|| GenericData::new())
-        .lock_ptr_mapping();
-    let idx = mapping.iter().position(|pr| pr.addr == dev_ptr as u64);
-    if let Some(idx) = idx {
-        mapping.remove(idx);
-    } else {
-        warn_eprintln!("Failed to find ptr mapping for {}", dev_ptr as u64);
+    if let Some(mapping) = GENERIC_DATA.get() {
+        let mut mapping = mapping.lock_ptr_mapping();
+        let idx = mapping.iter().position(|pr| pr.addr == dev_ptr as u64);
+        if let Some(idx) = idx {
+            mapping.remove(idx);
+        } else {
+            warn_eprintln!("Failed to find ptr mapping for {}", dev_ptr as u64);
+        }
     }
+
     info_eprintln!(
         "{} {}: at={:#018x}",
         "[libcuda_hook]".bold(),

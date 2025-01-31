@@ -1,4 +1,4 @@
-use crate::{AttrArgs, InitClient, PrefetchArgs, ShmPath, UvmFd};
+use crate::{AttrArgs, Handshake, InitInfo, PrefetchArgs};
 use futures::future::{AbortHandle, Abortable};
 use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -10,11 +10,9 @@ use thiserror::Error;
 
 #[tarpc::service]
 pub trait Daemon {
-    async fn init_client(params: InitClient);
+    async fn handshake(params: Handshake);
 
-    async fn set_uvm_fd(params: UvmFd);
-
-    async fn set_shm_path(params: ShmPath);
+    async fn initialize(params: InitInfo);
 }
 
 #[tarpc::service]

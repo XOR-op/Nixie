@@ -17,6 +17,8 @@ pub enum DaemonError {
     Errno(&'static str, nix::errno::Errno),
     #[error("{0}: RPC error {1}")]
     ClientRpc(&'static str, tarpc::client::RpcError),
+    #[error("{0}: CUDA error {1:?}")]
+    Cuda(&'static str, cudarc::driver::sys::cudaError_enum),
 }
 
 #[derive(Debug, Error)]

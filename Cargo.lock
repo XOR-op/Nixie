@@ -277,9 +277,9 @@ checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
 
 [[package]]
 name = "cudarc"
-version = "0.13.3"
+version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "712390a76a83255b3d02760b8b3b3b7cb518f1f7cd83aafbbd65c382a7d6e8ef"
+checksum = "3b68d7c284d40d96a4251330ab583c2718b412f4fc53239d295b3a1f8735f426"
 dependencies = [
  "libloading",
 ]
@@ -669,6 +669,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "cudarc",
  "futures",
  "goblin",
  "hashlink",

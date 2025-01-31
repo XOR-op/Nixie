@@ -6,6 +6,11 @@ members = ["src/daemon", "src/ipc", "src/agent"]
 nihilipc = { path = "src/ipc" }
 bincode = "1.3.3"
 colored = "2.1.0"
+cudarc = { version = "0.13.0", default-features = false, features = [
+    "std",
+    "driver",
+    "cuda-version-from-build-system",
+] }
 futures = "0.3.31"
 nix = { version = "0.29.0", features = ["fs", "user", "ioctl"] }
 serde = { version = "1", features = ["derive"] }

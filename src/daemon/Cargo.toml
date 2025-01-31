@@ -14,6 +14,7 @@ thiserror.workspace = true
 futures.workspace = true
 serde.workspace = true
 colored.workspace = true
+cudarc.workspace = true
 
 async-bincode = "0.7.2"
 clap = { version = "4.5.4", features = ["derive"] }

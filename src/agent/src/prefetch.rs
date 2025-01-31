@@ -3,8 +3,8 @@ use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
 use std::sync::mpsc;
 
 use crate::{
-    info_eprintln, utils::should_log, utils::size_to_string, warn_eprintln, CuStreamWrapper,
-    GENERIC_DATA, PREFETCH_REQ_QUEUE, STREAM_VEC,
+    info_eprintln, utils::size_to_string, warn_eprintln, CuStreamWrapper, GENERIC_DATA,
+    PREFETCH_REQ_QUEUE, STREAM_VEC,
 };
 
 fn prefetch_impl(size_mb: u64) {
