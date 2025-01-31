@@ -27,15 +27,18 @@ type CudaLaunchKernelType = extern "C" fn(
     CUstream,
 ) -> cudaError_enum;
 type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
+type CloseType = extern "C" fn(c_int) -> c_int;
 type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
 
 static MALLOC_FN: OnceLock<CudaMallocType> = OnceLock::new();
 static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
 static LAUNCH_KERNEL_FN: OnceLock<CudaLaunchKernelType> = OnceLock::new();
 static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
+static CLOSE_FN: OnceLock<CloseType> = OnceLock::new();
 static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
 
-static UVM_FD: OnceLock<i32> = OnceLock::new();
+static VALID_UVM_FD: OnceLock<i32> = OnceLock::new();
+static UVM_FD_CANDIDATES: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 
 #[allow(non_snake_case)]
 #[no_mangle]
@@ -47,7 +50,6 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         }
         std::mem::transmute(func)
     });
-    warn_eprintln!("cudaMalloc: {} Entering", size);
     let res = malloc_func(dev_ptr, size, 0x01);
     if res == cudaError_enum::CUDA_SUCCESS {
         let device_id = {
@@ -58,18 +60,18 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             }
             device_id
         };
-        // set read mostly
-        // let res = unsafe {
-        //     cudarc::driver::sys::cuMemAdvise(
-        //         *dev_ptr as u64,
-        //         size,
-        //         cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY,
-        //         device_id,
-        //     )
-        // };
-        // if res != cudaError_enum::CUDA_SUCCESS {
-        //     eprintln!("Failed to set read mostly: {:?}", res);
-        // }
+
+        // CUDA libraries initialized; send UVM FD to daemon
+        // TODO: coalesce two IPCs into one
+        if VALID_UVM_FD.get().is_none() {
+            let list = UVM_FD_CANDIDATES.lock().unwrap();
+            if let Some(fd) = list.first().copied() {
+                let _ = VALID_UVM_FD.set(fd);
+                notify_fd(fd);
+            } else {
+                warn_eprintln!("Failed to find valid UVM FD");
+            }
+        }
         // record ptr mapping
         let mut ptr_mapping = GENERIC_DATA
             .get_or_init(|| GenericData::new())
@@ -173,13 +175,44 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
         std::mem::transmute(func)
     });
     let res = open_func(path, oflag, mode);
-    if UVM_FD.get().is_none()
-        && std::ffi::CStr::from_ptr(path)
-            .to_str()
-            .is_ok_and(|s| s == "/dev/nvidia-uvm")
+
+    if std::ffi::CStr::from_ptr(path)
+        .to_str()
+        .is_ok_and(|s| s == "/dev/nvidia-uvm")
     {
-        let _ = UVM_FD.set(res);
-        notify_fd(res);
+        // store potential UVM FDs used by CUDA libraries
+        if VALID_UVM_FD.get().is_none() {
+            let mut guard = UVM_FD_CANDIDATES.lock().unwrap();
+            if guard.iter().find(|&&fd| fd == res).is_none() {
+                guard.push(res);
+            }
+        }
+    }
+    return res;
+}
+
+#[allow(non_snake_case)]
+#[no_mangle]
+pub unsafe extern "C" fn close(fd: c_int) -> c_int {
+    let close_func = CLOSE_FN.get_or_init(|| {
+        let func = dlsym(RTLD_NEXT, cr"close".as_ptr()) as *mut CloseType;
+        if func.is_null() {
+            panic!("Failed to get original close function");
+        }
+        std::mem::transmute(func)
+    });
+    let res = close_func(fd);
+    if VALID_UVM_FD.get().is_none() {
+        let mut guard = UVM_FD_CANDIDATES.lock().unwrap();
+        if let Some(idx) = guard.iter().position(|&x| x == fd) {
+            guard.remove(idx);
+            // warn_eprintln!(
+            //     "!!! UVM FD closed: {} from pid={}: {:?}",
+            //     fd,
+            //     std::process::id(),
+            //     *guard
+            // );
+        }
     }
     return res;
 }

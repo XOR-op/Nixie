@@ -34,7 +34,7 @@ pub(crate) fn should_log(level: u8) -> bool {
 macro_rules! info_eprintln {
     ($($arg:tt)*) => {
         if should_log(2) {
-            println!($($arg)*);
+            eprintln!("{} {}", colored::Colorize::green("NIHIL-INFO"), format!($($arg)*));
         }
     };
 }
@@ -43,7 +43,7 @@ macro_rules! info_eprintln {
 macro_rules! warn_eprintln {
     ($($arg:tt)*) => {
         if should_log(1) {
-            println!($($arg)*);
+            eprintln!("{} {}", colored::Colorize::yellow("NIHIL-WARN"), format!($($arg)*));
         }
     };
 }
