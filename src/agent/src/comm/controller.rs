@@ -59,7 +59,7 @@ impl Controller {
                     }
                 }
                 SidecarSelect::Daemon(msg) => match msg {
-                    S2CMessage::ReadDup(args) => {
+                    S2CMessage::SetAttr(args) => {
                         ctxs.set_current_ctx(args.device);
                         info_eprintln!(
                             "{} {}: {:?}=>{:?} address={}, len={}, device={}",

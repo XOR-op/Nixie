@@ -110,7 +110,7 @@ pub(crate) struct SidecarServer {
 
 impl nihilipc::rpc::Sidecar for SidecarServer {
     async fn set_attr(self, _context: Context, params: AttrArgs) -> () {
-        chan_send!(self.sender.send(S2CMessage::ReadDup(params)));
+        chan_send!(self.sender.send(S2CMessage::SetAttr(params)));
     }
 
     async fn prefetch(self, _context: Context, params: PrefetchArgs) -> () {

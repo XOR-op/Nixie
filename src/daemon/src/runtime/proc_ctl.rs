@@ -24,6 +24,7 @@ pub(crate) struct ProcessControl {
     dev_mapping: DeviceOrdinalMapping,
     rpc_sender: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
+    exit_tx: mpsc::UnboundedSender<i32>,
     num_fault: u64,
 }
 
@@ -55,6 +56,7 @@ impl ProcessControl {
             }
         }
         tracing::info!("ProcessControl [pid={}] finished", self.peer_pid);
+        let _ = self.exit_tx.send(self.peer_pid);
         Ok(())
     }
 
@@ -197,10 +199,15 @@ pub(super) struct ProcessControlBuilder {
     dev_mapping: Option<DeviceOrdinalMapping>,
     msg_sender: Option<SidecarClient>,
     inst_rx: Option<mpsc::UnboundedReceiver<ProcCtlReq>>,
+    exit_tx: Option<mpsc::UnboundedSender<i32>>,
 }
 
 impl ProcessControlBuilder {
-    pub fn new(msg_sender: SidecarClient, inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>) -> Self {
+    pub fn new(
+        msg_sender: SidecarClient,
+        inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
+        exit_tx: mpsc::UnboundedSender<i32>,
+    ) -> Self {
         Self {
             pid: None,
             pid_fd: None,
@@ -209,6 +216,7 @@ impl ProcessControlBuilder {
             dev_mapping: None,
             msg_sender: Some(msg_sender),
             inst_rx: Some(inst_rx),
+            exit_tx: Some(exit_tx),
         }
     }
 
@@ -260,6 +268,7 @@ impl ProcessControlBuilder {
             && self.dev_mapping.is_some()
             && self.msg_sender.is_some()
             && self.inst_rx.is_some()
+            && self.exit_tx.is_some()
     }
 
     // use mutable reference to self to allow failed try
@@ -275,6 +284,7 @@ impl ProcessControlBuilder {
             dev_mapping: self.dev_mapping.take().unwrap(),
             rpc_sender: self.msg_sender.take().unwrap(),
             inst_rx: self.inst_rx.take().unwrap(),
+            exit_tx: self.exit_tx.take().unwrap(),
             num_fault: 0,
         })
     }

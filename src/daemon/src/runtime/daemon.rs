@@ -80,11 +80,21 @@ impl Daemon {
 
     async fn run_body(self) -> Result<(), NihilphaseError> {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        tokio::spawn(Self::handle_processes(self.daemon_path, tx));
+        let (exit_tx, mut exit_rx) = mpsc::unbounded_channel();
+        // accept app connections
+        tokio::spawn(Self::handle_processes(self.daemon_path, tx, exit_tx));
         let list_handle = self.data.processes.clone();
         tokio::spawn(async move {
-            while let Some(handle) = rx.recv().await {
-                list_handle.write().await.insert(handle.pid(), handle);
+            // maintain app list
+            loop {
+                tokio::select! {
+                    Some(handle) = rx.recv() => {
+                        list_handle.write().await.insert(handle.pid(), handle);
+                    }
+                    Some(pid) = exit_rx.recv() => {
+                        list_handle.write().await.remove(&pid);
+                    }
+                }
             }
         });
 
@@ -114,6 +124,7 @@ impl Daemon {
     async fn handle_processes(
         daemon_path: PathBuf,
         ret_tx: mpsc::UnboundedSender<DaemonServerHandle>,
+        exit_tx: mpsc::UnboundedSender<i32>,
     ) -> Result<(), DaemonError> {
         let controller = UnixListenerGuard::new(daemon_path.as_path())?;
         tracing::info!("Daemon started at {:?}", daemon_path);
@@ -123,7 +134,7 @@ impl Daemon {
                 .accept()
                 .await
                 .map_err(|e| DaemonError::Io("accept connection", e))?;
-            let future = DaemonServer::launch(stream);
+            let future = DaemonServer::launch(stream, exit_tx.clone());
             let tx = ret_tx.clone();
             tokio::spawn(async move {
                 let val = future.await;

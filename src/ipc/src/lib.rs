@@ -27,7 +27,7 @@ pub struct MemoryUsageUpdate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum S2CMessage {
-    ReadDup(AttrArgs),
+    SetAttr(AttrArgs),
     Prefetch(PrefetchArgs),
     GrantRunningToken(GrantRunningTokenArgs),
 }

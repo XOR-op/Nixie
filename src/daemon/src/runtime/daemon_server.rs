@@ -132,7 +132,10 @@ pub(crate) struct DaemonServer {
 }
 
 impl DaemonServer {
-    pub fn launch(conn: UnixStream) -> DaemonServerHandleFuture {
+    pub fn launch(
+        conn: UnixStream,
+        exit_tx: mpsc::UnboundedSender<i32>,
+    ) -> DaemonServerHandleFuture {
         // construct a bidirectional RPC tunnel based on single UDS connection
         let mut codec_builder = LengthDelimitedCodec::builder();
         codec_builder.max_frame_length(64 * 1024 * 1024);
@@ -152,6 +155,7 @@ impl DaemonServer {
                 rpc_client: client,
                 ret: handle_tx,
                 inst_rx,
+                exit_tx,
             }))),
         };
         tokio::spawn(
@@ -173,6 +177,7 @@ impl DaemonServer {
 struct StateOfStarting {
     rpc_client: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
+    exit_tx: mpsc::UnboundedSender<i32>,
     ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
 }
 
@@ -211,7 +216,7 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         let state = extract_guard_and_swap!(state_guard, ServerState::Start, "init_client");
         let rpc_client = state.rpc_client.clone();
         tracing::info!("Client[pid={}] connected", params.pid);
-        let mut builder = ProcessControlBuilder::new(rpc_client, state.inst_rx);
+        let mut builder = ProcessControlBuilder::new(rpc_client, state.inst_rx, state.exit_tx);
         builder.with_pid(params.pid);
         *state_guard = ServerState::Building(StateOfBuilding {
             client_pid: params.pid,
