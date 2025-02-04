@@ -117,13 +117,14 @@ impl<T, const N: usize> ShmVec<T, N> {
         }
     }
 
-    pub fn push(&mut self, val: T) -> Result<(), ()> {
+    pub fn push(&mut self, val: T) -> Result<usize, ()> {
         if self.len as usize >= N {
             return Err(());
         }
-        self.data[self.len as usize] = val;
+        let new_idx = self.len as usize;
+        self.data[new_idx] = val;
         self.len += 1;
-        Ok(())
+        Ok(new_idx)
     }
 
     pub fn pop(&mut self) -> Option<T> {
@@ -164,6 +165,10 @@ impl<T, const N: usize> ShmVec<T, N> {
 
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.data[..self.len as usize]
+    }
+
+    pub fn at(&self, idx: usize) -> Option<&T> {
+        self.as_slice().get(idx)
     }
 
     pub fn iter(&self) -> core::slice::Iter<'_, T> {

@@ -6,6 +6,7 @@ use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
 use crate::comm::notify_init_info;
+use crate::memory::get_dup_daemon;
 use crate::utils::size_to_string;
 use crate::{info_eprintln, warn_eprintln, GenericData, GENERIC_DATA};
 
@@ -87,14 +88,19 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                 result
             })
             .lock_ptr_mapping();
-        ptr_mapping.push(AllocationEntry {
+        let mut dup_daemon = get_dup_daemon().lock().unwrap();
+        let alloc_entry = AllocationEntry {
             addr: unsafe { *dev_ptr as u64 },
             len: size,
             device: device_id,
             is_readonly: false,
             is_move_reduced: false,
             is_on_gpu: true,
-        });
+        };
+        // if the allocation is stored successfully, record it
+        if let Some(idx) = ptr_mapping.push(alloc_entry) {
+            dup_daemon.record(idx, &alloc_entry);
+        }
         let total_size = ptr_mapping.iter().map(|pr| pr.len).sum();
         info_eprintln!(
             "{} {}: at={}, size={}, total_size={}, count={}",

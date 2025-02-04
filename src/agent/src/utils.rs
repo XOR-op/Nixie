@@ -47,3 +47,12 @@ macro_rules! warn_eprintln {
         }
     };
 }
+
+#[macro_export]
+macro_rules! check_cu_err {
+    ($res:expr, $msg:literal) => {
+        if $res != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+            crate::warn_eprintln!("CUDA error from {}: {:?}", $msg, $res);
+        }
+    };
+}

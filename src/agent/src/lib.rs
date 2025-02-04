@@ -11,7 +11,7 @@ use std::{
 
 mod comm;
 mod intercept;
-mod prefetch;
+mod memory;
 mod schedule;
 mod utils;
 
@@ -85,11 +85,12 @@ pub(crate) struct FusedPtrMapping<'a> {
 }
 
 impl<'a> FusedPtrMapping<'a> {
-    pub fn push(&mut self, ptr: AllocationEntry) {
+    pub fn push(&mut self, ptr: AllocationEntry) -> Option<usize> {
         if self.shm.len() < self.shm.capacity() {
-            let _ = self.shm.push(ptr);
+            self.shm.push(ptr).ok()
         } else {
             self.overflowed.push(ptr);
+            None
         }
     }
 
