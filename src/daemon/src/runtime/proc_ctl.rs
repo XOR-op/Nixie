@@ -44,7 +44,7 @@ impl ProcessControl {
         loop {
             tokio::select! {
                 // _ = self.event_queue.ready() => {
-                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
                     self.process_event().await?;
                 }
                 Some(inst) = self.inst_rx.recv() => {

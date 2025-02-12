@@ -33,8 +33,8 @@ fn prefetch_impl(size_mb: u64) {
                 warn_eprintln!("Failed to prefetch memory: {:?}", res);
             }
             prefetch_cnt += 1;
-            stream_idx = (stream_idx + 1) % streams.len();
-            info_eprintln!(
+            // stream_idx = (stream_idx + 1) % streams.len();
+            warn_eprintln!(
                 "Prefetch: size={}, time={:?}",
                 size_to_string(size),
                 start.elapsed()
