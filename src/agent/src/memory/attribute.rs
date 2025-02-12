@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use crate::{info_eprintln, warn_eprintln, FusedPtrMapping};
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
 use nihilipc::AttrType;
@@ -14,7 +16,7 @@ pub(crate) fn set_attribute<'a>(
         if size >= 1024 * 1024 * size_mb as usize {
             let res = unsafe {
                 cuda_lib().cuMemAdvise(
-                    ptr as u64,
+                    ptr.get(),
                     size as usize,
                     compute_cu_advise(attr_val, will_set),
                     entry.device,
@@ -48,13 +50,14 @@ pub(crate) fn set_attribute_single<'a>(
     ptr_mapping: &mut FusedPtrMapping<'a>,
     attr_val: AttrType,
     will_set: bool,
-    address: u64,
+    address: NonZeroU64,
     length: u64,
     device: i32,
 ) {
+    let address = address.get();
     let entry = ptr_mapping.iter_mut().find(|entry| {
-        entry.addr <= address
-            && entry.addr + entry.len as u64 >= address + length
+        entry.addr.get() <= address
+            && entry.addr.get() + entry.len as u64 >= address + length
             && entry.device == device
     });
     if let Some(entry) = entry {

@@ -2,25 +2,25 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUcontext, CUdevice};
-use nihilipc::{rpc::DaemonClient, S2CMessage};
+use nihilipc::{rpc::DaemonClient, S2AMessage};
 
 use super::msg::C2SMessage;
-use crate::{info_eprintln, memory::prefetch, schedule::SchedControl, warn_eprintln, GENERIC_DATA};
+use crate::{info_eprintln, memory::prefetch, schedule::Scheduler, warn_eprintln, GENERIC_DATA};
 
 /// handler for agent<->daemon communication
 pub(crate) struct Controller {
     process_recv: flume::Receiver<C2SMessage>,
-    daemon_recv: flume::Receiver<S2CMessage>,
+    daemon_recv: flume::Receiver<S2AMessage>,
     daemon_client: DaemonClient,
-    sched_ctrl: &'static SchedControl,
+    sched_ctrl: &'static Scheduler,
 }
 
 impl Controller {
     pub fn new(
         process_recv: flume::Receiver<C2SMessage>,
-        daemon_recv: flume::Receiver<S2CMessage>,
+        daemon_recv: flume::Receiver<S2AMessage>,
         daemon_client: DaemonClient,
-        sched_ctrl: &'static SchedControl,
+        sched_ctrl: &'static Scheduler,
     ) -> Self {
         Self {
             process_recv,
@@ -59,7 +59,7 @@ impl Controller {
                     }
                 }
                 SidecarSelect::Daemon(msg) => match msg {
-                    S2CMessage::SetAttr(args) => {
+                    S2AMessage::SetAttr(args) => {
                         ctxs.set_current_ctx(args.device);
                         info_eprintln!(
                             "{} {}: {:?}=>{:?} address={}, len={}, device={}",
@@ -91,7 +91,7 @@ impl Controller {
                             )
                         }
                     }
-                    S2CMessage::Prefetch(args) => {
+                    S2AMessage::Prefetch(args) => {
                         ctxs.set_current_ctx(args.device);
                         info_eprintln!(
                             "{} {}: address={}, len={:#x}, device={}",
@@ -103,14 +103,8 @@ impl Controller {
                         );
                         prefetch::filtered_prefetch(args.len);
                     }
-                    S2CMessage::GrantRunningToken(args) => {
-                        info_eprintln!(
-                            "{} {}: time={:?}",
-                            "[libcuda_hook]".bold(),
-                            "UNIMPLEMENTED rpc_grant_running_token".red(),
-                            args.time,
-                        );
-                        self.sched_ctrl.update_time(args.time);
+                    S2AMessage::Scheduling(args) => {
+                        self.sched_ctrl.set_allow_running(args);
                     }
                 },
             }
@@ -128,7 +122,7 @@ impl Controller {
 
 enum SidecarSelect {
     Process(C2SMessage),
-    Daemon(S2CMessage),
+    Daemon(S2AMessage),
 }
 
 struct CudaContextGuard {

@@ -88,8 +88,8 @@ impl ProcessControl {
         if !fault_tree.is_empty() {
             let mapping = self.shm.inner.ptr_mapping.lock();
             for entry in mapping.iter() {
-                let start = entry.addr;
-                let end = entry.addr + entry.len as u64;
+                let start = entry.addr.get();
+                let end = start + entry.len as u64;
                 if fault_tree.range(start..end).next().is_some() {
                     disabled.insert(entry.clone());
                 }
@@ -113,18 +113,6 @@ impl ProcessControl {
     async fn handle_inst(&mut self, inst: ProcCtlReq) {
         match inst {
             ProcCtlReq::SetAttr(inst) => {
-                // Some expected behavior, disable for testing now
-                // let mapping = self.shm.inner.ptr_mapping.lock();
-                // let mut modified = BTreeSet::new();
-                // for entry in mapping.iter() {
-                //     if inst.size_low.is_none_or(|low| low <= entry.len as u64)
-                //         || inst.size_high.is_none_or(|high| high >= entry.len as u64)
-                //     {
-                //         modified.insert(entry.clone());
-                //     }
-                // }
-                // drop(mapping);
-                // self.batched_read_dup(modified.iter(), inst.set).await;
                 if let Err(e) = self
                     .rpc_sender
                     .set_attr(
@@ -290,7 +278,7 @@ impl ProcessControlBuilder {
     }
 }
 
-fn serialize_msg(msg: nihilipc::S2CMessage) -> Vec<u8> {
+fn serialize_msg(msg: nihilipc::S2AMessage) -> Vec<u8> {
     let buf = bincode::serialize(&msg).unwrap();
     let length = buf.len() as u32;
     let length_buf = length.to_le_bytes();

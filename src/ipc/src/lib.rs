@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::{num::NonZeroU64, time::SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -26,10 +26,10 @@ pub struct MemoryUsageUpdate {
 // ------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum S2CMessage {
+pub enum S2AMessage {
     SetAttr(AttrArgs),
     Prefetch(PrefetchArgs),
-    GrantRunningToken(GrantRunningTokenArgs),
+    Scheduling(bool),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -41,7 +41,7 @@ pub enum AttrType {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AttrArgs {
-    pub addr: Option<u64>,
+    pub addr: Option<NonZeroU64>,
     pub len: u64,
     pub value: AttrType,
     pub will_set: bool,

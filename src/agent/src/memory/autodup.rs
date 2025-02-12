@@ -1,6 +1,7 @@
 use cudarc::driver::sys::lib as cuda_lib;
 use nihilipc::{shm::AllocationEntry, AttrType};
 use std::{
+    num::NonZeroU64,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -12,7 +13,7 @@ const DUP_THRESHOLD: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 struct MallocRecord {
     idx: usize, // index in the allocation table
-    addr: u64,
+    addr: NonZeroU64,
     len: usize,
     device: i32,
     timestamp: Instant, // time of the allocation

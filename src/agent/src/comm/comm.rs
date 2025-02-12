@@ -4,7 +4,7 @@ use colored::Colorize;
 use futures::StreamExt;
 use nihilipc::{
     rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
-    AttrArgs, Handshake, InitInfo, PrefetchArgs, S2CMessage,
+    AttrArgs, Handshake, InitInfo, PrefetchArgs, S2AMessage,
 };
 use tarpc::{
     context::Context,
@@ -68,7 +68,7 @@ async fn create_comm(conn: UnixStream, p2s_rx: flume::Receiver<C2SMessage>) {
                 tokio::spawn(response);
             }),
     );
-    let sidecar = Controller::new(p2s_rx, d2s_rx, client, &schedule::SCHED_CTRL);
+    let sidecar = Controller::new(p2s_rx, d2s_rx, client, &schedule::SCHED_CTL);
     sidecar.run().await
 }
 
@@ -105,15 +105,15 @@ pub(crate) fn notify_init_info(fd: i32, shm_path: String, visible_devices: Strin
 
 #[derive(Clone)]
 pub(crate) struct SidecarServer {
-    sender: flume::Sender<S2CMessage>,
+    sender: flume::Sender<S2AMessage>,
 }
 
 impl nihilipc::rpc::Sidecar for SidecarServer {
     async fn set_attr(self, _context: Context, params: AttrArgs) -> () {
-        chan_send!(self.sender.send(S2CMessage::SetAttr(params)));
+        chan_send!(self.sender.send(S2AMessage::SetAttr(params)));
     }
 
     async fn prefetch(self, _context: Context, params: PrefetchArgs) -> () {
-        chan_send!(self.sender.send(S2CMessage::Prefetch(params)));
+        chan_send!(self.sender.send(S2AMessage::Prefetch(params)));
     }
 }

@@ -1,8 +1,9 @@
 use colored::Colorize;
-use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice, CUstream};
+use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
 use nihilipc::shm::AllocationEntry;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
+use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
 use crate::comm::notify_init_info;
@@ -10,30 +11,15 @@ use crate::memory::get_dup_daemon;
 use crate::utils::size_to_string;
 use crate::{info_eprintln, warn_eprintln, GenericData, GENERIC_DATA};
 
-#[repr(C)]
-pub struct CudaDim3 {
-    x: u32,
-    y: u32,
-    z: u32,
-}
-
 type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
 type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
-type CudaLaunchKernelType = extern "C" fn(
-    *const libc::c_void,
-    CudaDim3,
-    CudaDim3,
-    *mut *mut libc::c_void,
-    usize,
-    CUstream,
-) -> cudaError_enum;
+
 type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
 type CloseType = extern "C" fn(c_int) -> c_int;
 type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
 
 static MALLOC_FN: OnceLock<CudaMallocType> = OnceLock::new();
 static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
-static LAUNCH_KERNEL_FN: OnceLock<CudaLaunchKernelType> = OnceLock::new();
 static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
 static CLOSE_FN: OnceLock<CloseType> = OnceLock::new();
 static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
@@ -90,7 +76,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             .lock_ptr_mapping();
         let mut dup_daemon = get_dup_daemon().lock().unwrap();
         let alloc_entry = AllocationEntry {
-            addr: unsafe { *dev_ptr as u64 },
+            addr: unsafe { NonZeroU64::new_unchecked(*dev_ptr as u64) },
             len: size,
             device: device_id,
             is_readonly: false,
@@ -127,7 +113,9 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     });
     if let Some(mapping) = GENERIC_DATA.get() {
         let mut mapping = mapping.lock_ptr_mapping();
-        let idx = mapping.iter().position(|pr| pr.addr == dev_ptr as u64);
+        let idx = mapping
+            .iter()
+            .position(|pr| pr.addr.get() == dev_ptr as u64);
         if let Some(idx) = idx {
             mapping.remove(idx);
         } else {
@@ -142,43 +130,6 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         dev_ptr as u64
     );
     return free_func(dev_ptr);
-}
-
-#[allow(non_snake_case)]
-#[no_mangle]
-pub extern "C" fn cudaLaunchKernel(
-    func: *const libc::c_void,
-    gridDim: CudaDim3,
-    blockDim: CudaDim3,
-    args: *mut *mut libc::c_void,
-    sharedMem: usize,
-    stream: CUstream,
-) -> cudaError_enum {
-    let launch_kernel_func = LAUNCH_KERNEL_FN.get_or_init(|| unsafe {
-        let func = dlsym(RTLD_NEXT, cr"cudaLaunchKernel".as_ptr()) as *mut CudaLaunchKernelType;
-        if func.is_null() {
-            panic!("Failed to get original cudaLaunchKernel function");
-        }
-        std::mem::transmute(func)
-    });
-    const ANSI_BOLD: &'static str = "\x1b[1m";
-    const ANSI_GREEN: &'static str = "\x1b[0;32m";
-    const ANSI_RESET: &'static str = "\x1b[0m";
-    info_eprintln!(
-        "{}[libcudahook] ({}) {}cudaLaunchKernel{}: gridDim=({},{},{}), blockDim=({},{},{}), sharedMem={}",
-        ANSI_BOLD,
-        chrono::Local::now().format("%H:%M:%S%.6f"),
-        ANSI_GREEN,
-        ANSI_RESET,
-        gridDim.x,
-        gridDim.y,
-        gridDim.z,
-        blockDim.x,
-        blockDim.y,
-        blockDim.z,
-        sharedMem
-    );
-    return launch_kernel_func(func, gridDim, blockDim, args, sharedMem, stream);
 }
 
 #[allow(non_snake_case)]

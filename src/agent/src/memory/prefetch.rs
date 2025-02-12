@@ -10,7 +10,7 @@ use crate::{
 fn prefetch_impl(size_mb: u64) {
     let streams = STREAM_VEC.get().unwrap();
     let mut prefetch_cnt = 0;
-    let mut stream_idx = 0;
+    let stream_idx = 0;
     let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
     for pair in ptr_mapping.iter_mut() {
         if prefetch_cnt > streams.len() * 40 {
@@ -22,7 +22,7 @@ fn prefetch_impl(size_mb: u64) {
             let start = std::time::Instant::now();
             let res = unsafe {
                 cuda_lib().cuMemPrefetchAsync(
-                    ptr,
+                    ptr.get(),
                     size,
                     CUdevice::from(pair.device),
                     streams[stream_idx].0,
