@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use cudarc::driver::sys::{cudaError_enum, CUstream};
+use cudarc::driver::sys::{cudaError_enum, CUgraphExec, CUstream};
 use nix::libc::{self, dlsym, RTLD_NEXT};
 
 use crate::schedule::SCHED_CTL;
@@ -19,7 +19,11 @@ type CudaLaunchKernelType = extern "C" fn(
     usize,
     CUstream,
 ) -> cudaError_enum;
+type CudaGraphLaunchType = extern "C" fn(CUgraphExec, CUstream) -> cudaError_enum; // we use CU here since they are actually opaque pointers; can be fixed later
+
 static LAUNCH_KERNEL_FN: OnceLock<CudaLaunchKernelType> = OnceLock::new();
+static GRAPH_LAUNCH_FN: OnceLock<CudaGraphLaunchType> = OnceLock::new();
+
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "C" fn cudaLaunchKernel(
@@ -39,4 +43,18 @@ pub extern "C" fn cudaLaunchKernel(
     });
     SCHED_CTL.launch_allowed();
     return launch_kernel_func(func, gridDim, blockDim, args, sharedMem, stream);
+}
+
+#[allow(non_snake_case)]
+#[no_mangle]
+pub extern "C" fn cudaGraphLaunch(graph: CUgraphExec, stream: CUstream) -> cudaError_enum {
+    let graph_launch_func = GRAPH_LAUNCH_FN.get_or_init(|| unsafe {
+        let func = dlsym(RTLD_NEXT, cr"cudaGraphLaunch".as_ptr()) as *mut CudaGraphLaunchType;
+        if func.is_null() {
+            panic!("Failed to get original cudaGraphLaunch function");
+        }
+        std::mem::transmute(func)
+    });
+    SCHED_CTL.launch_allowed();
+    return graph_launch_func(graph, stream);
 }

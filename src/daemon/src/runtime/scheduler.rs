@@ -56,21 +56,23 @@ impl Scheduler {
         let control = self.list.write().await;
         if let Some(active_pid) = self.active_client {
             if pid != active_pid {
-                tracing::trace!("Scheduling out process {}", active_pid);
-                control
-                    .get(&active_pid)
-                    .unwrap()
-                    .client()
-                    .schedule(tarpc::context::current(), SchedulingArgs { enable: false })
-                    .await
-                    .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
+                // active pid can exit before scheduler knows
+                if let Some(handle) = control.get(&active_pid) {
+                    tracing::trace!("Scheduling out process {}", active_pid);
+                    handle
+                        .client()
+                        .schedule(tarpc::context::current(), SchedulingArgs { enable: false })
+                        .await
+                        .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
 
-                // update statistics for old process
-                let client = self
-                    .clients
-                    .entry(pid)
-                    .or_insert_with(|| ClientStatistics::new(active_pid));
-                client.schedule_out();
+                    // update statistics for old process
+                    if let Some(client) = self.clients.get_mut(&active_pid) {
+                        client.schedule_out();
+                    }
+                } else {
+                    self.active_client = None;
+                    self.clients.remove(&active_pid);
+                }
             }
         }
         let client = self
