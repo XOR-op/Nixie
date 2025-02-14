@@ -4,7 +4,7 @@ use colored::Colorize;
 use futures::StreamExt;
 use nihilipc::{
     rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
-    ActivityUpdate, AttrArgs, Handshake, InitInfo, PrefetchArgs, S2AMessage,
+    ActivityUpdate, AttrArgs, Handshake, InitInfo, PrefetchArgs, S2AMessage, SchedulingArgs,
 };
 use tarpc::{
     context::Context,
@@ -122,5 +122,9 @@ impl nihilipc::rpc::Sidecar for SidecarServer {
 
     async fn prefetch(self, _context: Context, params: PrefetchArgs) -> () {
         chan_send!(self.sender.send(S2AMessage::Prefetch(params)));
+    }
+
+    async fn schedule(self, _context: Context, params: SchedulingArgs) -> () {
+        chan_send!(self.sender.send(S2AMessage::Scheduling(params)));
     }
 }

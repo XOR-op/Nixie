@@ -1,4 +1,4 @@
-use std::{num::NonZeroU64, time::SystemTime};
+use std::num::NonZeroU64;
 
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +27,7 @@ pub struct ActivityUpdate {}
 pub enum S2AMessage {
     SetAttr(AttrArgs),
     Prefetch(PrefetchArgs),
-    Scheduling(bool),
+    Scheduling(SchedulingArgs),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -54,6 +54,6 @@ pub struct PrefetchArgs {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct GrantRunningTokenArgs {
-    pub time: SystemTime,
+pub struct SchedulingArgs {
+    pub enable: bool,
 }

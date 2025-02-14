@@ -32,3 +32,11 @@ pub enum UvmError {
     #[error("{0} failed with IO error: {1}")]
     Io(&'static str, std::io::Error),
 }
+
+#[derive(Debug, Error)]
+pub enum ScheduleError {
+    #[error("Invalid process: {0}")]
+    InvalidClient(i32),
+    #[error("{0} Failed to send RPC to {1}: {2}")]
+    RpcError(&'static str, i32, tarpc::client::RpcError),
+}

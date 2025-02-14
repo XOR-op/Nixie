@@ -7,16 +7,13 @@ use std::{
 use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
-use nihilipc::ActivityUpdate;
+use nihilipc::{ActivityUpdate, SchedulingArgs};
 use ringbuf::{traits::RingBuffer, HeapRb};
 use tokio::sync::mpsc;
 
-use super::daemon_server::DaemonServerHandle;
+use crate::error::ScheduleError;
 
-pub enum ScheduleError {
-    InvalidClient,
-    InternalError,
-}
+use super::daemon_server::DaemonServerHandle;
 
 pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
@@ -43,17 +40,55 @@ impl Scheduler {
         loop {
             tokio::select! {
                 Some((pid, data)) = self.rpc_data_rx.recv() => {
-                    self.handle_activity_update(pid, data);
+                    if let Err(e) = self.handle_activity_update(pid, data).await{
+                        tracing::error!("Scheduler handling activity update from {}: {:?}", pid, e);
+                    }
                 }
             }
         }
     }
 
-    fn handle_activity_update(&mut self, pid: i32, data: ActivityUpdate) {
-        if let Some(client) = self.clients.get_mut(&pid) {
-            client.keep_alive();
+    async fn handle_activity_update(
+        &mut self,
+        pid: i32,
+        _data: ActivityUpdate,
+    ) -> Result<(), ScheduleError> {
+        let control = self.list.write().await;
+        if let Some(active_pid) = self.active_client {
+            if pid != active_pid {
+                tracing::trace!("Scheduling out process {}", active_pid);
+                control
+                    .get(&active_pid)
+                    .unwrap()
+                    .client()
+                    .schedule(tarpc::context::current(), SchedulingArgs { enable: false })
+                    .await
+                    .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
+
+                // update statistics for old process
+                let client = self
+                    .clients
+                    .entry(pid)
+                    .or_insert_with(|| ClientStatistics::new(active_pid));
+                client.schedule_out();
+            }
         }
-        todo!()
+        let client = self
+            .clients
+            .entry(pid)
+            .or_insert_with(|| ClientStatistics::new(pid));
+
+        self.active_client = Some(pid);
+        tracing::trace!("Scheduling in process {}", pid);
+        control
+            .get(&pid)
+            .unwrap()
+            .client()
+            .schedule(tarpc::context::current(), SchedulingArgs { enable: true })
+            .await
+            .map_err(|e| ScheduleError::RpcError("schedule in", pid, e))?;
+        client.schedule_in();
+        Ok(())
     }
 }
 
@@ -74,7 +109,7 @@ impl ClientStatistics {
             is_active: false,
             schedule_start: Instant::now(),
             last_update: Instant::now(),
-            active_time_history: HeapRb::new(100),
+            active_time_history: HeapRb::new(32),
         }
     }
 
@@ -88,9 +123,5 @@ impl ClientStatistics {
         self.active_time_history
             .push_overwrite(Instant::now() - self.schedule_start);
         self.is_active = false;
-    }
-
-    pub fn keep_alive(&mut self) {
-        self.last_update = Instant::now();
     }
 }

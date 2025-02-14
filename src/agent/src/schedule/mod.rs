@@ -5,20 +5,20 @@ pub(crate) static SCHED_CTL: Scheduler = Scheduler::new();
 struct Context {
     allow_running: bool,
     // whether we should notify the daemon we want to run
-    need_notify: bool,
+    need_prefetch: bool,
 }
 
 impl Context {
     pub const fn new() -> Self {
         Self {
-            allow_running: true,
-            need_notify: false,
+            allow_running: false,
+            need_prefetch: true,
         }
     }
 
     pub fn disable(&mut self) {
         self.allow_running = false;
-        self.need_notify = true;
+        self.need_prefetch = true;
     }
 }
 
@@ -47,13 +47,16 @@ impl Scheduler {
 
     pub fn launch_allowed(&self) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
+        if !sched_ctx.allow_running {
+            // request to run
+            crate::comm::notify_activity();
+        }
         while !sched_ctx.allow_running {
             sched_ctx = self.cond_var.wait(sched_ctx).unwrap();
         }
-        if sched_ctx.need_notify {
-            sched_ctx.need_notify = false;
+        if sched_ctx.need_prefetch {
+            sched_ctx.need_prefetch = false;
             // prefetch and notify daemon
-            crate::comm::notify_activity();
             crate::memory::filtered_prefetch(20);
         }
     }

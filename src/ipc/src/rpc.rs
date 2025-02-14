@@ -1,4 +1,4 @@
-use crate::{ActivityUpdate, AttrArgs, Handshake, InitInfo, PrefetchArgs};
+use crate::{ActivityUpdate, AttrArgs, Handshake, InitInfo, PrefetchArgs, SchedulingArgs};
 use futures::future::{AbortHandle, Abortable};
 use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,8 @@ pub trait Sidecar {
     async fn set_attr(params: AttrArgs);
 
     async fn prefetch(params: PrefetchArgs);
+
+    async fn schedule(params: SchedulingArgs);
 }
 
 // -------------------------- multiplexing --------------------------

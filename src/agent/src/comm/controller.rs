@@ -108,7 +108,7 @@ impl Controller {
                         prefetch::filtered_prefetch(args.len);
                     }
                     S2AMessage::Scheduling(args) => {
-                        self.sched_ctrl.set_allow_running(args);
+                        self.sched_ctrl.set_allow_running(args.enable);
                     }
                 },
             }
