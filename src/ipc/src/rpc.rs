@@ -1,4 +1,4 @@
-use crate::{AttrArgs, Handshake, InitInfo, PrefetchArgs};
+use crate::{ActivityUpdate, AttrArgs, Handshake, InitInfo, PrefetchArgs};
 use futures::future::{AbortHandle, Abortable};
 use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,8 @@ pub trait Daemon {
     async fn handshake(params: Handshake);
 
     async fn initialize(params: InitInfo);
+
+    async fn notify_activity(params: ActivityUpdate);
 }
 
 #[tarpc::service]

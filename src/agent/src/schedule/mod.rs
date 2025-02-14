@@ -52,8 +52,9 @@ impl Scheduler {
         }
         if sched_ctx.need_notify {
             sched_ctx.need_notify = false;
-            // notify daemon
-            todo!("notify daemon")
+            // prefetch and notify daemon
+            crate::comm::notify_activity();
+            crate::memory::filtered_prefetch(20);
         }
     }
 }

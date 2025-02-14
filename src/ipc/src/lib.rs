@@ -19,9 +19,7 @@ pub struct InitInfo {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct MemoryUsageUpdate {
-    pub change: i64,
-}
+pub struct ActivityUpdate {}
 
 // ------------------------------------------------------------
 

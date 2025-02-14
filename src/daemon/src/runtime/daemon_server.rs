@@ -48,6 +48,18 @@ macro_rules! extract_guard_and_swap {
     };
 }
 
+macro_rules! extract_guard {
+    ($state:expr, $expected:path, $funcname: literal) => {
+        match &mut *$state {
+            $expected(v) => v,
+            _ => {
+                tracing::error!("[{}] bad state: {}", $funcname, $state.state_name());
+                return;
+            }
+        }
+    };
+}
+
 #[allow(unused_macros)]
 macro_rules! ensure_guard {
     ($state:expr, $expected:pat, $funcname: literal) => {
@@ -135,6 +147,7 @@ impl DaemonServer {
     pub fn launch(
         conn: UnixStream,
         exit_tx: mpsc::UnboundedSender<i32>,
+        rpc_data_tx: mpsc::UnboundedSender<(i32, nihilipc::ActivityUpdate)>,
     ) -> DaemonServerHandleFuture {
         // construct a bidirectional RPC tunnel based on single UDS connection
         let mut codec_builder = LengthDelimitedCodec::builder();
@@ -155,6 +168,7 @@ impl DaemonServer {
                 rpc_client: client,
                 ret: handle_tx,
                 inst_rx,
+                rpc_data_tx,
                 exit_tx,
             }))),
         };
@@ -178,17 +192,20 @@ struct StateOfStarting {
     rpc_client: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
     exit_tx: mpsc::UnboundedSender<i32>,
+    rpc_data_tx: mpsc::UnboundedSender<(i32, nihilipc::ActivityUpdate)>,
     ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
 }
 
 struct StateOfBuilding {
     client_pid: i32,
+    rpc_data_tx: mpsc::UnboundedSender<(i32, nihilipc::ActivityUpdate)>,
     builder: ProcessControlBuilder,
     ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
 }
 
 struct DaemonServerState {
     client_pid: i32,
+    rpc_data_tx: mpsc::UnboundedSender<(i32, nihilipc::ActivityUpdate)>,
 }
 
 enum ServerState {
@@ -220,6 +237,7 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         builder.with_pid(params.pid);
         *state_guard = ServerState::Building(StateOfBuilding {
             client_pid: params.pid,
+            rpc_data_tx: state.rpc_data_tx,
             builder,
             ret: state.ret.clone(),
         });
@@ -258,11 +276,18 @@ impl nihilipc::rpc::Daemon for DaemonServer {
             let _ = state.ret.try_send((task, peer_pid, device_mapping));
             *state_guard = ServerState::Launched(DaemonServerState {
                 client_pid: peer_pid,
+                rpc_data_tx: state.rpc_data_tx,
             });
         } else {
             tracing::error!("Failed to build process control");
             *state_guard = ServerState::Building(state);
         }
+    }
+
+    async fn notify_activity(self, _context: Context, params: nihilipc::ActivityUpdate) {
+        let mut state_guard = self.state.lock().await;
+        let state = extract_guard!(state_guard, ServerState::Launched, "notify_activity");
+        let _ = state.rpc_data_tx.send((state.client_pid, params));
     }
 }
 

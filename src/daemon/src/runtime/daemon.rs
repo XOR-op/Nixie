@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use hashlink::LinkedHashMap;
-use nihilipc::PrefetchArgs;
+use nihilipc::{ActivityUpdate, PrefetchArgs};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -22,7 +22,9 @@ use crate::{
     runtime::{daemon_server::DaemonServer, ProcCtlReq},
 };
 
-use super::{daemon_server::DaemonServerHandle, socket_chown, ProcessMetadata};
+use super::{
+    daemon_server::DaemonServerHandle, scheduler::Scheduler, socket_chown, ProcessMetadata,
+};
 
 #[derive(Clone)]
 struct DaemonData {
@@ -81,8 +83,14 @@ impl Daemon {
     async fn run_body(self) -> Result<(), NihilphaseError> {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (exit_tx, mut exit_rx) = mpsc::unbounded_channel();
+        let (rpc_data_tx, rpc_data_rx) = mpsc::unbounded_channel();
         // accept app connections
-        tokio::spawn(Self::handle_processes(self.daemon_path, tx, exit_tx));
+        tokio::spawn(Self::handle_processes(
+            self.daemon_path,
+            tx,
+            exit_tx,
+            rpc_data_tx,
+        ));
         let list_handle = self.data.processes.clone();
         tokio::spawn(async move {
             // maintain app list
@@ -96,6 +104,11 @@ impl Daemon {
                     }
                 }
             }
+        });
+
+        let list_handle = self.data.processes.clone();
+        tokio::spawn(async move {
+            Scheduler::new(list_handle, rpc_data_rx).run().await;
         });
 
         let listener_guard = UnixListenerGuard::new(&self.control_path)?;
@@ -125,6 +138,7 @@ impl Daemon {
         daemon_path: PathBuf,
         ret_tx: mpsc::UnboundedSender<DaemonServerHandle>,
         exit_tx: mpsc::UnboundedSender<i32>,
+        rpc_data_tx: mpsc::UnboundedSender<(i32, ActivityUpdate)>,
     ) -> Result<(), DaemonError> {
         let controller = UnixListenerGuard::new(daemon_path.as_path())?;
         tracing::info!("Daemon started at {:?}", daemon_path);
@@ -134,7 +148,7 @@ impl Daemon {
                 .accept()
                 .await
                 .map_err(|e| DaemonError::Io("accept connection", e))?;
-            let future = DaemonServer::launch(stream, exit_tx.clone());
+            let future = DaemonServer::launch(stream, exit_tx.clone(), rpc_data_tx.clone());
             let tx = ret_tx.clone();
             tokio::spawn(async move {
                 let val = future.await;

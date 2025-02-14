@@ -1,9 +1,17 @@
 use std::{
     collections::HashMap,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
+use tokio::sync::RwLock;
+
+use hashlink::LinkedHashMap;
+use nihilipc::ActivityUpdate;
 use ringbuf::{traits::RingBuffer, HeapRb};
+use tokio::sync::mpsc;
+
+use super::daemon_server::DaemonServerHandle;
 
 pub enum ScheduleError {
     InvalidClient,
@@ -11,76 +19,41 @@ pub enum ScheduleError {
 }
 
 pub struct Scheduler {
+    list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
+    rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
     active_client: Option<i32>,
     clients: HashMap<i32, ClientStatistics>,
 }
 
 impl Scheduler {
-    pub fn new() -> Self {
+    pub fn new(
+        list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
+        rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+    ) -> Self {
         Self {
+            list,
+            rpc_data_rx,
             active_client: None,
             clients: HashMap::new(),
         }
     }
 
-    pub fn add_client(&mut self, pid: i32) {
-        self.clients.insert(pid, ClientStatistics::new(pid));
-    }
-
-    pub fn remove_client(&mut self, pid: i32) {
-        self.clients.remove(&pid);
-    }
-
-    pub fn try_schedule(&mut self, new_pid: i32) -> Result<Option<i32>, ScheduleError> {
-        if self.clients.get(&new_pid).is_none() {
-            return Err(ScheduleError::InvalidClient);
-        }
-        if self.active_client.is_none() {
-            self.clients
-                .get_mut(&new_pid)
-                .expect("Infallible")
-                .schedule_in();
-            self.active_client = Some(new_pid);
-            return Ok(None);
-        }
-
-        // Some client has been scheduled
-        let client = self
-            .clients
-            .get_mut(self.active_client.as_ref().unwrap())
-            .ok_or(ScheduleError::InternalError)?;
-        debug_assert!(client.is_active);
-        if client.pid == new_pid {
-            client.keep_alive();
-            Ok(None)
-        } else {
-            // If current client is inactive, schedule out
-            if client.last_update.elapsed() > Duration::from_millis(10) {
-                client.schedule_out();
-                let old_pid = client.pid;
-                self.active_client = Some(new_pid);
-                self.clients
-                    .get_mut(&new_pid)
-                    .expect("Infallible")
-                    .schedule_in();
-                Ok(Some(old_pid))
-            } else {
-                Ok(None)
+    pub async fn run(mut self) {
+        tracing::info!("Starting scheduler...");
+        loop {
+            tokio::select! {
+                Some((pid, data)) = self.rpc_data_rx.recv() => {
+                    self.handle_activity_update(pid, data);
+                }
             }
         }
     }
 
-    pub fn update_mem_usage(&mut self, pid: i32, mem_usage: usize) -> Result<(), ScheduleError> {
+    fn handle_activity_update(&mut self, pid: i32, data: ActivityUpdate) {
         if let Some(client) = self.clients.get_mut(&pid) {
-            client.mem_usage = mem_usage;
-            Ok(())
-        } else {
-            Err(ScheduleError::InvalidClient)
+            client.keep_alive();
         }
-    }
-
-    pub fn get_active_client(&self) -> Option<i32> {
-        self.active_client
+        todo!()
     }
 }
 

@@ -4,12 +4,12 @@ use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUcontext, CUdevice};
 use nihilipc::{rpc::DaemonClient, S2AMessage};
 
-use super::msg::C2SMessage;
+use super::msg::A2SMessage;
 use crate::{info_eprintln, memory::prefetch, schedule::Scheduler, warn_eprintln, GENERIC_DATA};
 
 /// handler for agent<->daemon communication
 pub(crate) struct Controller {
-    process_recv: flume::Receiver<C2SMessage>,
+    process_recv: flume::Receiver<A2SMessage>,
     daemon_recv: flume::Receiver<S2AMessage>,
     daemon_client: DaemonClient,
     sched_ctrl: &'static Scheduler,
@@ -17,7 +17,7 @@ pub(crate) struct Controller {
 
 impl Controller {
     pub fn new(
-        process_recv: flume::Receiver<C2SMessage>,
+        process_recv: flume::Receiver<A2SMessage>,
         daemon_recv: flume::Receiver<S2AMessage>,
         daemon_client: DaemonClient,
         sched_ctrl: &'static Scheduler,
@@ -38,17 +38,21 @@ impl Controller {
             match msg {
                 SidecarSelect::Process(msg) => {
                     if let Err(e) = match msg {
-                        C2SMessage::Handshake(msg) => {
+                        A2SMessage::Handshake(msg) => {
                             self.daemon_client
                                 .handshake(tarpc::context::current(), msg)
                                 .await
                         }
-                        C2SMessage::InitInfo(msg) => {
+                        A2SMessage::InitInfo(msg) => {
                             self.daemon_client
                                 .initialize(tarpc::context::current(), msg)
                                 .await
                         }
-                        C2SMessage::MemoryUsage(_msg) => unimplemented!("MemoryUsage"),
+                        A2SMessage::NofityActivity(msg) => {
+                            self.daemon_client
+                                .notify_activity(tarpc::context::current(), msg)
+                                .await
+                        }
                     } {
                         warn_eprintln!(
                             "{} {}: {}",
@@ -121,7 +125,7 @@ impl Controller {
 }
 
 enum SidecarSelect {
-    Process(C2SMessage),
+    Process(A2SMessage),
     Daemon(S2AMessage),
 }
 

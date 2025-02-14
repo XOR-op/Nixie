@@ -4,7 +4,7 @@ use colored::Colorize;
 use futures::StreamExt;
 use nihilipc::{
     rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
-    AttrArgs, Handshake, InitInfo, PrefetchArgs, S2AMessage,
+    ActivityUpdate, AttrArgs, Handshake, InitInfo, PrefetchArgs, S2AMessage,
 };
 use tarpc::{
     context::Context,
@@ -13,7 +13,7 @@ use tarpc::{
 };
 use tokio::net::UnixStream;
 
-use super::{controller::Controller, msg::C2SMessage};
+use super::{controller::Controller, msg::A2SMessage};
 use crate::schedule;
 
 macro_rules! chan_send {
@@ -24,9 +24,9 @@ macro_rules! chan_send {
     };
 }
 
-static COMM: OnceLock<Option<flume::Sender<C2SMessage>>> = OnceLock::new();
+static COMM: OnceLock<Option<flume::Sender<A2SMessage>>> = OnceLock::new();
 
-fn init_comm_inner() -> std::io::Result<flume::Sender<C2SMessage>> {
+fn init_comm_inner() -> std::io::Result<flume::Sender<A2SMessage>> {
     let (tx, rx) = flume::unbounded();
     let conn = std::os::unix::net::UnixStream::connect("/tmp/nihilphase.sock")?;
     conn.set_nonblocking(true)?;
@@ -50,7 +50,7 @@ fn init_comm_inner() -> std::io::Result<flume::Sender<C2SMessage>> {
     Ok(tx)
 }
 
-async fn create_comm(conn: UnixStream, p2s_rx: flume::Receiver<C2SMessage>) {
+async fn create_comm(conn: UnixStream, p2s_rx: flume::Receiver<A2SMessage>) {
     let mut codec_builder = LengthDelimitedCodec::builder();
     codec_builder.max_frame_length(64 * 1024 * 1024);
     let framed = codec_builder.new_framed(conn);
@@ -72,10 +72,10 @@ async fn create_comm(conn: UnixStream, p2s_rx: flume::Receiver<C2SMessage>) {
     sidecar.run().await
 }
 
-fn init_comm() -> Option<flume::Sender<C2SMessage>> {
+fn init_comm() -> Option<flume::Sender<A2SMessage>> {
     match init_comm_inner() {
         Ok(chan) => {
-            chan_send!(chan.send(C2SMessage::Handshake(Handshake {
+            chan_send!(chan.send(A2SMessage::Handshake(Handshake {
                 pid: std::process::id() as i32,
             })));
             Some(chan)
@@ -96,11 +96,18 @@ pub(crate) fn notify_init_info(fd: i32, shm_path: String, visible_devices: Strin
     let Some(chan) = COMM.get_or_init(|| init_comm()) else {
         return;
     };
-    chan_send!(chan.send(C2SMessage::InitInfo(InitInfo {
+    chan_send!(chan.send(A2SMessage::InitInfo(InitInfo {
         fd,
         shm_path,
         visible_devices
     })));
+}
+
+pub(crate) fn notify_activity() {
+    let Some(chan) = COMM.get_or_init(|| init_comm()) else {
+        return;
+    };
+    chan_send!(chan.send(A2SMessage::NofityActivity(ActivityUpdate {})));
 }
 
 #[derive(Clone)]
