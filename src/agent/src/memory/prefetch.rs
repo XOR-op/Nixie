@@ -2,12 +2,14 @@ use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
 use std::sync::mpsc;
 
+const CUDA_CPU_DEVICE_ID: CUdevice = -1;
+
 use crate::{
     info_eprintln, utils::size_to_string, warn_eprintln, CuStreamWrapper, GENERIC_DATA,
     PREFETCH_REQ_QUEUE, STREAM_VEC,
 };
 
-fn prefetch_impl(size_mb: u64) {
+fn prefetch_impl(size_mb: u64, to_gpu: bool) {
     let streams = STREAM_VEC.get().unwrap();
     let mut prefetch_cnt = 0;
     let stream_idx = 0;
@@ -24,26 +26,31 @@ fn prefetch_impl(size_mb: u64) {
                 cuda_lib().cuMemPrefetchAsync(
                     ptr.get(),
                     size,
-                    CUdevice::from(pair.device),
+                    if to_gpu {
+                        CUdevice::from(pair.device)
+                    } else {
+                        CUDA_CPU_DEVICE_ID
+                    },
                     streams[stream_idx].0,
                 )
             };
-            pair.is_on_gpu = true;
+            pair.likely_on_gpu = to_gpu;
             if res != cudaError_enum::CUDA_SUCCESS {
                 warn_eprintln!("Failed to prefetch memory: {:?}", res);
             }
             prefetch_cnt += 1;
             // stream_idx = (stream_idx + 1) % streams.len();
             warn_eprintln!(
-                "Prefetch: size={}, time={:?}",
+                "Prefetch: size={}, time={:?} to {}",
                 size_to_string(size),
-                start.elapsed()
+                start.elapsed(),
+                if to_gpu { "GPU" } else { "CPU" }
             )
         }
     }
 }
 
-pub fn filtered_prefetch(size_mb: u64) -> u64 {
+pub fn filtered_prefetch(size_mb: u64, to_gpu: bool) -> u64 {
     let _ = STREAM_VEC.get_or_init(|| {
         let mut vec = Vec::new();
         for _ in 0..8 {
@@ -69,17 +76,18 @@ pub fn filtered_prefetch(size_mb: u64) -> u64 {
                 while let Ok(l) = receiver.try_recv() {
                     len = l;
                 }
-                prefetch_impl(len);
+                prefetch_impl(len, to_gpu);
             }
             warn_eprintln!("WARN: Prefetch thread exited");
         });
         sender
     });
     info_eprintln!(
-        "{} {}: size={}MB",
+        "{} {}: size={}MB to {}",
         "[libcuda_hook]".bold(),
         "_nihilphase_prefetch".blue(),
-        size_mb
+        size_mb,
+        if to_gpu { "GPU" } else { "CPU" }
     );
     dbg!(sender.send(size_mb).ok());
     0

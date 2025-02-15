@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    num::NonZeroU64,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -61,7 +62,12 @@ impl Scheduler {
                     tracing::trace!("Scheduling out process {}", active_pid);
                     handle
                         .client()
-                        .schedule(tarpc::context::current(), SchedulingArgs { enable: false })
+                        .schedule(
+                            tarpc::context::current(),
+                            SchedulingArgs::Disable {
+                                swap_out_mb: NonZeroU64::new(7 * 1024),
+                            },
+                        )
                         .await
                         .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
 
@@ -86,7 +92,10 @@ impl Scheduler {
             .get(&pid)
             .unwrap()
             .client()
-            .schedule(tarpc::context::current(), SchedulingArgs { enable: true })
+            .schedule(
+                tarpc::context::current(),
+                SchedulingArgs::Enable { prefetch: true },
+            )
             .await
             .map_err(|e| ScheduleError::RpcError("schedule in", pid, e))?;
         client.schedule_in();

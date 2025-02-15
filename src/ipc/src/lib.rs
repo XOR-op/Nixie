@@ -50,10 +50,11 @@ pub struct AttrArgs {
 pub struct PrefetchArgs {
     pub addr: u64,
     pub len: u64,
-    pub device: i32,
+    pub to_gpu: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct SchedulingArgs {
-    pub enable: bool,
+pub enum SchedulingArgs {
+    Enable { prefetch: bool },
+    Disable { swap_out_mb: Option<NonZeroU64> },
 }

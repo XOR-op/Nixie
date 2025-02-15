@@ -96,19 +96,18 @@ impl Controller {
                         }
                     }
                     S2AMessage::Prefetch(args) => {
-                        ctxs.set_current_ctx(args.device);
                         info_eprintln!(
-                            "{} {}: address={}, len={:#x}, device={}",
+                            "{} {}: address={}, len={:#x}, to_gpu={}",
                             "[libcuda_hook]".bold(),
                             "rpc_prefetch".blue(),
                             "#TODO".yellow(),
                             args.len,
-                            "#TODO".yellow(),
+                            args.to_gpu
                         );
-                        prefetch::filtered_prefetch(args.len);
+                        prefetch::filtered_prefetch(args.len, args.to_gpu);
                     }
                     S2AMessage::Scheduling(args) => {
-                        self.sched_ctrl.set_allow_running(args.enable);
+                        self.sched_ctrl.set_allow_running(args);
                     }
                 },
             }

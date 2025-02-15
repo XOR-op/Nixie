@@ -1,5 +1,7 @@
 use std::sync::{Condvar, Mutex};
 
+use nihilipc::SchedulingArgs;
+
 pub(crate) static SCHED_CTL: Scheduler = Scheduler::new();
 
 struct Context {
@@ -35,13 +37,20 @@ impl Scheduler {
         }
     }
 
-    pub fn set_allow_running(&self, allow: bool) {
+    pub fn set_allow_running(&self, params: SchedulingArgs) {
         let mut allow_running = self.allow_running.lock().unwrap();
-        if allow {
-            allow_running.allow_running = true;
-            self.cond_var.notify_all();
-        } else {
-            allow_running.disable();
+        match params {
+            SchedulingArgs::Enable { prefetch } => {
+                allow_running.allow_running = true;
+                allow_running.need_prefetch = prefetch;
+            }
+            SchedulingArgs::Disable { swap_out_mb } => {
+                allow_running.disable();
+                if let Some(mb) = swap_out_mb {
+                    // swap out
+                    todo!();
+                }
+            }
         }
     }
 
@@ -57,7 +66,7 @@ impl Scheduler {
         if sched_ctx.need_prefetch {
             sched_ctx.need_prefetch = false;
             // prefetch and notify daemon
-            crate::memory::filtered_prefetch(20);
+            crate::memory::filtered_prefetch(20, true);
         }
     }
 }

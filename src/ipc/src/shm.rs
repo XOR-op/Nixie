@@ -19,7 +19,7 @@ pub struct AllocationEntry {
     pub is_readonly: bool,
     /// ACCESSED_BY with GPU device
     pub is_move_reduced: bool,
-    pub is_on_gpu: bool,
+    pub likely_on_gpu: bool,
 }
 
 impl Shm {

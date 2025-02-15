@@ -81,7 +81,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             device: device_id,
             is_readonly: false,
             is_move_reduced: false,
-            is_on_gpu: true,
+            likely_on_gpu: true,
         };
         // if the allocation is stored successfully, record it
         if let Some(idx) = ptr_mapping.push(alloc_entry) {

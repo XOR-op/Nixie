@@ -205,14 +205,14 @@ impl Controllable for ControllableDaemon {
         };
         let client = handle.client();
         drop(guard);
-        tracing::warn!("prefetch half implemented: %addr and %device");
+        tracing::warn!("prefetch half implemented: %addr");
         let _ = client
             .prefetch(
                 Context::current(),
                 PrefetchArgs {
                     addr: 0,
                     len: args.size_low.unwrap_or(0),
-                    device: 0,
+                    to_gpu: args.to_gpu,
                 },
             )
             .await;
