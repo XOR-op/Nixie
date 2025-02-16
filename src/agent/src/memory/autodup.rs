@@ -1,4 +1,3 @@
-use cudarc::driver::sys::lib as cuda_lib;
 use nihilipc::{shm::AllocationEntry, AttrType};
 use std::{
     num::NonZeroU64,
@@ -6,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{check_cu_err, FusedPtrMapping, GENERIC_DATA};
+use crate::{utils::set_device, FusedPtrMapping, GENERIC_DATA};
 
 const DUP_THRESHOLD: Duration = Duration::from_secs(5);
 
@@ -99,13 +98,4 @@ impl DupDaemon {
             }
         });
     }
-}
-
-fn set_device(dev: i32) {
-    let mut cu_ctx = std::ptr::null_mut();
-    let res = unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
-    check_cu_err!(res, "cuCtxGetCurrent");
-    assert!(!cu_ctx.is_null());
-    let res = unsafe { cuda_lib().cuCtxSetCurrent(cu_ctx) };
-    check_cu_err!(res, "cuCtxSetCurrent");
 }

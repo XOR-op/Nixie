@@ -2,6 +2,8 @@ use std::sync::{Condvar, Mutex};
 
 use nihilipc::SchedulingArgs;
 
+use crate::memory::prefetch::release_gpu_mem;
+
 pub(crate) static SCHED_CTL: Scheduler = Scheduler::new();
 
 struct Context {
@@ -47,11 +49,12 @@ impl Scheduler {
             SchedulingArgs::Disable { swap_out_mb } => {
                 allow_running.disable();
                 if let Some(mb) = swap_out_mb {
-                    // swap out
-                    todo!();
+                    // swap out to cpu synchronously
+                    release_gpu_mem(mb.get(), true);
                 }
             }
         }
+        self.cond_var.notify_all();
     }
 
     pub fn launch_allowed(&self) {
@@ -66,7 +69,7 @@ impl Scheduler {
         if sched_ctx.need_prefetch {
             sched_ctx.need_prefetch = false;
             // prefetch and notify daemon
-            crate::memory::filtered_prefetch(20, true);
+            crate::memory::filtered_prefetch_non_blocking(20, true);
         }
     }
 }

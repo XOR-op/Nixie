@@ -104,7 +104,7 @@ impl Controller {
                             args.len,
                             args.to_gpu
                         );
-                        prefetch::filtered_prefetch(args.len, args.to_gpu);
+                        prefetch::filtered_prefetch_non_blocking(args.len, args.to_gpu);
                     }
                     S2AMessage::Scheduling(args) => {
                         self.sched_ctrl.set_allow_running(args);

@@ -1,5 +1,7 @@
 use std::sync::OnceLock;
 
+use cudarc::driver::sys::lib as cuda_lib;
+
 pub(crate) fn size_to_string(size: usize) -> String {
     if size < 1024 {
         return format!("{}B", size);
@@ -55,4 +57,13 @@ macro_rules! check_cu_err {
             crate::warn_eprintln!("CUDA error from {}: {:?}", $msg, $res);
         }
     };
+}
+
+pub(crate) fn set_device(dev: i32) {
+    let mut cu_ctx = std::ptr::null_mut();
+    let res = unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
+    check_cu_err!(res, "cuCtxGetCurrent");
+    assert!(!cu_ctx.is_null());
+    let res = unsafe { cuda_lib().cuCtxSetCurrent(cu_ctx) };
+    check_cu_err!(res, "cuCtxSetCurrent");
 }
