@@ -1,10 +1,14 @@
-use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
+use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUmem_advise};
 
 use crate::{
+    intercept::VALID_UVM_FD,
     memory::{prefetch::prefetch_call, CUDA_CPU_DEVICE_ID},
+    schedule::uvm_api::{self, UvmSetReadDuplicationParams, UvmUnsetPreferredLocationParams},
     utils::{set_device, size_to_string},
     warn_eprintln, GENERIC_DATA, STREAM_VEC,
 };
+
+use super::uvm_api::NV_PROCESSOR_UUID_CPU_DEFAULT;
 
 // release most `size_mb` MB of memory
 pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
@@ -34,11 +38,11 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
             checked_error(
                 unsafe {
                     cuda_lib().cuMemAdvise(
-                    entry.addr.get(),
-                    size_bytes,
-                    cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
-                    CUDA_CPU_DEVICE_ID,
-                )
+                        entry.addr.get(),
+                        size_bytes,
+                        CUmem_advise::CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
+                        CUDA_CPU_DEVICE_ID,
+                    )
                 },
                 "set prefered location to CPU",
             );
@@ -47,7 +51,7 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
                     cuda_lib().cuMemAdvise(
                         entry.addr.get(),
                         size_bytes,
-                        cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_READ_MOSTLY,
+                        CUmem_advise::CU_MEM_ADVISE_UNSET_READ_MOSTLY,
                         entry.device,
                     )
                 },
@@ -57,11 +61,11 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
             checked_error(
                 unsafe {
                     cuda_lib().cuMemAdvise(
-                    entry.addr.get(),
-                    size_bytes,
-                    cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION,
-                    entry.device, // this is ignored
-                )
+                        entry.addr.get(),
+                        size_bytes,
+                        CUmem_advise::CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION,
+                        entry.device, // this is ignored
+                    )
                 },
                 "unset read mostly",
             );
@@ -70,7 +74,7 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
                     cuda_lib().cuMemAdvise(
                         entry.addr.get(),
                         size_bytes,
-                        cudarc::driver::sys::CUmem_advise_enum::CU_MEM_ADVISE_SET_READ_MOSTLY,
+                        CUmem_advise::CU_MEM_ADVISE_SET_READ_MOSTLY,
                         entry.device,
                     )
                 },
@@ -98,5 +102,83 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
 fn checked_error(res: cudaError_enum, error_msg: &str) {
     if res != cudaError_enum::CUDA_SUCCESS {
         warn_eprintln!("CUDA error: {:?} from {}", res, error_msg);
+    }
+}
+
+#[allow(dead_code)]
+fn mem_advise_lite(addr: u64, size: u64, advice: CUmem_advise, device: i32) {
+    let uvm_fd = *VALID_UVM_FD.get().expect("UVM FD not set");
+    let (ioctl_res, rm_status) = match advice {
+        CUmem_advise::CU_MEM_ADVISE_SET_READ_MOSTLY => {
+            let mut param = UvmSetReadDuplicationParams {
+                requested_base: addr,
+                length: size,
+                rm_status: 0,
+            };
+            let ioctl_res = unsafe {
+                uvm_api::uvm_enable_read_duplication(
+                    uvm_fd,
+                    &mut param as *mut uvm_api::UvmSetReadDuplicationParams,
+                )
+            };
+            (ioctl_res, param.rm_status)
+        }
+        CUmem_advise::CU_MEM_ADVISE_UNSET_READ_MOSTLY => {
+            let mut param = UvmSetReadDuplicationParams {
+                requested_base: addr,
+                length: size,
+                rm_status: 0,
+            };
+            let ioctl_res = unsafe {
+                uvm_api::uvm_disable_read_duplication(
+                    uvm_fd,
+                    &mut param as *mut uvm_api::UvmSetReadDuplicationParams,
+                )
+            };
+            (ioctl_res, param.rm_status)
+        }
+        CUmem_advise::CU_MEM_ADVISE_SET_PREFERRED_LOCATION => {
+            if device != CUDA_CPU_DEVICE_ID {
+                warn_eprintln!("GPU set_preferred_location is not supported by mem_advise_lite, use mem_advise instead.");
+                return;
+            }
+            let mut param = uvm_api::UvmSetPreferredLocationParams {
+                requested_base: addr,
+                length: size,
+                processor: NV_PROCESSOR_UUID_CPU_DEFAULT,
+                preferred_cpu_numa_node: 0,
+                rm_status: 0,
+            };
+            let ioctl_res = unsafe {
+                uvm_api::uvm_set_preferred_location(
+                    uvm_fd,
+                    &mut param as *mut uvm_api::UvmSetPreferredLocationParams,
+                )
+            };
+            (ioctl_res, param.rm_status)
+        }
+        CUmem_advise::CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION => {
+            let mut param = UvmUnsetPreferredLocationParams {
+                requested_base: addr,
+                length: size,
+                rm_status: 0,
+            };
+            let ioctl_res = unsafe {
+                uvm_api::uvm_unset_preferred_location(
+                    uvm_fd,
+                    &mut param as *mut UvmUnsetPreferredLocationParams,
+                )
+            };
+            (ioctl_res, param.rm_status)
+        }
+        variant @ _ => unreachable!("{:?} is not supported", variant),
+    };
+    if rm_status != 0 || ioctl_res.is_err() {
+        warn_eprintln!(
+            "Fail to set {:?}: ioctl={:?}, rm_status={}",
+            advice,
+            ioctl_res,
+            rm_status
+        );
     }
 }

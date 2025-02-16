@@ -24,7 +24,7 @@ static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
 static CLOSE_FN: OnceLock<CloseType> = OnceLock::new();
 static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
 
-static VALID_UVM_FD: OnceLock<i32> = OnceLock::new();
+pub(crate) static VALID_UVM_FD: OnceLock<i32> = OnceLock::new();
 static UVM_FD_CANDIDATES: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 
 #[allow(non_snake_case)]

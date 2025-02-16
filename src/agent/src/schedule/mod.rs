@@ -3,6 +3,7 @@ use std::sync::{Condvar, Mutex};
 use nihilipc::SchedulingArgs;
 
 mod mem_ctl;
+mod uvm_api;
 
 pub(crate) static SCHED_CTL: Scheduler = Scheduler::new();
 
@@ -49,8 +50,7 @@ impl Scheduler {
             SchedulingArgs::Disable { swap_out_mb } => {
                 allow_running.disable();
                 if let Some(mb) = swap_out_mb {
-                    // swap out to cpu synchronously
-                    mem_ctl::release_gpu_mem(mb.get(), true);
+                    mem_ctl::release_gpu_mem(mb.get(), false);
                 }
             }
         }

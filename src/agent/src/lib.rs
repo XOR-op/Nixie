@@ -16,6 +16,13 @@ mod memory;
 mod schedule;
 mod utils;
 
+/*
+ * Expected workflow:
+ * 1. Attached process opened /dev/nvidia-uvm, we record the fd
+ *  * 1.1. Some applications may open and close /dev/nvidia-uvm multiple times; we delay to use it until they truly invoke CUDA APIs
+ * 2. Process called cudaMalloc, we use the latest uvmfd
+ */
+
 struct CuStreamWrapper(CUstream);
 unsafe impl Send for CuStreamWrapper {}
 unsafe impl Sync for CuStreamWrapper {}
