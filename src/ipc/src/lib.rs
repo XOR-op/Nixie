@@ -58,3 +58,11 @@ pub enum SchedulingArgs {
     Enable { prefetch: bool },
     Disable { swap_out_mb: Option<NonZeroU64> },
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SchedulingResults {
+    pub ro_size_mb: u64,
+    pub rw_size_mb: u64,
+    pub ro_duration: std::time::Duration,
+    pub rw_duration: std::time::Duration,
+}

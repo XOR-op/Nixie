@@ -2,7 +2,7 @@ use std::sync::{Condvar, Mutex};
 
 use nihilipc::SchedulingArgs;
 
-use crate::memory::prefetch::release_gpu_mem;
+mod mem_ctl;
 
 pub(crate) static SCHED_CTL: Scheduler = Scheduler::new();
 
@@ -50,7 +50,7 @@ impl Scheduler {
                 allow_running.disable();
                 if let Some(mb) = swap_out_mb {
                     // swap out to cpu synchronously
-                    release_gpu_mem(mb.get(), true);
+                    mem_ctl::release_gpu_mem(mb.get(), true);
                 }
             }
         }
