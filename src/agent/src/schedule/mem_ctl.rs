@@ -38,7 +38,7 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
             checked_error(
                 unsafe {
                     cuda_lib().cuMemAdvise(
-                        entry.addr.get(),
+                        entry.addr,
                         size_bytes,
                         CUmem_advise::CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
                         CUDA_CPU_DEVICE_ID,
@@ -49,7 +49,7 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
             checked_error(
                 unsafe {
                     cuda_lib().cuMemAdvise(
-                        entry.addr.get(),
+                        entry.addr,
                         size_bytes,
                         CUmem_advise::CU_MEM_ADVISE_UNSET_READ_MOSTLY,
                         entry.device,
@@ -61,7 +61,7 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
             checked_error(
                 unsafe {
                     cuda_lib().cuMemAdvise(
-                        entry.addr.get(),
+                        entry.addr,
                         size_bytes,
                         CUmem_advise::CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION,
                         entry.device, // this is ignored
@@ -72,7 +72,7 @@ pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
             checked_error(
                 unsafe {
                     cuda_lib().cuMemAdvise(
-                        entry.addr.get(),
+                        entry.addr,
                         size_bytes,
                         CUmem_advise::CU_MEM_ADVISE_SET_READ_MOSTLY,
                         entry.device,

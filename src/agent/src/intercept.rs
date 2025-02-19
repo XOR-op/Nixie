@@ -3,7 +3,6 @@ use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
 use nihilipc::shm::AllocationEntry;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
-use std::num::NonZeroU64;
 use std::sync::OnceLock;
 
 use crate::comm::notify_init_info;
@@ -76,7 +75,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             .lock_ptr_mapping();
         let mut dup_daemon = get_dup_daemon().lock().unwrap();
         let alloc_entry = AllocationEntry {
-            addr: unsafe { NonZeroU64::new_unchecked(*dev_ptr as u64) },
+            addr: unsafe { *dev_ptr } as u64,
             len: size,
             device: device_id,
             is_readonly: false,
@@ -113,9 +112,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     });
     if let Some(mapping) = GENERIC_DATA.get() {
         let mut mapping = mapping.lock_ptr_mapping();
-        let idx = mapping
-            .iter()
-            .position(|pr| pr.addr.get() == dev_ptr as u64);
+        let idx = mapping.iter().position(|pr| pr.addr == dev_ptr as u64);
         if let Some(idx) = idx {
             mapping.remove(idx);
         } else {

@@ -1,5 +1,4 @@
 use core::{ffi::c_int, pin::Pin};
-use std::num::NonZeroU64;
 
 use nix::libc;
 
@@ -13,7 +12,7 @@ pub struct Shm {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AllocationEntry {
-    pub addr: NonZeroU64,
+    pub addr: u64,
     pub len: usize,
     pub device: i32,
     pub is_readonly: bool,

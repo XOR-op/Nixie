@@ -16,7 +16,7 @@ pub(crate) fn set_attribute<'a>(
         if size >= 1024 * 1024 * size_mb as usize {
             let res = unsafe {
                 cuda_lib().cuMemAdvise(
-                    ptr.get(),
+                    ptr,
                     size as usize,
                     compute_cu_advise(attr_val, will_set),
                     entry.device,
@@ -56,8 +56,8 @@ pub(crate) fn set_attribute_single<'a>(
 ) {
     let address = address.get();
     let entry = ptr_mapping.iter_mut().find(|entry| {
-        entry.addr.get() <= address
-            && entry.addr.get() + entry.len as u64 >= address + length
+        entry.addr <= address
+            && entry.addr + entry.len as u64 >= address + length
             && entry.device == device
     });
     if let Some(entry) = entry {

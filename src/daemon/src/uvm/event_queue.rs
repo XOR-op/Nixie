@@ -104,6 +104,7 @@ impl EventQueue {
         }
     }
 
+    // TODO: understand why tokio cannot correctly poll the fd
     pub async fn ready(&self) -> Result<AsyncFdReadyGuard<OwnedFd>, UvmError> {
         self.uvm_tools_handle
             .ready(Interest::READABLE | Interest::PRIORITY | Interest::ERROR)

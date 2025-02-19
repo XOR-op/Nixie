@@ -25,7 +25,7 @@ struct MallocRecord {
 
 impl MallocRecord {
     pub fn matches(&self, alloc_entry: &AllocationEntry) -> bool {
-        self.addr == alloc_entry.addr
+        self.addr.get() == alloc_entry.addr
             && self.len == alloc_entry.len
             && self.device == alloc_entry.device
     }
@@ -44,13 +44,15 @@ impl DupDaemon {
     }
 
     pub fn record(&mut self, idx: usize, entry: &AllocationEntry) {
-        self.candidates.push(MallocRecord {
-            idx,
-            addr: entry.addr,
-            len: entry.len,
-            device: entry.device,
-            timestamp: Instant::now(),
-        });
+        if agent_config().auto_dup {
+            self.candidates.push(MallocRecord {
+                idx,
+                addr: NonZeroU64::new(entry.addr).unwrap(),
+                len: entry.len,
+                device: entry.device,
+                timestamp: Instant::now(),
+            });
+        }
     }
 
     pub fn mark_as_dup<'a>(&mut self, mut table_handle: FusedPtrMapping<'a>) {

@@ -38,7 +38,7 @@ pub(crate) fn prefetch_call(
     let size = size_bytes.unwrap_or(entry.len);
     let res = unsafe {
         cuda_lib().cuMemPrefetchAsync(
-            ptr.get(),
+            ptr,
             size,
             if to_gpu {
                 CUdevice::from(entry.device)

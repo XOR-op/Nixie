@@ -1,5 +1,5 @@
 #![allow(non_upper_case_globals)]
-use std::{collections::BTreeSet, os::fd::OwnedFd};
+use std::{collections::BTreeSet, num::NonZeroU64, os::fd::OwnedFd};
 
 use nihilipc::{
     rpc::SidecarClient,
@@ -88,7 +88,7 @@ impl ProcessControl {
         if !fault_tree.is_empty() {
             let mapping = self.shm.inner.ptr_mapping.lock();
             for entry in mapping.iter() {
-                let start = entry.addr.get();
+                let start = entry.addr;
                 let end = start + entry.len as u64;
                 if fault_tree.range(start..end).next().is_some() {
                     disabled.insert(entry.clone());
@@ -164,7 +164,7 @@ impl ProcessControl {
                 .set_attr(
                     Context::current(),
                     nihilipc::AttrArgs {
-                        addr: Some(entry.addr),
+                        addr: NonZeroU64::new(entry.addr),
                         len: entry.len as u64,
                         value: nihilipc::AttrType::ReadDup,
                         will_set: set,
