@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![allow(dead_code)]
+
 use nihilipc::{shm::AllocationEntry, AttrType};
 use std::{
     num::NonZeroU64,
@@ -5,7 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{utils::set_device, FusedPtrMapping, GENERIC_DATA};
+use crate::{
+    env_config::agent_config, info_eprintln, utils::set_device, FusedPtrMapping, GENERIC_DATA,
+};
 
 const DUP_THRESHOLD: Duration = Duration::from_secs(5);
 
@@ -89,13 +94,16 @@ impl DupDaemon {
     }
 
     pub fn spawn_daemon(daemon: &'static Mutex<Self>) {
-        std::thread::spawn(|| loop {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            if let Some(data) = GENERIC_DATA.get() {
-                let table_handle = data.lock_ptr_mapping();
-                let mut daemon_handle = daemon.lock().unwrap();
-                daemon_handle.mark_as_dup(table_handle);
-            }
-        });
+        if agent_config().auto_dup {
+            std::thread::spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                if let Some(data) = GENERIC_DATA.get() {
+                    let table_handle = data.lock_ptr_mapping();
+                    let mut daemon_handle = daemon.lock().unwrap();
+                    daemon_handle.mark_as_dup(table_handle);
+                }
+            });
+            info_eprintln!("Auto Duplication enabled");
+        }
     }
 }

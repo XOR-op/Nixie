@@ -103,11 +103,14 @@ pub(crate) fn notify_init_info(fd: i32, shm_path: String, visible_devices: Strin
     })));
 }
 
-pub(crate) fn notify_activity() {
+pub(crate) fn notify_activity(mem_usage_bytes: u64, alloc_count: u32) {
     let Some(chan) = COMM.get_or_init(|| init_comm()) else {
         return;
     };
-    chan_send!(chan.send(A2SMessage::NofityActivity(ActivityUpdate {})));
+    chan_send!(chan.send(A2SMessage::NofityActivity(ActivityUpdate {
+        mem_usage_bytes,
+        alloc_count
+    })));
 }
 
 #[derive(Clone)]

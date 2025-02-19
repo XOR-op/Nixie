@@ -19,7 +19,10 @@ pub struct InitInfo {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct ActivityUpdate {}
+pub struct ActivityUpdate {
+    pub mem_usage_bytes: u64,
+    pub alloc_count: u32,
+}
 
 // ------------------------------------------------------------
 

@@ -1,6 +1,6 @@
-use std::sync::OnceLock;
-
 use cudarc::driver::sys::lib as cuda_lib;
+
+use crate::env_config::agent_config;
 
 pub(crate) fn size_to_string(size: usize) -> String {
     if size < 1024 {
@@ -18,18 +18,9 @@ pub(crate) fn size_to_string(size: usize) -> String {
     return format!("{:.2}GB", gb);
 }
 
-static LOG_LEVEL: OnceLock<u8> = OnceLock::new();
+#[inline(always)]
 pub(crate) fn should_log(level: u8) -> bool {
-    let expect = LOG_LEVEL.get_or_init(|| {
-        let level = std::env::var("NIHIL_LOG").unwrap_or("1".to_string());
-        match level.to_lowercase().as_str() {
-            "0" | "none" => 0,
-            "1" | "warn" | "error" => 1,
-            "2" | "info" => 2,
-            _ => 0,
-        }
-    });
-    *expect >= level
+    agent_config().log_level >= level
 }
 
 #[macro_export]

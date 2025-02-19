@@ -10,6 +10,7 @@ use std::{
 };
 
 mod comm;
+mod env_config;
 mod intercept;
 mod intercept_launch;
 mod memory;

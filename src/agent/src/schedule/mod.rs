@@ -2,6 +2,8 @@ use std::sync::{Condvar, Mutex};
 
 use nihilipc::SchedulingArgs;
 
+use crate::{FusedPtrMapping, GENERIC_DATA};
+
 mod mem_ctl;
 mod uvm_api;
 
@@ -61,7 +63,10 @@ impl Scheduler {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         if !sched_ctx.allow_running {
             // request to run
-            crate::comm::notify_activity();
+            let ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
+            let (mem_usage_bytes, alloc_count) = collect_mem_size(&ptr_mapping);
+            drop(ptr_mapping);
+            crate::comm::notify_activity(mem_usage_bytes, alloc_count);
         }
         while !sched_ctx.allow_running {
             sched_ctx = self.cond_var.wait(sched_ctx).unwrap();
@@ -72,4 +77,11 @@ impl Scheduler {
             crate::memory::filtered_prefetch_non_blocking(20, true);
         }
     }
+}
+
+fn collect_mem_size(ptr_mapping: &FusedPtrMapping) -> (u64, u32) {
+    (
+        ptr_mapping.iter().map(|entry| entry.len as u64).sum(),
+        ptr_mapping.len() as u32,
+    )
 }
