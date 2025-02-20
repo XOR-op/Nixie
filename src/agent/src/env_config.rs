@@ -4,16 +4,19 @@ use std::sync::OnceLock;
 pub(crate) struct AgentConfig {
     pub log_level: u8, // 0=none, 1=warn, 2=info
     pub auto_dup: bool,
+    pub auto_dup_delay: u64,
 }
 
 const DEFAULT_LOG_LEVEL: u8 = 1;
 const DEFAULT_AUTO_DUP: bool = false;
+const DEFAULT_AUTO_DUP_DELAY: u64 = 5;
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             log_level: DEFAULT_LOG_LEVEL,
             auto_dup: DEFAULT_AUTO_DUP,
+            auto_dup_delay: DEFAULT_AUTO_DUP_DELAY,
         }
     }
 }
@@ -30,7 +33,7 @@ pub(crate) fn agent_config() -> &'static AgentConfig {
                     if let Some(val) = iter.next() {
                         // valid key-value pair
                         match key.to_lowercase().as_str() {
-                            "log_level" | "log" | "log-level" => {
+                            "log_level" | "log" => {
                                 cfg.log_level = match val.to_lowercase().as_str() {
                                     "0" | "none" => 0,
                                     "1" | "warn" | "error" => 1,
@@ -43,6 +46,12 @@ pub(crate) fn agent_config() -> &'static AgentConfig {
                                     "true" | "1" | "yes" => true,
                                     "false" | "0" | "no" => false,
                                     _ => DEFAULT_AUTO_DUP,
+                                }
+                            }
+                            "auto_dup_delay" | "autodup_delay" | "delay" => {
+                                cfg.auto_dup_delay = match val.parse() {
+                                    Ok(num) => num,
+                                    _ => DEFAULT_AUTO_DUP_DELAY,
                                 }
                             }
                             _ => {}

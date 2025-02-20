@@ -9,10 +9,9 @@ use std::{
 };
 
 use crate::{
-    env_config::agent_config, info_eprintln, utils::set_device, FusedPtrMapping, GENERIC_DATA,
+    env_config::agent_config, info_eprintln, intercept_launch::is_during_capture,
+    utils::set_device, FusedPtrMapping, GENERIC_DATA,
 };
-
-const DUP_THRESHOLD: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 struct MallocRecord {
@@ -56,12 +55,13 @@ impl DupDaemon {
     }
 
     pub fn mark_as_dup<'a>(&mut self, mut table_handle: FusedPtrMapping<'a>) {
+        let dup_threshold = Duration::from_secs(agent_config().auto_dup_delay);
         // split by time reaching the threshold
         let now = Instant::now();
         let candidates = match self
             .candidates
             .iter()
-            .position(|record| now.duration_since(record.timestamp) < DUP_THRESHOLD)
+            .position(|record| now.duration_since(record.timestamp) < dup_threshold)
         {
             Some(idx) => {
                 let mut candidates = std::mem::replace(&mut self.candidates, Vec::new());
@@ -99,10 +99,12 @@ impl DupDaemon {
         if agent_config().auto_dup {
             std::thread::spawn(|| loop {
                 std::thread::sleep(std::time::Duration::from_secs(3));
-                if let Some(data) = GENERIC_DATA.get() {
-                    let table_handle = data.lock_ptr_mapping();
-                    let mut daemon_handle = daemon.lock().unwrap();
-                    daemon_handle.mark_as_dup(table_handle);
+                if !is_during_capture() {
+                    if let Some(data) = GENERIC_DATA.get() {
+                        let table_handle = data.lock_ptr_mapping();
+                        let mut daemon_handle = daemon.lock().unwrap();
+                        daemon_handle.mark_as_dup(table_handle);
+                    }
                 }
             });
             info_eprintln!("Auto Duplication enabled");
