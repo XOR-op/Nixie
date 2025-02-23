@@ -1,8 +1,8 @@
 use std::sync::{Condvar, Mutex};
 
-use nihilipc::SchedulingArgs;
+use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 
-use crate::{FusedPtrMapping, GENERIC_DATA};
+use crate::GENERIC_DATA;
 
 mod mem_ctl;
 mod uvm_api;
@@ -51,9 +51,7 @@ impl Scheduler {
             }
             SchedulingArgs::Disable { swap_out_mb } => {
                 allow_running.disable();
-                if let Some(mb) = swap_out_mb {
-                    mem_ctl::release_gpu_mem(mb.get(), false);
-                }
+                mem_ctl::release_gpu_mem(swap_out_mb, false);
             }
         }
         self.cond_var.notify_all();
@@ -64,9 +62,25 @@ impl Scheduler {
         if !sched_ctx.allow_running {
             // request to run
             let ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
-            let (mem_usage_bytes, alloc_count) = collect_mem_size(&ptr_mapping);
+            let mut allocs = Vec::new();
+            for entry in ptr_mapping.iter() {
+                if allocs.len() <= entry.device as usize {
+                    allocs.resize(
+                        entry.device as usize + 1,
+                        MemoryUsage {
+                            mem_usage_bytes: 0,
+                            alloc_count: 0,
+                        },
+                    );
+                }
+                allocs[entry.device as usize].mem_usage_bytes += entry.len as u64;
+                allocs[entry.device as usize].alloc_count += 1;
+            }
             drop(ptr_mapping);
-            crate::comm::notify_activity(mem_usage_bytes, alloc_count);
+            crate::comm::update_activity(ActivityUpdate {
+                request_scheduling: true,
+                mem_usage_per_device: allocs,
+            });
         }
         while !sched_ctx.allow_running {
             sched_ctx = self.cond_var.wait(sched_ctx).unwrap();
@@ -77,11 +91,4 @@ impl Scheduler {
             crate::memory::filtered_prefetch_non_blocking(20, true);
         }
     }
-}
-
-fn collect_mem_size(ptr_mapping: &FusedPtrMapping) -> (u64, u32) {
-    (
-        ptr_mapping.iter().map(|entry| entry.len as u64).sum(),
-        ptr_mapping.len() as u32,
-    )
 }

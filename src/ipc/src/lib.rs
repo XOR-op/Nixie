@@ -18,8 +18,14 @@ pub struct InitInfo {
     pub visible_devices: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityUpdate {
+    pub request_scheduling: bool,
+    pub mem_usage_per_device: Vec<MemoryUsage>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct MemoryUsage {
     pub mem_usage_bytes: u64,
     pub alloc_count: u32,
 }
@@ -56,10 +62,15 @@ pub struct PrefetchArgs {
     pub to_gpu: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SchedulingArgs {
-    Enable { prefetch: bool },
-    Disable { swap_out_mb: Option<NonZeroU64> },
+    Enable {
+        prefetch: bool,
+    },
+    Disable {
+        // index of device in agent side
+        swap_out_mb: Vec<Option<NonZeroU64>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

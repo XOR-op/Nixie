@@ -16,6 +16,7 @@ use tokio::{
 };
 
 use crate::{
+    config::init_config,
     control::{self, AttrMsg, Controllable, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
     general::{CallFuture, CallParameter},
@@ -61,6 +62,10 @@ impl Daemon {
             != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS
         {
             tracing::error!("Failed to initialize CUDA");
+            return;
+        }
+        if let Err(e) = init_config() {
+            tracing::error!("Failed to init config: {}", e);
             return;
         }
         let rt = tokio::runtime::Builder::new_multi_thread()

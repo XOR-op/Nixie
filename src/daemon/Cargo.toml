@@ -43,3 +43,4 @@ chrono = "0.4.38"
 syscalls = { version = "0.6.18", features = ["x86_64"] }
 ringbuf = "0.4.1"
 hashlink = "0.10.0"
+nvml-wrapper = "0.10.0"

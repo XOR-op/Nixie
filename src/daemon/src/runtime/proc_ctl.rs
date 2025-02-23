@@ -136,7 +136,10 @@ impl ProcessControl {
                 for entry in mapping.iter() {
                     allocations.push(AllocationData {
                         size: entry.len as u64,
-                        device: self.dev_mapping.visible_to_real(entry.device),
+                        device: self
+                            .dev_mapping
+                            .visible_to_real(entry.device)
+                            .unwrap_or_default(),
                         readonly: entry.is_readonly,
                         move_reduced: entry.is_move_reduced,
                     });

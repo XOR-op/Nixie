@@ -1,4 +1,7 @@
+use std::{collections::HashMap, num::NonZeroU64};
+
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUmem_advise};
+use nihilipc::shm::AllocationEntry;
 
 use crate::{
     intercept::VALID_UVM_FD,
@@ -11,85 +14,46 @@ use crate::{
 use super::uvm_api::NV_PROCESSOR_UUID_CPU_DEFAULT;
 
 // release most `size_mb` MB of memory
-pub(crate) fn release_gpu_mem(size_mb: u64, blocking: bool) {
-    let size_mb = size_mb as usize;
+pub(crate) fn release_gpu_mem(size_mb: Vec<Option<NonZeroU64>>, blocking: bool) {
     let streams = STREAM_VEC.get().unwrap();
     let stream_idx = 0;
-    let mut accu_bytes = 0;
+    let mut remaining_bytes = size_mb
+        .iter()
+        .enumerate()
+        .filter_map(|(dev_idx, size_mb)| {
+            size_mb.map(|size_mb| (dev_idx, 1024 * 1024 * size_mb.get() as usize))
+        })
+        .collect::<HashMap<_, _>>();
     let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
     let mut cur_cuda_device = -1;
     for (alloc_idx, entry) in ptr_mapping.iter_mut().enumerate() {
-        if accu_bytes >= 1024 * 1024 * size_mb {
+        let device_idx = entry.device as usize;
+        if remaining_bytes.is_empty() {
+            // all memory released
             break;
         }
-        let size_bytes = std::cmp::min(1024 * 1024 * size_mb - accu_bytes, entry.len);
+        let Some(mut evict_bytes) = remaining_bytes.get(&device_idx).cloned() else {
+            continue;
+        };
+        if evict_bytes > entry.len {
+            evict_bytes = entry.len;
+        } else {
+            // all required memories on this device have been released
+            remaining_bytes.remove(&device_idx);
+        }
+
+        let start = std::time::Instant::now();
         if entry.is_readonly {
-            /*
-             * 1. set prefered location to CPU
-             * 2. unset read mostly to invalidate pages on GPU
-             * 3. unset prefered location
-             * 4. reset read duplication
-             */
-            if entry.device != cur_cuda_device {
-                set_device(entry.device);
-                cur_cuda_device = entry.device;
-            }
-            let start = std::time::Instant::now();
-            checked_error(
-                unsafe {
-                    cuda_lib().cuMemAdvise(
-                        entry.addr,
-                        size_bytes,
-                        CUmem_advise::CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
-                        CUDA_CPU_DEVICE_ID,
-                    )
-                },
-                "set prefered location to CPU",
-            );
-            checked_error(
-                unsafe {
-                    cuda_lib().cuMemAdvise(
-                        entry.addr,
-                        size_bytes,
-                        CUmem_advise::CU_MEM_ADVISE_UNSET_READ_MOSTLY,
-                        entry.device,
-                    )
-                },
-                "unset read mostly",
-            );
-            warn_eprintln!("Evict costs: {:?}", start.elapsed());
-            checked_error(
-                unsafe {
-                    cuda_lib().cuMemAdvise(
-                        entry.addr,
-                        size_bytes,
-                        CUmem_advise::CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION,
-                        entry.device, // this is ignored
-                    )
-                },
-                "unset read mostly",
-            );
-            checked_error(
-                unsafe {
-                    cuda_lib().cuMemAdvise(
-                        entry.addr,
-                        size_bytes,
-                        CUmem_advise::CU_MEM_ADVISE_SET_READ_MOSTLY,
-                        entry.device,
-                    )
-                },
-                "unset read mostly",
-            );
+            move_readonly_mem(entry, evict_bytes, &mut cur_cuda_device);
             warn_eprintln!(
                 "Release #{}: size={}, time={:?}",
                 alloc_idx,
-                size_to_string(size_bytes),
+                size_to_string(evict_bytes),
                 start.elapsed()
             );
         } else {
-            prefetch_call(entry, Some(size_bytes), false, &streams[stream_idx]);
+            prefetch_call(entry, Some(evict_bytes), false, &streams[stream_idx]);
         }
-        accu_bytes += size_bytes;
     }
     if blocking {
         let res = unsafe { cuda_lib().cuStreamSynchronize(streams[stream_idx].0) };
@@ -181,4 +145,63 @@ fn mem_advise_lite(addr: u64, size: u64, advice: CUmem_advise, device: i32) {
             rm_status
         );
     }
+}
+
+fn move_readonly_mem(entry: &AllocationEntry, size_bytes: usize, cur_cuda_device: &mut i32) {
+    /*
+     * 1. set prefered location to CPU
+     * 2. unset read mostly to invalidate pages on GPU
+     * 3. unset prefered location
+     * 4. reset read duplication
+     */
+    if entry.device != *cur_cuda_device {
+        set_device(entry.device);
+        *cur_cuda_device = entry.device;
+    }
+    let start = std::time::Instant::now();
+    checked_error(
+        unsafe {
+            cuda_lib().cuMemAdvise(
+                entry.addr,
+                size_bytes,
+                CUmem_advise::CU_MEM_ADVISE_SET_PREFERRED_LOCATION,
+                CUDA_CPU_DEVICE_ID,
+            )
+        },
+        "set prefered location to CPU",
+    );
+    checked_error(
+        unsafe {
+            cuda_lib().cuMemAdvise(
+                entry.addr,
+                size_bytes,
+                CUmem_advise::CU_MEM_ADVISE_UNSET_READ_MOSTLY,
+                entry.device,
+            )
+        },
+        "unset read mostly",
+    );
+    warn_eprintln!("Evict costs: {:?}", start.elapsed());
+    checked_error(
+        unsafe {
+            cuda_lib().cuMemAdvise(
+                entry.addr,
+                size_bytes,
+                CUmem_advise::CU_MEM_ADVISE_UNSET_PREFERRED_LOCATION,
+                entry.device, // this is ignored
+            )
+        },
+        "unset read mostly",
+    );
+    checked_error(
+        unsafe {
+            cuda_lib().cuMemAdvise(
+                entry.addr,
+                size_bytes,
+                CUmem_advise::CU_MEM_ADVISE_SET_READ_MOSTLY,
+                entry.device,
+            )
+        },
+        "unset read mostly",
+    );
 }

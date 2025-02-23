@@ -135,6 +135,10 @@ impl DaemonServerHandle {
     pub fn inst_tx(&self) -> mpsc::UnboundedSender<ProcCtlReq> {
         self.inst_tx.clone()
     }
+
+    pub(super) fn dev_mapping(&self) -> &DeviceOrdinalMapping {
+        &self.dev_mapping
+    }
 }
 
 /// For each client process, we have a corresponding daemon server to manage its state.
@@ -367,21 +371,21 @@ impl DeviceOrdinalMapping {
         })
     }
 
-    pub fn real_to_visible(&self, real: i32) -> i32 {
+    pub fn real_to_visible(&self, real: i32) -> Option<i32> {
         if let Some(dev) = self.real_to_visible.get(&real) {
-            *dev
+            Some(*dev)
         } else {
             tracing::error!("Invalid real device ordinal: {}", real);
-            0
+            None
         }
     }
 
-    pub fn visible_to_real(&self, visible: i32) -> i32 {
+    pub fn visible_to_real(&self, visible: i32) -> Option<i32> {
         if let Some(dev) = self.visible_to_real.get(&visible) {
-            *dev
+            Some(*dev)
         } else {
             tracing::error!("Invalid visible device ordinal: {}", visible);
-            0
+            None
         }
     }
 }

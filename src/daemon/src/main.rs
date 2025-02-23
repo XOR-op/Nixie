@@ -4,6 +4,7 @@ use clap::Parser;
 use colored::Colorize;
 use control::client::ControlClient;
 
+mod config;
 mod control;
 mod error;
 mod general;
@@ -11,6 +12,7 @@ mod general;
 mod inject;
 mod logging;
 mod runtime;
+mod staticly;
 mod uvm;
 
 macro_rules! check_error {

@@ -12,9 +12,9 @@ use nihilipc::{ActivityUpdate, SchedulingArgs};
 use ringbuf::{traits::RingBuffer, HeapRb};
 use tokio::sync::mpsc;
 
-use crate::error::ScheduleError;
+use crate::{config::load_config, error::ScheduleError};
 
-use super::daemon_server::DaemonServerHandle;
+use super::daemon_server::{DaemonServerHandle, DeviceOrdinalMapping};
 
 pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
@@ -52,7 +52,7 @@ impl Scheduler {
     async fn handle_activity_update(
         &mut self,
         pid: i32,
-        _data: ActivityUpdate,
+        data: ActivityUpdate,
     ) -> Result<(), ScheduleError> {
         let control = self.list.write().await;
         if let Some(active_pid) = self.active_client {
@@ -60,12 +60,27 @@ impl Scheduler {
                 // active pid can exit before scheduler knows
                 if let Some(handle) = control.get(&active_pid) {
                     tracing::trace!("Scheduling out process {}", active_pid);
+
+                    let swap_out = {
+                        let cur_proc_dev_mapping = handle.dev_mapping();
+                        if let Some(new_handle) = control.get(&pid) {
+                            Self::compute_eviction(
+                                &data,
+                                &cur_proc_dev_mapping,
+                                &new_handle.dev_mapping(),
+                            )
+                        } else {
+                            Vec::new()
+                        }
+                    };
+                    tracing::trace!("Swap out {:?} from {}", swap_out, active_pid);
+
                     handle
                         .client()
                         .schedule(
                             tarpc::context::current(),
                             SchedulingArgs::Disable {
-                                swap_out_mb: NonZeroU64::new(7 * 1024),
+                                swap_out_mb: swap_out,
                             },
                         )
                         .await
@@ -100,6 +115,48 @@ impl Scheduler {
             .map_err(|e| ScheduleError::RpcError("schedule in", pid, e))?;
         client.schedule_in();
         Ok(())
+    }
+
+    // Devices in and out are not global indexed but per process
+    // We should perform corresponding mapping accordingly
+    fn compute_eviction(
+        data: &ActivityUpdate,
+        old_proc_mapping: &DeviceOrdinalMapping,
+        new_proc_mapping: &DeviceOrdinalMapping,
+    ) -> Vec<Option<NonZeroU64>> {
+        let global_config = load_config();
+        let mem_demanding = data
+            .mem_usage_per_device
+            .iter()
+            .enumerate()
+            .filter_map(|(i, dev)| {
+                old_proc_mapping
+                    .visible_to_real(i as i32)
+                    .map(|real_dev| (real_dev, dev))
+            })
+            .collect::<HashMap<_, _>>();
+        let mem_evicted_mb = mem_demanding
+            .iter()
+            .filter_map(|(dev, demanding)| {
+                new_proc_mapping.real_to_visible(*dev).map(|new_dev| {
+                    (
+                        new_dev,
+                        global_config.device_memory_mb[new_dev as usize]
+                            .saturating_sub(demanding.mem_usage_bytes / 1024 / 1024),
+                    )
+                })
+            })
+            .collect::<HashMap<_, _>>();
+        // Construct the eviction list
+        let mut swap_out = Vec::new();
+        for (dev, mb) in mem_evicted_mb {
+            let dev = dev as usize;
+            if dev >= swap_out.len() {
+                swap_out.resize(dev + 1, None);
+            }
+            swap_out[dev] = NonZeroU64::new(mb as u64);
+        }
+        swap_out
     }
 }
 
