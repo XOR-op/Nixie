@@ -141,7 +141,7 @@ impl Scheduler {
                 new_proc_mapping.real_to_visible(*dev).map(|new_dev| {
                     (
                         new_dev,
-                        global_config.device_memory_mb[new_dev as usize]
+                        ((global_config.device_memory_mb[new_dev as usize] as f64 * 0.95) as u64)
                             .saturating_sub(demanding.mem_usage_bytes / 1024 / 1024),
                     )
                 })
