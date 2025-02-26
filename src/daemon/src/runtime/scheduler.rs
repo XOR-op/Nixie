@@ -8,13 +8,18 @@ use std::{
 use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
-use nihilipc::{ActivityUpdate, SchedulingArgs};
+use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 use ringbuf::{traits::RingBuffer, HeapRb};
 use tokio::sync::mpsc;
 
-use crate::{config::load_config, error::ScheduleError};
+use crate::{
+    config::load_config, error::ScheduleError, general::CallParameter, runtime::ProcCtlReq,
+};
 
-use super::daemon_server::{DaemonServerHandle, DeviceOrdinalMapping};
+use super::{
+    daemon_server::{DaemonServerHandle, DeviceOrdinalMapping},
+    ProcessMetadata,
+};
 
 pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
@@ -64,8 +69,12 @@ impl Scheduler {
                     let swap_out = {
                         let cur_proc_dev_mapping = handle.dev_mapping();
                         if let Some(new_handle) = control.get(&pid) {
+                            let (para, fut) = CallParameter::new(());
+                            let _ = handle.inst_tx().send(ProcCtlReq::List(para));
+                            let cur_list = fut.await;
                             Self::compute_eviction(
                                 &data,
+                                cur_list,
                                 &cur_proc_dev_mapping,
                                 &new_handle.dev_mapping(),
                             )
@@ -121,30 +130,74 @@ impl Scheduler {
     // We should perform corresponding mapping accordingly
     fn compute_eviction(
         data: &ActivityUpdate,
+        cur_proc_list: Option<ProcessMetadata>,
         old_proc_mapping: &DeviceOrdinalMapping,
         new_proc_mapping: &DeviceOrdinalMapping,
     ) -> Vec<Option<NonZeroU64>> {
         let global_config = load_config();
+        // For new process
         let mem_demanding = data
             .mem_usage_per_device
             .iter()
             .enumerate()
             .filter_map(|(i, dev)| {
-                old_proc_mapping
+                new_proc_mapping
                     .visible_to_real(i as i32)
                     .map(|real_dev| (real_dev, dev))
             })
             .collect::<HashMap<_, _>>();
-        let mem_evicted_mb = mem_demanding
+        // For old process
+        let mem_occupied = cur_proc_list
+            .map(|list| {
+                let mut map = HashMap::new();
+                for alloc in list.allocations {
+                    if let Some(real_dev) = old_proc_mapping.visible_to_real(alloc.device) {
+                        use std::collections::hash_map::Entry;
+                        match map.entry(real_dev) {
+                            Entry::Occupied(mut e) => {
+                                let val: &mut MemoryUsage = e.get_mut();
+                                val.mem_usage_bytes += alloc.size;
+                                val.alloc_count += 1;
+                            }
+                            Entry::Vacant(e) => {
+                                e.insert(MemoryUsage {
+                                    mem_usage_bytes: alloc.size,
+                                    alloc_count: 1,
+                                });
+                            }
+                        }
+                    }
+                }
+                map
+            })
+            .unwrap_or_default();
+        // For old process
+        let dev_threshold = load_config().device_threshold;
+        let mem_evicted_mb = mem_occupied
             .iter()
-            .filter_map(|(dev, demanding)| {
-                new_proc_mapping.real_to_visible(*dev).map(|new_dev| {
-                    (
-                        new_dev,
-                        ((global_config.device_memory_mb[new_dev as usize] as f64 * 0.95) as u64)
-                            .saturating_sub(demanding.mem_usage_bytes / 1024 / 1024),
-                    )
-                })
+            .filter_map(|(dev, occupied)| {
+                mem_demanding
+                    .get(dev)
+                    .map(|demanding| {
+                        // now we assume only these two processes are using GPU memory
+                        let mem_evicted_mb = ((demanding.mem_usage_bytes
+                            + occupied.mem_usage_bytes)
+                            / (1024 * 1024))
+                            // estimated 5% of the total memory is reserved for drivers and other usages
+                            .saturating_sub(
+                                ((global_config.device_memory_mb[*dev as usize] as f64)
+                                    * dev_threshold) as u64,
+                            );
+                        if mem_evicted_mb > 0 {
+                            Some((
+                                old_proc_mapping.real_to_visible(*dev).unwrap(),
+                                mem_evicted_mb,
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
             })
             .collect::<HashMap<_, _>>();
         // Construct the eviction list

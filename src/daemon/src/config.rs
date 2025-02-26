@@ -7,6 +7,7 @@ use crate::error::DaemonError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub device_memory_mb: Vec<u64>,
+    pub device_threshold: f64,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -31,7 +32,10 @@ pub fn init_config() -> Result<(), DaemonError> {
         device_memory_mb.push(memory.total / 1024 / 1024);
     }
     CONFIG
-        .set(Config { device_memory_mb })
+        .set(Config {
+            device_memory_mb,
+            device_threshold: 0.95,
+        })
         .expect("Config already initialized");
     Ok(())
 }
