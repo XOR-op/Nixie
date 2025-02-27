@@ -8,7 +8,8 @@ use crate::{
     CuStreamWrapper, GENERIC_DATA, PREFETCH_REQ_QUEUE, STREAM_VEC,
 };
 
-fn filtered_prefetch_impl(size_mb: u64, to_gpu: bool, blocking: bool) {
+pub(crate) fn filtered_prefetch_impl(size_mb: u64, to_gpu: bool, blocking: bool) {
+    init_streams();
     let streams = STREAM_VEC.get().unwrap();
     let stream_idx = 0;
     let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
@@ -33,6 +34,8 @@ pub(crate) fn prefetch_call(
     to_gpu: bool,
     stream: &CuStreamWrapper,
 ) {
+    use chrono::Local;
+    warn_eprintln!("{}: prefetch_call", Local::now().format("%H:%M:%S%.6f"));
     let start = std::time::Instant::now();
     let ptr = entry.addr;
     let size = size_bytes.unwrap_or(entry.len);
@@ -61,7 +64,6 @@ pub(crate) fn prefetch_call(
 }
 
 pub fn filtered_prefetch_non_blocking(size_mb: u64, to_gpu: bool) -> u64 {
-    init_streams();
     let sender = PREFETCH_REQ_QUEUE.get_or_init(|| {
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {

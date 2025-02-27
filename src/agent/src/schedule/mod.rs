@@ -88,7 +88,7 @@ impl Scheduler {
         if sched_ctx.need_prefetch {
             sched_ctx.need_prefetch = false;
             // prefetch and notify daemon
-            crate::memory::filtered_prefetch_non_blocking(20, true);
+            crate::memory::prefetch::filtered_prefetch_impl(20, true, true);
         }
     }
 }

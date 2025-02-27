@@ -34,7 +34,7 @@ pub fn init_config() -> Result<(), DaemonError> {
     CONFIG
         .set(Config {
             device_memory_mb,
-            device_threshold: 0.95,
+            device_threshold: 0.93,
         })
         .expect("Config already initialized");
     Ok(())

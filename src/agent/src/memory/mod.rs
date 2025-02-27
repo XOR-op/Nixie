@@ -8,8 +8,6 @@ pub(crate) use attribute::{set_attribute, set_attribute_single};
 
 use cudarc::driver::sys::CUdevice;
 
-pub(crate) use prefetch::filtered_prefetch_non_blocking;
-
 pub const CUDA_CPU_DEVICE_ID: CUdevice = -1;
 
 pub(crate) fn get_dup_daemon() -> &'static Mutex<autodup::DupDaemon> {
