@@ -105,6 +105,12 @@ impl Scheduler {
                 }
             }
         }
+
+        let config = load_config();
+        if let Some(delay) = config.schedule_delay {
+            tokio::time::sleep(delay).await;
+        }
+
         let client = self
             .clients
             .entry(pid)
@@ -172,7 +178,7 @@ impl Scheduler {
             })
             .unwrap_or_default();
         // For old process
-        let dev_threshold = load_config().device_threshold;
+        let dev_threshold = global_config.device_threshold;
         let mem_evicted_mb = mem_occupied
             .iter()
             .filter_map(|(dev, occupied)| {

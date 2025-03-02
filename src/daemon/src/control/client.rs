@@ -1,8 +1,10 @@
+use std::time::Duration;
+
 use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::{error::DaemonError, general::pretty_size, ProcArgs};
+use crate::{error::DaemonError, general::pretty_size, ProcArgs, UpdateConfigArgs};
 
 use super::{AttrMsg, ControllableClient, PrefetchMsg};
 
@@ -156,6 +158,46 @@ impl ControlClient {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub async fn show_config(&self) -> Result<(), DaemonError> {
+        let config = self
+            .client
+            .get_config(tarpc::context::current())
+            .await
+            .map_err(|e| DaemonError::ClientRpc("get_config", e))?;
+        println!("Config: {:?}", config);
+        Ok(())
+    }
+
+    pub async fn update_config(&self, args: UpdateConfigArgs) -> Result<(), DaemonError> {
+        let mut config = self
+            .client
+            .get_config(tarpc::context::current())
+            .await
+            .map_err(|e| DaemonError::ClientRpc("update_config, failed to get", e))?;
+        if let Some(device_threshold) = args.device_threshold {
+            if 0.0 <= device_threshold && device_threshold <= 1.0 {
+                config.device_threshold = device_threshold;
+            } else {
+                return Err(DaemonError::Errno(
+                    "device_threshold must be in [0, 1]",
+                    nix::errno::Errno::EINVAL,
+                ));
+            }
+        }
+        if let Some(schedule_delay) = args.schedule_delay {
+            if schedule_delay == 0 {
+                config.schedule_delay = None;
+            } else {
+                config.schedule_delay = Some(Duration::from_millis(schedule_delay as u64));
+            }
+        }
+        self.client
+            .update_config(tarpc::context::current(), config.clone())
+            .await
+            .map_err(|e| DaemonError::ClientRpc("update_config, failed to update", e))?;
         Ok(())
     }
 }

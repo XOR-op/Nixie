@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use crate::{
-    config::init_config,
+    config::{init_config, update_config, Config},
     control::{self, AttrMsg, Controllable, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
     general::{CallFuture, CallParameter},
@@ -221,6 +221,14 @@ impl Controllable for ControllableDaemon {
                 },
             )
             .await;
+    }
+
+    async fn update_config(self, _context: Context, config: Config) {
+        update_config(config);
+    }
+
+    async fn get_config(self, _context: Context) -> Config {
+        crate::config::load_config().as_ref().clone()
     }
 }
 // Utils

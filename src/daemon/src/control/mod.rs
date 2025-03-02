@@ -3,6 +3,8 @@ pub mod client;
 use nihilipc::AttrType;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
+
 pub static CONTROL_PATH: &str = "/tmp/nihilphase-ctl.sock";
 
 #[tarpc::service]
@@ -14,6 +16,10 @@ pub(crate) trait Controllable {
     async fn set_attr(args: AttrMsg);
 
     async fn prefetch(args: PrefetchMsg);
+
+    async fn update_config(config: Config);
+
+    async fn get_config() -> Config;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use colored::Colorize;
 use control::client::ControlClient;
 
@@ -84,6 +84,24 @@ struct ListArgs {
     pub verbose: bool,
 }
 
+#[derive(Debug, Subcommand)]
+enum ConfigArgs {
+    /// Show configuration
+    Show,
+    /// Update configuration
+    Update(UpdateConfigArgs),
+}
+
+#[derive(Debug, Parser)]
+struct UpdateConfigArgs {
+    /// Set schedule delay in ms
+    #[arg(short = 'd', long)]
+    pub schedule_delay: Option<u32>,
+    /// Set device threshold
+    #[arg(short, long)]
+    pub device_threshold: Option<f64>,
+}
+
 #[derive(Debug, Parser)]
 #[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
@@ -92,6 +110,8 @@ enum Args {
     ReadDup(ReadDupArgs),
     ReduceMove(ReduceMoveArgs),
     List(ListArgs),
+    #[clap(subcommand)]
+    Config(ConfigArgs),
 }
 
 #[derive(Debug, Parser, Clone, Copy)]
@@ -159,6 +179,19 @@ fn main() {
                     ControlClient::new(control::CONTROL_PATH, ProcArgs::empty()).await
                 );
                 client.list_processes(args.verbose).await.unwrap();
+            }
+            Args::Config(args) => {
+                let client = check_error!(
+                    ControlClient::new(control::CONTROL_PATH, ProcArgs::empty()).await
+                );
+                match args {
+                    ConfigArgs::Show => {
+                        client.show_config().await.unwrap();
+                    }
+                    ConfigArgs::Update(args) => {
+                        client.update_config(args).await.unwrap();
+                    }
+                }
             }
             Args::Daemon => unreachable!(),
         };
