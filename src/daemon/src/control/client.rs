@@ -178,7 +178,7 @@ impl ControlClient {
             .await
             .map_err(|e| DaemonError::ClientRpc("update_config, failed to get", e))?;
         if let Some(device_threshold) = args.device_threshold {
-            if 0.0 <= device_threshold && device_threshold <= 1.0 {
+            if (0.0..=1.0).contains(&device_threshold) {
                 config.device_threshold = device_threshold;
             } else {
                 return Err(DaemonError::Errno(

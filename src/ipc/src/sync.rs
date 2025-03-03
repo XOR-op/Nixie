@@ -64,13 +64,13 @@ pub struct IpcMutexGuard<'a, T> {
     lock: &'a IpcMutex<T>,
 }
 
-impl<'a, T> Drop for IpcMutexGuard<'a, T> {
+impl<T> Drop for IpcMutexGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.unlock_inner();
     }
 }
 
-impl<'a, T> core::ops::Deref for IpcMutexGuard<'a, T> {
+impl<T> core::ops::Deref for IpcMutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -78,7 +78,7 @@ impl<'a, T> core::ops::Deref for IpcMutexGuard<'a, T> {
     }
 }
 
-impl<'a, T> core::ops::DerefMut for IpcMutexGuard<'a, T> {
+impl<T> core::ops::DerefMut for IpcMutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.lock.inner.get() }
     }

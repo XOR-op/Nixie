@@ -155,6 +155,10 @@ impl<T, const N: usize> ShmVec<T, N> {
         self.len as usize
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub const fn capacity(&self) -> usize {
         N
     }
@@ -177,5 +181,11 @@ impl<T, const N: usize> ShmVec<T, N> {
 
     pub fn iter_mut(&mut self) -> core::slice::IterMut<'_, T> {
         self.as_mut_slice().iter_mut()
+    }
+}
+
+impl<T, const N: usize> Default for ShmVec<T, N> {
+    fn default() -> Self {
+        Self::new()
     }
 }

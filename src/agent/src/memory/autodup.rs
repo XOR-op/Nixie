@@ -54,7 +54,7 @@ impl DupDaemon {
         }
     }
 
-    pub fn mark_as_dup<'a>(&mut self, mut table_handle: FusedPtrMapping<'a>) {
+    pub fn mark_as_dup(&mut self, mut table_handle: FusedPtrMapping<'_>) {
         let dup_threshold = Duration::from_secs(agent_config().auto_dup_delay);
         // split by time reaching the threshold
         let now = Instant::now();
@@ -64,14 +64,14 @@ impl DupDaemon {
             .position(|record| now.duration_since(record.timestamp) < dup_threshold)
         {
             Some(idx) => {
-                let mut candidates = std::mem::replace(&mut self.candidates, Vec::new());
+                let mut candidates = std::mem::take(&mut self.candidates);
                 // all items after idx have not reached the time threshold
                 self.candidates = candidates.split_off(idx);
                 candidates
             }
             None => {
                 // all candidates need to be processed
-                std::mem::replace(&mut self.candidates, Vec::new())
+                std::mem::take(&mut self.candidates)
             }
         };
 

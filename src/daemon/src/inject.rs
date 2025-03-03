@@ -57,11 +57,11 @@ pub fn inject_wrapper(
     arg2: u64,
     arg3: u64,
 ) -> Result<u64, InjectError> {
-    let dylib_base = locate_dylib_base(pid as i32, "libcuda_hook.so")
+    let dylib_base = locate_dylib_base(pid, "libcuda_hook.so")
         .ok_or(InjectError::new(InjectErrorStage::Preparing))?;
     let func_offset = resolve_func_offset(func_sym, &dylib_path)
         .ok_or(InjectError::new(InjectErrorStage::Preparing))?;
-    inject_process(pid as i32, dylib_base + func_offset, arg1, arg2, arg3)
+    inject_process(pid, dylib_base + func_offset, arg1, arg2, arg3)
 }
 
 pub fn inject_process(
@@ -88,7 +88,7 @@ pub fn inject_process(
             libc::ptrace(libc::PTRACE_GETREGS, pid, 0, &mut user_regs as *mut _),
             InjectErrorStage::BackupCtx("GETREGS")
         );
-        let regs_bak = user_regs.clone();
+        let regs_bak = user_regs;
         let text_bak: i64 = libc::ptrace(libc::PTRACE_PEEKTEXT, pid, regs_bak.rip, 0);
         check_err!(text_bak, InjectErrorStage::BackupCtx("PEEKTEXT"));
         // Inject the code
@@ -122,7 +122,7 @@ pub fn inject_process(
         let mut status = 0;
         waitpid(pid, &mut status as *mut _, 0);
         let mut should_debug = false;
-        if !(libc::WSTOPSIG(status) == SIGTRAP) {
+        if libc::WSTOPSIG(status) != SIGTRAP {
             should_debug = true;
             if libc::WIFSTOPPED(status) {
                 tracing::warn!(
@@ -173,7 +173,7 @@ pub fn locate_dylib_base(pid: i32, so_name: &str) -> Option<u64> {
         if line.contains(so_name) && line.contains("r-xp") {
             let addr = line.split("-").next()?;
             let in_lib_offset =
-                u64::from_str_radix(line.split_ascii_whitespace().skip(2).next()?, 16).ok()?;
+                u64::from_str_radix(line.split_ascii_whitespace().nth(2)?, 16).ok()?;
             return Some(u64::from_str_radix(addr, 16).ok()? - in_lib_offset);
         }
     }

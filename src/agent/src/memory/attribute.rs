@@ -4,8 +4,8 @@ use crate::{info_eprintln, warn_eprintln, FusedPtrMapping};
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
 use nihilipc::AttrType;
 
-pub(crate) fn set_attribute<'a>(
-    ptr_mapping: &mut FusedPtrMapping<'a>,
+pub(crate) fn set_attribute(
+    ptr_mapping: &mut FusedPtrMapping<'_>,
     attr_val: AttrType,
     will_set: bool,
     size_mb: u64,
@@ -17,7 +17,7 @@ pub(crate) fn set_attribute<'a>(
             let res = unsafe {
                 cuda_lib().cuMemAdvise(
                     ptr,
-                    size as usize,
+                    size,
                     compute_cu_advise(attr_val, will_set),
                     entry.device,
                 )
@@ -46,8 +46,8 @@ pub(crate) fn set_attribute<'a>(
 }
 
 // TODO: check address in client side; should read allocation record before calling
-pub(crate) fn set_attribute_single<'a>(
-    ptr_mapping: &mut FusedPtrMapping<'a>,
+pub(crate) fn set_attribute_single(
+    ptr_mapping: &mut FusedPtrMapping<'_>,
     attr_val: AttrType,
     will_set: bool,
     address: NonZeroU64,

@@ -29,9 +29,9 @@ macro_rules! check_error {
 
 #[derive(clap::ValueEnum, Debug, Parser, Clone, Copy, Default)]
 enum DeviceArgs {
-    CPU,
+    Cpu,
     #[default]
-    GPU,
+    Gpu,
 }
 
 #[derive(Debug, Parser)]
@@ -155,7 +155,7 @@ fn main() {
                 let client =
                     check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
                 client
-                    .prefetch(matches!(args.dest, DeviceArgs::GPU), args.low_filter)
+                    .prefetch(matches!(args.dest, DeviceArgs::Gpu), args.low_filter)
                     .await
                     .unwrap();
             }

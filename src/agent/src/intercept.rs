@@ -97,7 +97,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             ptr_mapping.len()
         );
     }
-    return res;
+    res
 }
 
 #[allow(non_snake_case)]
@@ -126,7 +126,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         "cudaFree".green(),
         dev_ptr as u64
     );
-    return free_func(dev_ptr);
+    free_func(dev_ptr)
 }
 
 #[allow(non_snake_case)]
@@ -149,12 +149,12 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
         // store potential UVM FDs used by CUDA libraries
         if VALID_UVM_FD.get().is_none() {
             let mut guard = UVM_FD_CANDIDATES.lock().unwrap();
-            if guard.iter().find(|&&fd| fd == res).is_none() {
+            if !guard.iter().any(|&fd| fd == res) {
                 guard.push(res);
             }
         }
     }
-    return res;
+    res
 }
 
 #[allow(non_snake_case)]
@@ -180,7 +180,7 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
             // );
         }
     }
-    return res;
+    res
 }
 
 #[allow(non_snake_case)]
@@ -193,6 +193,5 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: c_int, arg: *mut libc::c_void
         }
         std::mem::transmute(func)
     });
-    let res = ioctl_func(fd, request, arg);
-    return res;
+    ioctl_func(fd, request, arg)
 }

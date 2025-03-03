@@ -100,13 +100,13 @@ impl Future for DaemonServerHandleFuture {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Self::Output> {
         let val = ready!(self.task_rx.poll_recv(cx));
-        return Poll::Ready(val.map(|(task, pid, dev_mapping)| DaemonServerHandle {
+        Poll::Ready(val.map(|(task, pid, dev_mapping)| DaemonServerHandle {
             client: self.client.clone(),
             pid,
             dev_mapping,
             task,
             inst_tx: self.inst_tx.clone(),
-        }));
+        }))
     }
 }
 
@@ -343,8 +343,8 @@ impl DeviceOrdinalMapping {
                 num_dev
             };
             for i in 0..num_dev {
-                real_to_visible.insert(i as i32, i as i32);
-                visible_to_real.insert(i as i32, i as i32);
+                real_to_visible.insert(i, i);
+                visible_to_real.insert(i, i);
             }
         } else {
             for (visible_dev, real_str) in visible_devices.split(',').enumerate() {

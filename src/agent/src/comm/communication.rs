@@ -93,7 +93,7 @@ fn init_comm() -> Option<flume::Sender<A2SMessage>> {
 }
 
 pub(crate) fn notify_init_info(fd: i32, shm_path: String, visible_devices: String) {
-    let Some(chan) = COMM.get_or_init(|| init_comm()) else {
+    let Some(chan) = COMM.get_or_init(init_comm) else {
         return;
     };
     chan_send!(chan.send(A2SMessage::InitInfo(InitInfo {
@@ -104,7 +104,7 @@ pub(crate) fn notify_init_info(fd: i32, shm_path: String, visible_devices: Strin
 }
 
 pub(crate) fn update_activity(activity: ActivityUpdate) {
-    let Some(chan) = COMM.get_or_init(|| init_comm()) else {
+    let Some(chan) = COMM.get_or_init(init_comm) else {
         return;
     };
     chan_send!(chan.send(A2SMessage::NofityActivity(activity)));
@@ -116,15 +116,15 @@ pub(crate) struct SidecarServer {
 }
 
 impl nihilipc::rpc::Sidecar for SidecarServer {
-    async fn set_attr(self, _context: Context, params: AttrArgs) -> () {
+    async fn set_attr(self, _context: Context, params: AttrArgs) {
         chan_send!(self.sender.send(S2AMessage::SetAttr(params)));
     }
 
-    async fn prefetch(self, _context: Context, params: PrefetchArgs) -> () {
+    async fn prefetch(self, _context: Context, params: PrefetchArgs) {
         chan_send!(self.sender.send(S2AMessage::Prefetch(params)));
     }
 
-    async fn schedule(self, _context: Context, params: SchedulingArgs) -> () {
+    async fn schedule(self, _context: Context, params: SchedulingArgs) {
         chan_send!(self.sender.send(S2AMessage::Scheduling(params)));
     }
 }

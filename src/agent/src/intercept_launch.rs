@@ -51,7 +51,7 @@ pub extern "C" fn cudaLaunchKernel(
         std::mem::transmute(func)
     });
     SCHED_CTL.launch_allowed();
-    return launch_kernel_func(func, gridDim, blockDim, args, sharedMem, stream);
+    launch_kernel_func(func, gridDim, blockDim, args, sharedMem, stream)
 }
 
 #[allow(non_snake_case)]
@@ -65,7 +65,7 @@ pub extern "C" fn cudaGraphLaunch(graph: CUgraphExec, stream: CUstream) -> cudaE
         std::mem::transmute(func)
     });
     SCHED_CTL.launch_allowed();
-    return graph_launch_func(graph, stream);
+    graph_launch_func(graph, stream)
 }
 
 #[allow(non_snake_case)]
@@ -80,7 +80,7 @@ pub extern "C" fn cudaStreamCaptureBegin(stream: CUstream, mode: i32) -> cudaErr
         std::mem::transmute(func)
     });
     IS_DURING_CAPTURE.store(true, std::sync::atomic::Ordering::Relaxed);
-    return stream_capture_begin_func(stream, mode);
+    stream_capture_begin_func(stream, mode)
 }
 
 #[allow(non_snake_case)]
@@ -95,7 +95,7 @@ pub extern "C" fn cudaStreamEndCapture(stream: CUstream, pGraph: *mut c_void) ->
         std::mem::transmute(func)
     });
     IS_DURING_CAPTURE.store(false, std::sync::atomic::Ordering::Relaxed);
-    return stream_end_capture_func(stream, pGraph);
+    stream_end_capture_func(stream, pGraph)
 }
 
 pub(crate) fn is_during_capture() -> bool {

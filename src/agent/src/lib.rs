@@ -44,7 +44,7 @@ pub(crate) struct GenericData {
 
 impl GenericData {
     /// Global mapping of device pointers and their sizes
-    pub fn lock_ptr_mapping<'a>(&'a self) -> FusedPtrMapping<'a> {
+    pub fn lock_ptr_mapping(&self) -> FusedPtrMapping<'_> {
         // We always lock shared memory first
         let shm_guard = self.shm.inner.ptr_mapping.lock();
         let ptr_mapping_guard = self.overflowed_ptr_mapping.lock().unwrap();
@@ -93,7 +93,7 @@ pub(crate) struct FusedPtrMapping<'a> {
     overflowed: MutexGuard<'a, Vec<AllocationEntry>>,
 }
 
-impl<'a> FusedPtrMapping<'a> {
+impl FusedPtrMapping<'_> {
     pub fn push(&mut self, ptr: AllocationEntry) -> Option<usize> {
         if self.shm.len() < self.shm.capacity() {
             self.shm.push(ptr).ok()

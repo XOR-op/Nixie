@@ -135,7 +135,7 @@ fn mem_advise_lite(addr: u64, size: u64, advice: CUmem_advise, device: i32) {
             };
             (ioctl_res, param.rm_status)
         }
-        variant @ _ => unreachable!("{:?} is not supported", variant),
+        variant => unreachable!("{:?} is not supported", variant),
     };
     if rm_status != 0 || ioctl_res.is_err() {
         warn_eprintln!(

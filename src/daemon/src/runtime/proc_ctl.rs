@@ -91,7 +91,7 @@ impl ProcessControl {
                 let start = entry.addr;
                 let end = start + entry.len as u64;
                 if fault_tree.range(start..end).next().is_some() {
-                    disabled.insert(entry.clone());
+                    disabled.insert(*entry);
                 }
             }
             drop(mapping);
@@ -119,7 +119,7 @@ impl ProcessControl {
                         Context::current(),
                         nihilipc::AttrArgs {
                             addr: None,
-                            len: inst.size_low.unwrap_or(0) as u64,
+                            len: inst.size_low.unwrap_or(0),
                             value: inst.attr,
                             will_set: inst.set,
                             device: 0, // TODO: real device

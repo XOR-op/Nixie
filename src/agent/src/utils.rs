@@ -15,7 +15,7 @@ pub(crate) fn size_to_string(size: usize) -> String {
         return format!("{:.2}MB", mb);
     }
     let gb = mb / 1024.0;
-    return format!("{:.2}GB", gb);
+    format!("{:.2}GB", gb)
 }
 
 #[inline(always)]
@@ -26,7 +26,7 @@ pub(crate) fn should_log(level: u8) -> bool {
 #[macro_export]
 macro_rules! info_eprintln {
     ($($arg:tt)*) => {
-        if crate::utils::should_log(2) {
+        if $crate::utils::should_log(2) {
             eprintln!("{} {}", colored::Colorize::green("NIHIL-INFO"), format!($($arg)*));
         }
     };
@@ -35,7 +35,7 @@ macro_rules! info_eprintln {
 #[macro_export]
 macro_rules! warn_eprintln {
     ($($arg:tt)*) => {
-        if crate::utils::should_log(1) {
+        if $crate::utils::should_log(1) {
             eprintln!("{} {}", colored::Colorize::yellow("NIHIL-WARN"), format!($($arg)*));
         }
     };
@@ -45,7 +45,7 @@ macro_rules! warn_eprintln {
 macro_rules! check_cu_err {
     ($res:expr, $msg:literal) => {
         if $res != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
-            crate::warn_eprintln!("CUDA error from {}: {:?}", $msg, $res);
+            $crate::warn_eprintln!("CUDA error from {}: {:?}", $msg, $res);
         }
     };
 }

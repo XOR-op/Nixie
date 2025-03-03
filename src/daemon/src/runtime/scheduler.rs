@@ -96,8 +96,8 @@ impl Scheduler {
                             Self::compute_eviction(
                                 &data,
                                 cur_list,
-                                &cur_proc_dev_mapping,
-                                &new_handle.dev_mapping(),
+                                cur_proc_dev_mapping,
+                                new_handle.dev_mapping(),
                             )
                         } else {
                             (Vec::new(), 0)
@@ -208,28 +208,24 @@ impl Scheduler {
         let mem_evicted_mb = mem_occupied
             .iter()
             .filter_map(|(dev, occupied)| {
-                mem_demanding
-                    .get(dev)
-                    .map(|demanding| {
-                        // now we assume only these two processes are using GPU memory
-                        let mem_evicted_mb = ((demanding.mem_usage_bytes
-                            + occupied.mem_usage_bytes)
-                            / (1024 * 1024))
-                            // estimated 5% of the total memory is reserved for drivers and other usages
-                            .saturating_sub(
-                                ((global_config.device_memory_mb[*dev as usize] as f64)
-                                    * dev_threshold) as u64,
-                            );
-                        if mem_evicted_mb > 0 {
-                            Some((
-                                old_proc_mapping.real_to_visible(*dev).unwrap(),
-                                mem_evicted_mb,
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten()
+                mem_demanding.get(dev).and_then(|demanding| {
+                    // now we assume only these two processes are using GPU memory
+                    let mem_evicted_mb = ((demanding.mem_usage_bytes + occupied.mem_usage_bytes)
+                        / (1024 * 1024))
+                        // estimated 5% of the total memory is reserved for drivers and other usages
+                        .saturating_sub(
+                            ((global_config.device_memory_mb[*dev as usize] as f64) * dev_threshold)
+                                as u64,
+                        );
+                    if mem_evicted_mb > 0 {
+                        Some((
+                            old_proc_mapping.real_to_visible(*dev).unwrap(),
+                            mem_evicted_mb,
+                        ))
+                    } else {
+                        None
+                    }
+                })
             })
             .collect::<HashMap<_, _>>();
         // Construct the eviction list
@@ -239,11 +235,11 @@ impl Scheduler {
             if dev >= swap_out.len() {
                 swap_out.resize(dev + 1, None);
             }
-            swap_out[dev] = NonZeroU64::new(mb as u64);
+            swap_out[dev] = NonZeroU64::new(mb);
         }
         let old_remaining_total = mem_occupied
-            .iter()
-            .map(|(_, mem)| mem.mem_usage_bytes)
+            .values()
+            .map(|mem| mem.mem_usage_bytes)
             .sum::<u64>()
             .saturating_sub(
                 swap_out
