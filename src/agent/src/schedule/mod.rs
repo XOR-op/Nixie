@@ -5,6 +5,7 @@ use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 use crate::GENERIC_DATA;
 
 mod mem_ctl;
+mod stats;
 mod uvm_api;
 
 pub(crate) static SCHED_CTL: Scheduler = Scheduler::new();

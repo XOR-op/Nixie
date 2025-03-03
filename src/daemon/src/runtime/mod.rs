@@ -1,6 +1,7 @@
 pub mod daemon;
 mod daemon_server;
 pub mod proc_ctl;
+mod sched_policy;
 pub mod scheduler;
 pub mod shm;
 

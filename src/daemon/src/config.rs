@@ -12,6 +12,7 @@ pub struct Config {
     pub device_memory_mb: Vec<u64>,
     pub device_threshold: f64,
     pub schedule_delay: Option<Duration>,
+    pub schedule_cooldown: Option<Duration>,
 }
 
 static CONFIG: RwLock<Option<Arc<Config>>> = RwLock::new(None);
@@ -48,6 +49,7 @@ pub fn init_config() -> Result<(), DaemonError> {
         device_memory_mb,
         device_threshold: 0.95,
         schedule_delay: None,
+        schedule_cooldown: None,
     }));
     Ok(())
 }

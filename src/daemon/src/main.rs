@@ -97,8 +97,11 @@ struct UpdateConfigArgs {
     /// Set schedule delay in ms
     #[arg(short = 'd', long)]
     pub schedule_delay: Option<u32>,
+    /// Set schedule cooldown in ms
+    #[arg(short = 'c', long)]
+    pub schedule_cooldown: Option<u32>,
     /// Set device threshold
-    #[arg(short, long)]
+    #[arg(short = 't', long)]
     pub device_threshold: Option<f64>,
 }
 

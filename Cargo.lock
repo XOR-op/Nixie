@@ -270,12 +270,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ea2b9bc92be3c2baa9334a323ebca2d6f074ff852cd1d7b11064035cd3868f"
 
 [[package]]
-name = "crossbeam-utils"
-version = "0.8.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
-
-[[package]]
 name = "cudarc"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -718,7 +712,7 @@ dependencies = [
  "nihilipc",
  "nix",
  "nvml-wrapper",
- "ringbuf",
+ "ringbuffer",
  "serde",
  "syscalls",
  "tarpc",
@@ -997,13 +991,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adad44e29e4c806119491a7f06f03de4d1af22c3a680dd47f1e6e179439d1f56"
 
 [[package]]
-name = "ringbuf"
-version = "0.4.1"
+name = "ringbuffer"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c65e4c865bc3d2e3294493dff0acf7e6c259d066e34e22059fa9c39645c3636"
-dependencies = [
- "crossbeam-utils",
-]
+checksum = "3df6368f71f205ff9c33c076d170dd56ebf68e8161c733c0caa07a7a5509ed53"
 
 [[package]]
 name = "rustc-demangle"

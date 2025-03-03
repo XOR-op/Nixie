@@ -9,7 +9,6 @@ use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
 use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
-use ringbuf::{traits::RingBuffer, HeapRb};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -18,6 +17,7 @@ use crate::{
 
 use super::{
     daemon_server::{DaemonServerHandle, DeviceOrdinalMapping},
+    sched_policy::ScheduleQueue,
     ProcessMetadata,
 };
 
@@ -25,7 +25,7 @@ pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
     rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
     active_client: Option<i32>,
-    clients: HashMap<i32, ClientStatistics>,
+    sched_queue: ScheduleQueue,
 }
 
 impl Scheduler {
@@ -37,21 +37,42 @@ impl Scheduler {
             list,
             rpc_data_rx,
             active_client: None,
-            clients: HashMap::new(),
+            sched_queue: ScheduleQueue::new(),
         }
     }
 
     pub async fn run(mut self) {
         tracing::info!("Starting scheduler...");
+        let mut last_polled = Instant::now();
         loop {
+            let sleep_duration = Duration::from_millis(100).saturating_sub(last_polled.elapsed());
             tokio::select! {
                 Some((pid, data)) = self.rpc_data_rx.recv() => {
-                    if let Err(e) = self.handle_activity_update(pid, data).await{
-                        tracing::error!("Scheduler handling activity update from {}: {:?}", pid, e);
-                    }
+                    self.received_data(pid, data, &mut last_polled).await;
+                }
+                _ = tokio::time::sleep(sleep_duration) => {
+                    self.poll_queue(&mut last_polled).await;
                 }
             }
         }
+    }
+
+    async fn received_data(&mut self, pid: i32, data: ActivityUpdate, last_polled: &mut Instant) {
+        self.sched_queue.push(pid, data);
+        self.poll_queue(last_polled).await;
+    }
+
+    async fn poll_queue(&mut self, last_polled: &mut Instant) {
+        if let Some(req) = self.sched_queue.pop() {
+            if let Err(e) = self.handle_activity_update(req.pid, req.args).await {
+                tracing::error!(
+                    "Scheduler handling activity update from {}: {:?}",
+                    req.pid,
+                    e
+                );
+            }
+        }
+        *last_polled = Instant::now();
     }
 
     async fn handle_activity_update(
@@ -66,7 +87,7 @@ impl Scheduler {
                 if let Some(handle) = control.get(&active_pid) {
                     tracing::trace!("Scheduling out process {}", active_pid);
 
-                    let swap_out = {
+                    let (swap_out, old_remaining_est) = {
                         let cur_proc_dev_mapping = handle.dev_mapping();
                         if let Some(new_handle) = control.get(&pid) {
                             let (para, fut) = CallParameter::new(());
@@ -79,7 +100,7 @@ impl Scheduler {
                                 &new_handle.dev_mapping(),
                             )
                         } else {
-                            Vec::new()
+                            (Vec::new(), 0)
                         }
                     };
                     tracing::trace!("Swap out {:?} from {}", swap_out, active_pid);
@@ -96,12 +117,12 @@ impl Scheduler {
                         .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
 
                     // update statistics for old process
-                    if let Some(client) = self.clients.get_mut(&active_pid) {
-                        client.schedule_out();
+                    if let Some(client) = self.sched_queue.get_client_mut(active_pid) {
+                        client.schedule_out(old_remaining_est);
                     }
                 } else {
                     self.active_client = None;
-                    self.clients.remove(&active_pid);
+                    self.sched_queue.remove_client(active_pid);
                 }
             }
         }
@@ -111,10 +132,7 @@ impl Scheduler {
             tokio::time::sleep(delay).await;
         }
 
-        let client = self
-            .clients
-            .entry(pid)
-            .or_insert_with(|| ClientStatistics::new(pid));
+        let client = self.sched_queue.get_client_mut_or_insert(pid);
 
         self.active_client = Some(pid);
         tracing::trace!("Scheduling in process {}", pid);
@@ -128,7 +146,15 @@ impl Scheduler {
             )
             .await
             .map_err(|e| ScheduleError::RpcError("schedule in", pid, e))?;
-        client.schedule_in();
+        client.schedule_in(
+            data.mem_usage_per_device
+                .iter()
+                .map(|x| x.mem_usage_bytes)
+                .sum(),
+        );
+
+        // prevent thrashing
+        self.sched_queue.cooldown(config.schedule_cooldown);
         Ok(())
     }
 
@@ -139,7 +165,7 @@ impl Scheduler {
         cur_proc_list: Option<ProcessMetadata>,
         old_proc_mapping: &DeviceOrdinalMapping,
         new_proc_mapping: &DeviceOrdinalMapping,
-    ) -> Vec<Option<NonZeroU64>> {
+    ) -> (Vec<Option<NonZeroU64>>, u64) {
         let global_config = load_config();
         // For new process
         let mem_demanding = data
@@ -215,40 +241,17 @@ impl Scheduler {
             }
             swap_out[dev] = NonZeroU64::new(mb as u64);
         }
-        swap_out
-    }
-}
-
-struct ClientStatistics {
-    pid: i32,
-    mem_usage: usize,
-    is_active: bool,
-    schedule_start: Instant,
-    last_update: Instant,
-    active_time_history: HeapRb<Duration>,
-}
-
-impl ClientStatistics {
-    pub fn new(pid: i32) -> Self {
-        Self {
-            pid,
-            mem_usage: 0,
-            is_active: false,
-            schedule_start: Instant::now(),
-            last_update: Instant::now(),
-            active_time_history: HeapRb::new(32),
-        }
-    }
-
-    pub fn schedule_in(&mut self) {
-        self.schedule_start = Instant::now();
-        self.last_update = Instant::now();
-        self.is_active = true;
-    }
-
-    pub fn schedule_out(&mut self) {
-        self.active_time_history
-            .push_overwrite(Instant::now() - self.schedule_start);
-        self.is_active = false;
+        let old_remaining_total = mem_occupied
+            .iter()
+            .map(|(_, mem)| mem.mem_usage_bytes)
+            .sum::<u64>()
+            .saturating_sub(
+                swap_out
+                    .iter()
+                    .flatten()
+                    .map(|mb| mb.get() * 1024 * 1024)
+                    .sum::<u64>(),
+            );
+        (swap_out, old_remaining_total)
     }
 }
