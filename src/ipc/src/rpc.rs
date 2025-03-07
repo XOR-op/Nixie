@@ -17,6 +17,8 @@ pub trait Daemon {
     async fn notify_activity(params: ActivityUpdate);
 }
 
+// Services exposed by attached sidecars for applications
+// Receive requests from the daemon
 #[tarpc::service]
 pub trait Sidecar {
     async fn set_attr(params: AttrArgs);

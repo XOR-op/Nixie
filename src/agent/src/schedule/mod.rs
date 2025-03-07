@@ -1,12 +1,14 @@
 use std::sync::{Condvar, Mutex};
 
 use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
+use stats::LaunchStats;
 
 use crate::GENERIC_DATA;
 
 mod mem_ctl;
 mod stats;
 mod uvm_api;
+pub(crate) use stats::LaunchType;
 
 pub(crate) static SCHED_CTL: Scheduler = Scheduler::new();
 
@@ -14,6 +16,7 @@ struct Context {
     allow_running: bool,
     // whether we should notify the daemon we want to run
     need_prefetch: bool,
+    stats: LaunchStats,
 }
 
 impl Context {
@@ -21,6 +24,7 @@ impl Context {
         Self {
             allow_running: false,
             need_prefetch: true,
+            stats: LaunchStats::new(),
         }
     }
 
@@ -58,7 +62,7 @@ impl Scheduler {
         self.cond_var.notify_all();
     }
 
-    pub fn launch_allowed(&self) {
+    pub fn launch_allowed(&self, launch_type: LaunchType) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         if !sched_ctx.allow_running {
             // request to run
@@ -78,8 +82,7 @@ impl Scheduler {
                 allocs[entry.device as usize].alloc_count += 1;
             }
             drop(ptr_mapping);
-            crate::comm::update_activity(ActivityUpdate {
-                request_scheduling: true,
+            crate::comm::update_activity(ActivityUpdate::RequestScheduling {
                 mem_usage_per_device: allocs,
             });
         }
@@ -90,6 +93,10 @@ impl Scheduler {
             sched_ctx.need_prefetch = false;
             // prefetch and notify daemon
             crate::memory::prefetch::filtered_prefetch_impl(20, true, true);
+        }
+        match launch_type {
+            LaunchType::Kernel => sched_ctx.stats.record_launch_kernel(),
+            LaunchType::Graph => sched_ctx.stats.record_launch_graph(),
         }
     }
 }

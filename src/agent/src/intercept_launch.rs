@@ -6,7 +6,7 @@ use std::{
 use cudarc::driver::sys::{cudaError_enum, CUgraphExec, CUstream};
 use nix::libc::{self, dlsym, RTLD_NEXT};
 
-use crate::schedule::SCHED_CTL;
+use crate::schedule::{LaunchType, SCHED_CTL};
 #[repr(C)]
 pub struct CudaDim3 {
     x: u32,
@@ -50,7 +50,7 @@ pub extern "C" fn cudaLaunchKernel(
         }
         std::mem::transmute(func)
     });
-    SCHED_CTL.launch_allowed();
+    SCHED_CTL.launch_allowed(LaunchType::Kernel);
     launch_kernel_func(func, gridDim, blockDim, args, sharedMem, stream)
 }
 
@@ -64,7 +64,7 @@ pub extern "C" fn cudaGraphLaunch(graph: CUgraphExec, stream: CUstream) -> cudaE
         }
         std::mem::transmute(func)
     });
-    SCHED_CTL.launch_allowed();
+    SCHED_CTL.launch_allowed(LaunchType::Graph);
     graph_launch_func(graph, stream)
 }
 

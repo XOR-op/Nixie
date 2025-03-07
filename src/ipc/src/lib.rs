@@ -19,9 +19,11 @@ pub struct InitInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityUpdate {
-    pub request_scheduling: bool,
-    pub mem_usage_per_device: Vec<MemoryUsage>,
+pub enum ActivityUpdate {
+    RequestScheduling {
+        mem_usage_per_device: Vec<MemoryUsage>,
+    },
+    Idle,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

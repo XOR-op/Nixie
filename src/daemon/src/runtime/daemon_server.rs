@@ -321,8 +321,8 @@ fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), Dae
     }
 }
 
+// Mapping  between real GPU indices and indices exposed to processes
 #[derive(Debug, Clone)]
-
 pub(super) struct DeviceOrdinalMapping {
     real_to_visible: HashMap<i32, i32>,
     visible_to_real: HashMap<i32, i32>,
