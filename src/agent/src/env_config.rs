@@ -5,11 +5,13 @@ pub(crate) struct AgentConfig {
     pub log_level: u8, // 0=none, 1=warn, 2=info
     pub auto_dup: bool,
     pub auto_dup_delay: u64,
+    pub auto_idle: bool,
 }
 
 const DEFAULT_LOG_LEVEL: u8 = 1;
 const DEFAULT_AUTO_DUP: bool = false;
 const DEFAULT_AUTO_DUP_DELAY: u64 = 5;
+const DEFAULT_AUTO_IDLE: bool = true;
 
 impl Default for AgentConfig {
     fn default() -> Self {
@@ -17,6 +19,7 @@ impl Default for AgentConfig {
             log_level: DEFAULT_LOG_LEVEL,
             auto_dup: DEFAULT_AUTO_DUP,
             auto_dup_delay: DEFAULT_AUTO_DUP_DELAY,
+            auto_idle: DEFAULT_AUTO_IDLE,
         }
     }
 }
@@ -52,6 +55,13 @@ pub(crate) fn agent_config() -> &'static AgentConfig {
                                 cfg.auto_dup_delay = match val.parse() {
                                     Ok(num) => num,
                                     _ => DEFAULT_AUTO_DUP_DELAY,
+                                }
+                            }
+                            "auto_idle" | "autoidle" | "idle" => {
+                                cfg.auto_idle = match val.to_lowercase().as_str() {
+                                    "true" | "1" | "yes" => true,
+                                    "false" | "0" | "no" => false,
+                                    _ => DEFAULT_AUTO_IDLE,
                                 }
                             }
                             _ => {}

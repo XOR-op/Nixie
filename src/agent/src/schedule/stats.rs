@@ -34,6 +34,7 @@ impl LaunchStats {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum LaunchType {
     Kernel,
     Graph,

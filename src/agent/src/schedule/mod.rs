@@ -1,9 +1,12 @@
-use std::sync::{Condvar, Mutex};
+use std::{
+    sync::{atomic::AtomicBool, Condvar, Mutex},
+    time::Duration,
+};
 
 use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 use stats::LaunchStats;
 
-use crate::GENERIC_DATA;
+use crate::{env_config::agent_config, GENERIC_DATA};
 
 mod mem_ctl;
 mod stats;
@@ -47,7 +50,8 @@ impl Scheduler {
         }
     }
 
-    pub fn set_allow_running(&self, params: SchedulingArgs) {
+    pub fn set_allow_running(&'static self, params: SchedulingArgs) {
+        self.spawn_idle_monitor_once();
         let mut allow_running = self.allow_running.lock().unwrap();
         match params {
             SchedulingArgs::Enable { prefetch } => {
@@ -62,7 +66,7 @@ impl Scheduler {
         self.cond_var.notify_all();
     }
 
-    pub fn launch_allowed(&self, launch_type: LaunchType) {
+    pub fn launch_allowed(&'static self, launch_type: LaunchType) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         if !sched_ctx.allow_running {
             // request to run
@@ -97,6 +101,44 @@ impl Scheduler {
         match launch_type {
             LaunchType::Kernel => sched_ctx.stats.record_launch_kernel(),
             LaunchType::Graph => sched_ctx.stats.record_launch_graph(),
+        }
+    }
+
+    fn spawn_idle_monitor_once(&'static self) {
+        static SPAWNED: AtomicBool = AtomicBool::new(false);
+        if SPAWNED
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            const KERNEL_INTERVAL: Duration = Duration::from_millis(500);
+            const GRAPH_INTERVAL: Duration = Duration::from_millis(1000);
+            assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
+            if agent_config().auto_idle {
+                tokio::spawn(async {
+                    tokio::time::sleep(GRAPH_INTERVAL).await;
+                    loop {
+                        {
+                            let mut context = self.allow_running.lock().unwrap();
+                            if context.allow_running {
+                                // check idle
+                                if context.stats.graph_elapsed() > GRAPH_INTERVAL
+                                    && context.stats.kernel_elapsed() > KERNEL_INTERVAL
+                                {
+                                    // should not use disable() here since we don't need prefetch
+                                    context.allow_running = false;
+                                    crate::comm::update_activity(ActivityUpdate::Idle);
+                                }
+                            }
+                        }
+                        tokio::time::sleep(KERNEL_INTERVAL).await;
+                    }
+                });
+            }
         }
     }
 }
