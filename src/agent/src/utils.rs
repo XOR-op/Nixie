@@ -58,3 +58,30 @@ pub(crate) fn set_device(dev: i32) {
     let res = unsafe { cuda_lib().cuCtxSetCurrent(cu_ctx) };
     check_cu_err!(res, "cuCtxSetCurrent");
 }
+
+// restore the context when dropped
+pub(crate) struct CudaContextGuard {
+    ctx_ptr: cudarc::driver::sys::CUcontext,
+    // mark as !Send
+    _marker: std::marker::PhantomData<std::cell::Cell<()>>,
+}
+
+impl CudaContextGuard {
+    pub fn new() -> Self {
+        let mut cu_ctx = std::ptr::null_mut();
+        let res = unsafe { cuda_lib().cuCtxGetCurrent(&mut cu_ctx) };
+        check_cu_err!(res, "cuCtxGetCurrent");
+        assert!(!cu_ctx.is_null());
+        Self {
+            ctx_ptr: cu_ctx,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for CudaContextGuard {
+    fn drop(&mut self) {
+        let res = unsafe { cuda_lib().cuCtxSetCurrent(self.ctx_ptr) };
+        check_cu_err!(res, "cuCtxSetCurrent");
+    }
+}

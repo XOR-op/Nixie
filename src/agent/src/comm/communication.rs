@@ -50,6 +50,7 @@ fn init_comm_inner() -> std::io::Result<flume::Sender<A2SMessage>> {
     Ok(tx)
 }
 
+// this function should be called in a separate thread
 async fn create_comm(conn: UnixStream, p2s_rx: flume::Receiver<A2SMessage>) {
     let mut codec_builder = LengthDelimitedCodec::builder();
     codec_builder.max_frame_length(64 * 1024 * 1024);

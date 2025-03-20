@@ -6,7 +6,7 @@ use std::{
 use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 use stats::LaunchStats;
 
-use crate::{env_config::agent_config, GENERIC_DATA};
+use crate::{env_config::agent_config, utils::CudaContextGuard, GENERIC_DATA};
 
 mod mem_ctl;
 mod stats;
@@ -96,6 +96,7 @@ impl Scheduler {
         if sched_ctx.need_prefetch {
             sched_ctx.need_prefetch = false;
             // prefetch and notify daemon
+            let _guard = CudaContextGuard::new();
             crate::memory::prefetch::filtered_prefetch_impl(20, true, true);
         }
         match launch_type {

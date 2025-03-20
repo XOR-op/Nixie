@@ -9,8 +9,11 @@ use std::{
 };
 
 use crate::{
-    env_config::agent_config, info_eprintln, intercept_launch::is_during_capture,
-    utils::set_device, FusedPtrMapping, GENERIC_DATA,
+    env_config::agent_config,
+    info_eprintln,
+    intercept_launch::is_during_capture,
+    utils::{set_device, CudaContextGuard},
+    FusedPtrMapping, GENERIC_DATA,
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,7 @@ impl DupDaemon {
     }
 
     pub fn mark_as_dup(&mut self, mut table_handle: FusedPtrMapping<'_>) {
+        let _guard = CudaContextGuard::new();
         let dup_threshold = Duration::from_secs(agent_config().auto_dup_delay);
         // split by time reaching the threshold
         let now = Instant::now();
