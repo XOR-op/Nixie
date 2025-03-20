@@ -1,4 +1,4 @@
-use cudarc::driver::sys::CUstream;
+use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUstream};
 use nihilipc::{
     shm::{AllocationEntry, Shm, ShmGuard, ShmVec},
     sync::IpcMutexGuard,
@@ -33,7 +33,27 @@ unsafe impl Sync for CuStreamWrapper {}
 pub(crate) static PREFETCH_REQ_QUEUE: OnceLock<mpsc::Sender<u64>> = OnceLock::new();
 
 /// All streams used for prefetching
-pub(crate) static STREAM_VEC: OnceLock<Vec<CuStreamWrapper>> = OnceLock::new();
+
+pub(crate) fn stream_get_or_init() -> &'static Vec<CuStreamWrapper> {
+    static STREAM_VEC: OnceLock<Vec<CuStreamWrapper>> = OnceLock::new();
+    STREAM_VEC.get_or_init(|| {
+        let mut vec = Vec::new();
+        for _ in 0..8 {
+            let mut stream = std::ptr::null_mut();
+            let res = unsafe {
+                cuda_lib().cuStreamCreate(
+                    &mut stream,
+                    cudarc::driver::sys::CUstream_flags_enum::CU_STREAM_NON_BLOCKING as u32,
+                )
+            };
+            if res != cudaError_enum::CUDA_SUCCESS {
+                panic!("Failed to create stream: {:?}", res);
+            }
+            vec.push(CuStreamWrapper(stream));
+        }
+        vec
+    })
+}
 
 pub(crate) static GENERIC_DATA: OnceLock<GenericData> = OnceLock::new();
 

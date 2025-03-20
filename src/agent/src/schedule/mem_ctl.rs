@@ -7,15 +7,16 @@ use crate::{
     intercept::VALID_UVM_FD,
     memory::{prefetch::prefetch_call, CUDA_CPU_DEVICE_ID},
     schedule::uvm_api::{self, UvmSetReadDuplicationParams, UvmUnsetPreferredLocationParams},
+    stream_get_or_init,
     utils::{set_device, size_to_string},
-    warn_eprintln, GENERIC_DATA, STREAM_VEC,
+    warn_eprintln, GENERIC_DATA,
 };
 
 use super::uvm_api::NV_PROCESSOR_UUID_CPU_DEFAULT;
 
 // release most `size_mb` MB of memory
 pub(crate) fn release_gpu_mem(size_mb: Vec<Option<NonZeroU64>>, blocking: bool) {
-    let streams = STREAM_VEC.get().unwrap();
+    let streams = stream_get_or_init();
     let stream_idx = 0;
     let mut remaining_bytes = size_mb
         .iter()

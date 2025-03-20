@@ -4,13 +4,12 @@ use nihilipc::shm::AllocationEntry;
 use std::sync::mpsc;
 
 use crate::{
-    info_eprintln, memory::CUDA_CPU_DEVICE_ID, utils::size_to_string, warn_eprintln,
-    CuStreamWrapper, GENERIC_DATA, PREFETCH_REQ_QUEUE, STREAM_VEC,
+    info_eprintln, memory::CUDA_CPU_DEVICE_ID, stream_get_or_init, utils::size_to_string,
+    warn_eprintln, CuStreamWrapper, GENERIC_DATA, PREFETCH_REQ_QUEUE,
 };
 
 pub(crate) fn filtered_prefetch_impl(size_mb: u64, to_gpu: bool, blocking: bool) {
-    init_streams();
-    let streams = STREAM_VEC.get().unwrap();
+    let streams = stream_get_or_init();
     let stream_idx = 0;
     let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
     for entry in ptr_mapping.iter_mut() {
@@ -87,24 +86,4 @@ pub fn filtered_prefetch_non_blocking(size_mb: u64, to_gpu: bool) -> u64 {
     );
     dbg!(sender.send(size_mb).ok());
     0
-}
-
-fn init_streams() {
-    STREAM_VEC.get_or_init(|| {
-        let mut vec = Vec::new();
-        for _ in 0..8 {
-            let mut stream = std::ptr::null_mut();
-            let res = unsafe {
-                cuda_lib().cuStreamCreate(
-                    &mut stream,
-                    cudarc::driver::sys::CUstream_flags_enum::CU_STREAM_NON_BLOCKING as u32,
-                )
-            };
-            if res != cudaError_enum::CUDA_SUCCESS {
-                panic!("Failed to create stream: {:?}", res);
-            }
-            vec.push(CuStreamWrapper(stream));
-        }
-        vec
-    });
 }
