@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     num::NonZeroU64,
     sync::Arc,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 use tokio::sync::RwLock;
@@ -17,14 +17,13 @@ use crate::{
 
 use super::{
     daemon_server::{DaemonServerHandle, DeviceOrdinalMapping},
-    sched_policy::ScheduleQueue,
+    schedule::policy::ScheduleQueue,
     ProcessMetadata,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ActiveClientStat {
     pid: i32,
-    last_idle_notification: Option<SystemTime>,
 }
 
 pub struct Scheduler {
@@ -143,7 +142,7 @@ impl Scheduler {
 
                     // update statistics for old process
                     if let Some(client) = self.sched_queue.get_client_mut(active_client.pid) {
-                        client.schedule_out(old_remaining_est);
+                        client.schedule_out(Some(old_remaining_est));
                     }
                 } else {
                     self.active_client = None;
@@ -159,10 +158,7 @@ impl Scheduler {
 
         let client = self.sched_queue.get_client_mut_or_insert(pid);
 
-        self.active_client = Some(ActiveClientStat {
-            pid,
-            last_idle_notification: None,
-        });
+        self.active_client = Some(ActiveClientStat { pid });
         tracing::trace!("Scheduling in process {}", pid);
         control
             .get(&pid)
@@ -178,6 +174,15 @@ impl Scheduler {
             .await
             .map_err(|e| ScheduleError::RpcError("schedule in", pid, e))?;
         client.schedule_in(mem_usage_per_device.iter().map(|x| x.mem_usage_bytes).sum());
+        tracing::debug!(
+            "Process {}: {:?}, cooldown={:.2}s",
+            pid,
+            client,
+            config
+                .schedule_cooldown
+                .map(|d| d.as_secs_f64())
+                .unwrap_or_default()
+        );
 
         // prevent thrashing
         self.sched_queue.cooldown(config.schedule_cooldown);
@@ -186,10 +191,12 @@ impl Scheduler {
 
     async fn handle_activity_idle(&mut self, pid: i32) {
         if let Some(active_client) = &mut self.active_client {
-            if active_client.pid == pid {
-                active_client.last_idle_notification = Some(SystemTime::now());
-                tracing::debug!("Process {} becomes idle", pid);
-                return;
+            if let Some(client) = self.sched_queue.get_client_mut(pid) {
+                if active_client.pid == pid {
+                    client.schedule_out(None);
+                    tracing::debug!("Process {} becomes idle", pid);
+                    return;
+                }
             }
         }
         tracing::error!("Process {} becomes idle but is not active client", pid);
@@ -198,7 +205,7 @@ impl Scheduler {
     // Devices in and out are not global indexed but per process
     // We should perform corresponding mapping accordingly
     fn compute_eviction(
-        mem_usage_per_device: &Vec<MemoryUsage>,
+        mem_usage_per_device: &[MemoryUsage],
         cur_proc_list: Option<ProcessMetadata>,
         old_proc_mapping: &DeviceOrdinalMapping,
         new_proc_mapping: &DeviceOrdinalMapping,

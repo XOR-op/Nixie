@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -15,6 +16,23 @@ pub struct Config {
     pub schedule_cooldown: Option<Duration>,
 }
 
+impl Config {
+    pub fn to_configurable_args(&self) -> ConfigurableArgs {
+        ConfigurableArgs {
+            schedule_delay: self.schedule_delay,
+            schedule_cooldown: self.schedule_cooldown,
+            device_threshold: Some(self.device_threshold),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigurableArgs {
+    pub schedule_delay: Option<Duration>,
+    pub schedule_cooldown: Option<Duration>,
+    pub device_threshold: Option<f64>,
+}
+
 static CONFIG: RwLock<Option<Arc<Config>>> = RwLock::new(None);
 
 pub fn load_config() -> Arc<Config> {
@@ -26,7 +44,7 @@ pub fn load_config() -> Arc<Config> {
         .clone()
 }
 
-pub fn init_config() -> Result<(), DaemonError> {
+pub fn init_config(config_path: Option<PathBuf>) -> Result<(), DaemonError> {
     let nvml = crate::staticly::get_nvml();
     let devices = nvml
         .device_count()
@@ -41,21 +59,42 @@ pub fn init_config() -> Result<(), DaemonError> {
             .map_err(|e| DaemonError::Nvml("memory_info", e))?;
         device_memory_mb.push(memory.total / 1024 / 1024);
     }
-    let mut guard = CONFIG.write().unwrap();
-    if guard.is_some() {
-        panic!("config already initialized");
-    }
-    *guard = Some(Arc::new(Config {
+    // default value
+    let mut config = Config {
         device_memory_mb,
         device_threshold: 0.95,
         schedule_delay: None,
         schedule_cooldown: None,
-    }));
+    };
+
+    if let Some(config_path) = config_path {
+        let config_content = std::fs::read_to_string(config_path)
+            .map_err(|e| DaemonError::Io("read config file", e))?;
+        let loaded_config: ConfigurableArgs =
+            toml::from_str(&config_content).map_err(|e| DaemonError::Config("parse toml", e))?;
+        update_config_from(&mut config, loaded_config);
+    }
+
+    let mut guard = CONFIG.write().unwrap();
+    if guard.is_some() {
+        panic!("config already initialized");
+    }
+    *guard = Some(Arc::new(config));
     Ok(())
 }
 
-pub fn update_config(config: Config) {
+pub fn update_config(config: ConfigurableArgs) {
     let mut guard = CONFIG.write().unwrap();
-    *guard = Some(Arc::new(config));
+    let mut val = guard.as_ref().unwrap().as_ref().clone();
+    update_config_from(&mut val, config);
+    *guard = Some(Arc::new(val));
     tracing::info!("config updated: {:?}", guard.as_ref().unwrap());
+}
+
+fn update_config_from(config: &mut Config, args: ConfigurableArgs) {
+    config.schedule_delay = args.schedule_delay;
+    config.schedule_cooldown = args.schedule_cooldown;
+    if let Some(device_threshold) = args.device_threshold {
+        config.device_threshold = device_threshold;
+    }
 }

@@ -21,6 +21,8 @@ pub enum DaemonError {
     Cuda(&'static str, cudarc::driver::sys::cudaError_enum),
     #[error("{0}: NVML error {1}")]
     Nvml(&'static str, nvml_wrapper::error::NvmlError),
+    #[error("{0}: Config error {1}")]
+    Config(&'static str, toml::de::Error),
 }
 
 #[derive(Debug, Error)]

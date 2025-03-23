@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use control::client::ControlClient;
@@ -106,9 +108,15 @@ struct UpdateConfigArgs {
 }
 
 #[derive(Debug, Parser)]
+struct DaemonArgs {
+    #[arg(short, long)]
+    pub config_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
 #[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
-    Daemon,
+    Daemon(DaemonArgs),
     Prefetch(PrefetchArgs),
     ReadDup(ReadDupArgs),
     ReduceMove(ReduceMoveArgs),
@@ -136,13 +144,13 @@ impl ProcArgs {
 
 fn main() {
     let args: Args = Args::parse();
-    if matches!(args, Args::Daemon) {
+    if let Args::Daemon(args) = args {
         if !is_root::is_root() {
             eprintln!("Error: nihilphase daemon must be run as root");
             std::process::exit(1);
         }
         let runtime = runtime::Daemon::new();
-        runtime.run();
+        runtime.run(args.config_path);
         std::process::exit(0);
     }
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -196,7 +204,7 @@ fn main() {
                     }
                 }
             }
-            Args::Daemon => unreachable!(),
+            Args::Daemon(_) => unreachable!(),
         };
     });
 }

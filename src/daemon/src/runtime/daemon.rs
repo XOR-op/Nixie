@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{init_config, update_config, Config},
+    config::{init_config, update_config, Config, ConfigurableArgs},
     control::{self, AttrMsg, Controllable, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
     general::{CallFuture, CallParameter},
@@ -55,7 +55,7 @@ impl Daemon {
         }
     }
 
-    pub fn run(self) {
+    pub fn run(self, config_path: Option<PathBuf>) {
         crate::logging::init_tracing();
         tracing::info!("Starting daemon...");
         if unsafe { cudarc::driver::sys::lib().cuInit(0) }
@@ -64,7 +64,7 @@ impl Daemon {
             tracing::error!("Failed to initialize CUDA");
             return;
         }
-        if let Err(e) = init_config() {
+        if let Err(e) = init_config(config_path) {
             tracing::error!("Failed to init config: {}", e);
             return;
         }
@@ -223,7 +223,7 @@ impl Controllable for ControllableDaemon {
             .await;
     }
 
-    async fn update_config(self, _context: Context, config: Config) {
+    async fn update_config(self, _context: Context, config: ConfigurableArgs) {
         update_config(config);
     }
 

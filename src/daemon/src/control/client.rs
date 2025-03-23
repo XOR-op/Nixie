@@ -4,7 +4,9 @@ use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::{error::DaemonError, general::pretty_size, ProcArgs, UpdateConfigArgs};
+use crate::{
+    control::AllocationData, error::DaemonError, general::pretty_size, ProcArgs, UpdateConfigArgs,
+};
 
 use super::{AttrMsg, ControllableClient, PrefetchMsg};
 
@@ -116,14 +118,13 @@ impl ControlClient {
         // print info
         println!("Active processes: {}", processes.len());
         for process in processes {
-            let group_by_device =
-                process
-                    .allocations
-                    .iter()
-                    .fold(std::collections::BTreeMap::new(), |mut acc, a| {
-                        acc.entry(a.device).or_insert(Vec::new()).push(a.clone());
-                        acc
-                    });
+            let group_by_device = process.allocations.iter().fold(
+                std::collections::BTreeMap::<i32, Vec<AllocationData>>::new(),
+                |mut acc, a| {
+                    acc.entry(a.device).or_default().push(a.clone());
+                    acc
+                },
+            );
             let process_name = std::fs::read_to_string(format!("/proc/{}/comm", process.pid))
                 .map(|s| s.trim().to_string())
                 .ok();
@@ -195,7 +196,7 @@ impl ControlClient {
             }
         }
         self.client
-            .update_config(tarpc::context::current(), config.clone())
+            .update_config(tarpc::context::current(), config.to_configurable_args())
             .await
             .map_err(|e| DaemonError::ClientRpc("update_config, failed to update", e))?;
         Ok(())

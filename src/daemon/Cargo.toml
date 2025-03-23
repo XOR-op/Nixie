@@ -44,3 +44,4 @@ syscalls = { version = "0.6.18", features = ["x86_64"] }
 ringbuffer = "0.15.0"
 hashlink = "0.10.0"
 nvml-wrapper = "0.10.0"
+toml = "0.8.20"
