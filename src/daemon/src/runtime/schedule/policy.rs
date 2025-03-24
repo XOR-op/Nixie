@@ -18,24 +18,59 @@ impl std::fmt::Debug for RunningChunk {
     }
 }
 
+#[derive(Clone)]
+enum ClientState {
+    Active { since: Instant },
+    Idle,
+    ResidentIdle,
+    ScheduleWaiting { since: Instant },
+}
+
+impl std::fmt::Debug for ClientState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientState::Active { since } => {
+                write!(f, "Active since {:.2}s ago", since.elapsed().as_secs_f64())
+            }
+            ClientState::Idle => {
+                write!(f, "Idle")
+            }
+            ClientState::ResidentIdle => {
+                write!(f, "ResidentIdle")
+            }
+            ClientState::ScheduleWaiting { since } => {
+                write!(
+                    f,
+                    "ScheduleWaiting since {:.2}s ago",
+                    since.elapsed().as_secs_f64()
+                )
+            }
+        }
+    }
+}
+
+impl ClientState {
+    pub fn is_active(&self) -> bool {
+        matches!(self, ClientState::Active { .. })
+    }
+}
+
 pub(crate) struct ClientStatistics {
     pid: i32,
     // across all devices
     allocated_mem_est: u64,
     // across all devices
     on_gpu_mem_est: u64,
-    is_active: bool,
-    schedule_start: Instant,
-    last_update: Instant,
+
+    state: ClientState,
     active_time_history: AllocRingBuffer<RunningChunk>,
 }
 
 impl std::fmt::Debug for ClientStatistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let history = self.active_time_history.iter().collect::<Vec<_>>();
-        write!(f, "ClientStatistics {{ alloc_est: {} MB, on_gpu_est: {} MB, active: {}, schedule_start: {:?}s ago, last_update: {:?}s ago, active_time_history: {:?} }}", 
-            self.allocated_mem_est/1024/1024, self.on_gpu_mem_est/1024/1024, self.is_active,
-            self.schedule_start.elapsed().as_secs(), self.last_update.elapsed().as_secs(), history)
+        write!(f, "ClientStatistics {{ alloc_est: {} MB, on_gpu_est: {} MB, state: [{:?}], active_time_history: {:?} }}", 
+            self.allocated_mem_est/1024/1024, self.on_gpu_mem_est/1024/1024, self.state, history)
     }
 }
 
@@ -45,29 +80,62 @@ impl ClientStatistics {
             pid,
             allocated_mem_est: 0,
             on_gpu_mem_est: 0,
-            is_active: false,
-            schedule_start: Instant::now(),
-            last_update: Instant::now(),
+            state: ClientState::Idle,
             active_time_history: AllocRingBuffer::new(32),
         }
     }
 
-    pub fn schedule_in(&mut self, mem_est: u64) {
-        self.schedule_start = Instant::now();
-        self.last_update = Instant::now();
+    pub fn make_active(&mut self, mem_est: u64) {
+        if self.state.is_active() {
+            tracing::error!("make_active: Client {} is already active", self.pid);
+        }
+        self.state = ClientState::Active {
+            since: Instant::now(),
+        };
         self.allocated_mem_est = mem_est;
-        self.is_active = true;
     }
 
-    pub fn schedule_out(&mut self, on_gpu_est: Option<u64>) {
-        self.active_time_history.push(RunningChunk {
-            start: self.schedule_start,
-            end: Instant::now(),
-        });
-        self.is_active = false;
-        if let Some(on_gpu_est) = on_gpu_est {
-            self.on_gpu_mem_est = on_gpu_est;
+    pub fn make_resident_idle(&mut self) {
+        match &self.state {
+            ClientState::Active { since } => {
+                self.active_time_history.push(RunningChunk {
+                    start: *since,
+                    end: Instant::now(),
+                });
+            }
+            state => {
+                tracing::error!(
+                    "make_resident_idle: Client {} is not active, but in state {:?}",
+                    self.pid,
+                    state
+                )
+            }
         }
+        self.state = ClientState::ResidentIdle;
+    }
+
+    pub fn make_idle(&mut self) {
+        match &self.state {
+            ClientState::Active { since } => {
+                self.active_time_history.push(RunningChunk {
+                    start: *since,
+                    end: Instant::now(),
+                });
+            }
+            ClientState::ResidentIdle => {}
+            state => {
+                tracing::error!(
+                    "make_idle: Client {} is not active, but in state {:?}",
+                    self.pid,
+                    state
+                )
+            }
+        }
+        self.state = ClientState::Idle;
+    }
+
+    pub fn update_on_gpu_mem_est(&mut self, on_gpu_est: u64) {
+        self.on_gpu_mem_est = on_gpu_est;
     }
 }
 

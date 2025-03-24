@@ -21,15 +21,17 @@ use super::{
     ProcessMetadata,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ActiveClientStat {
-    pid: i32,
+#[derive(Debug, Clone, Copy)]
+enum ActiveClientState {
+    None,
+    Active { pid: i32 },
+    LastActive { pid: i32, last_active: Instant },
 }
 
 pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
     rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
-    active_client: Option<ActiveClientStat>,
+    active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
 }
 
@@ -41,7 +43,7 @@ impl Scheduler {
         Self {
             list,
             rpc_data_rx,
-            active_client: None,
+            active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
         }
     }
@@ -97,21 +99,36 @@ impl Scheduler {
 
     async fn handle_sched_request(
         &mut self,
-        pid: i32,
+        incoming_pid: i32,
         mem_usage_per_device: Vec<MemoryUsage>,
     ) -> Result<(), ScheduleError> {
         let control = self.list.write().await;
         let mut should_prefetch = false;
-        if let Some(active_client) = self.active_client {
-            if pid != active_client.pid {
+        let mut swap_out_mb = None;
+        if let Some(active_pid) = match self.active_client {
+            ActiveClientState::None => None,
+            ActiveClientState::Active { pid } => {
+                if let Some(client) = self.sched_queue.get_client_mut(pid) {
+                    client.make_idle();
+                }
+                Some(pid)
+            }
+            ActiveClientState::LastActive { pid, .. } => {
+                if let Some(client) = self.sched_queue.get_client_mut(pid) {
+                    client.make_idle();
+                }
+                Some(pid)
+            }
+        } {
+            if incoming_pid != active_pid {
                 should_prefetch = true;
                 // active pid can exit before scheduler knows
-                if let Some(handle) = control.get(&active_client.pid) {
-                    tracing::trace!("Scheduling out process {}", active_client.pid);
+                if let Some(handle) = control.get(&active_pid) {
+                    tracing::trace!("Scheduling out process {}", active_pid);
 
                     let (swap_out, old_remaining_est) = {
                         let cur_proc_dev_mapping = handle.dev_mapping();
-                        if let Some(new_handle) = control.get(&pid) {
+                        if let Some(new_handle) = control.get(&incoming_pid) {
                             let (para, fut) = CallParameter::new(());
                             let _ = handle.inst_tx().send(ProcCtlReq::List(para));
                             let cur_list = fut.await;
@@ -125,8 +142,9 @@ impl Scheduler {
                             (Vec::new(), 0)
                         }
                     };
-                    tracing::trace!("Swap out {:?} from {}", swap_out, active_client.pid);
+                    tracing::trace!("Swap out {:?} from {}", swap_out, active_pid);
 
+                    swap_out_mb = Some(swap_out.iter().map(|x| x.map_or(0, |x| x.get())).sum());
                     handle
                         .client()
                         .schedule(
@@ -136,17 +154,15 @@ impl Scheduler {
                             },
                         )
                         .await
-                        .map_err(|e| {
-                            ScheduleError::RpcError("schedule out", active_client.pid, e)
-                        })?;
-
+                        .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
                     // update statistics for old process
-                    if let Some(client) = self.sched_queue.get_client_mut(active_client.pid) {
-                        client.schedule_out(Some(old_remaining_est));
+                    if let Some(client) = self.sched_queue.get_client_mut(active_pid) {
+                        client.update_on_gpu_mem_est(old_remaining_est);
                     }
                 } else {
-                    self.active_client = None;
-                    self.sched_queue.remove_client(active_client.pid);
+                    // the previous active process has exited
+                    self.active_client = ActiveClientState::None;
+                    self.sched_queue.remove_client(active_pid);
                 }
             }
         }
@@ -156,12 +172,12 @@ impl Scheduler {
             tokio::time::sleep(delay).await;
         }
 
-        let client = self.sched_queue.get_client_mut_or_insert(pid);
+        let client = self.sched_queue.get_client_mut_or_insert(incoming_pid);
 
-        self.active_client = Some(ActiveClientStat { pid });
-        tracing::trace!("Scheduling in process {}", pid);
+        self.active_client = ActiveClientState::Active { pid: incoming_pid };
+        tracing::trace!("Scheduling in process {}", incoming_pid);
         control
-            .get(&pid)
+            .get(&incoming_pid)
             .unwrap()
             .client()
             .schedule(
@@ -172,28 +188,31 @@ impl Scheduler {
                 },
             )
             .await
-            .map_err(|e| ScheduleError::RpcError("schedule in", pid, e))?;
-        client.schedule_in(mem_usage_per_device.iter().map(|x| x.mem_usage_bytes).sum());
+            .map_err(|e| ScheduleError::RpcError("schedule in", incoming_pid, e))?;
+        client.make_active(mem_usage_per_device.iter().map(|x| x.mem_usage_bytes).sum());
+        let cooldown = compute_cooldown(swap_out_mb.unwrap_or_default(), config.schedule_cooldown);
         tracing::debug!(
             "Process {}: {:?}, cooldown={:.2}s",
-            pid,
+            incoming_pid,
             client,
-            config
-                .schedule_cooldown
-                .map(|d| d.as_secs_f64())
-                .unwrap_or_default()
+            cooldown.as_secs_f64()
         );
 
         // prevent thrashing
-        self.sched_queue.cooldown(config.schedule_cooldown);
+        self.sched_queue.cooldown(Some(cooldown));
         Ok(())
     }
 
     async fn handle_activity_idle(&mut self, pid: i32) {
-        if let Some(active_client) = &mut self.active_client {
+        // TODO: LastActive
+        if let ActiveClientState::Active { pid: active_pid } = self.active_client {
             if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                if active_client.pid == pid {
-                    client.schedule_out(None);
+                if active_pid == pid {
+                    client.make_resident_idle();
+                    self.active_client = ActiveClientState::LastActive {
+                        pid,
+                        last_active: Instant::now(),
+                    };
                     tracing::debug!("Process {} becomes idle", pid);
                     return;
                 }
@@ -293,4 +312,12 @@ impl Scheduler {
             );
         (swap_out, old_remaining_total)
     }
+}
+
+fn compute_cooldown(migration_mb: u64, config_cooldown: Option<Duration>) -> Duration {
+    // max of both
+    let pcie_speed = 16.0; // GB/s
+    let migration_s = Duration::from_secs_f64(migration_mb as f64 / 1024.0 / pcie_speed * 1.5);
+    let cooldown = migration_s * 2;
+    config_cooldown.unwrap_or_default().max(cooldown)
 }
