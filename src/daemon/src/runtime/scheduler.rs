@@ -22,7 +22,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, Copy)]
-enum ActiveClientState {
+pub(super) enum ActiveClientState {
     None,
     Active { pid: i32 },
     LastActive { pid: i32, last_active: Instant },
@@ -70,7 +70,7 @@ impl Scheduler {
     }
 
     async fn poll_queue(&mut self, last_polled: &mut Instant) {
-        if let Some(req) = self.sched_queue.pop() {
+        if let Some(req) = self.sched_queue.pop(self.active_client) {
             if let Err(e) = self.handle_activity_update(req.pid, req.args).await {
                 tracing::error!(
                     "Scheduler handling activity update from {}: {:?}",
