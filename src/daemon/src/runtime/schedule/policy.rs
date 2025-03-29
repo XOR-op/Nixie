@@ -7,7 +7,10 @@ use nihilipc::ActivityUpdate;
 
 use crate::runtime::scheduler::ActiveClientState;
 
-use super::statistics::{ClientStatistics, RunningChunk};
+use super::{
+    statistics::{ClientStatistics, RunningChunk},
+    PriorityLevel,
+};
 
 #[derive(Debug, Clone)]
 pub struct SchedRequest {
@@ -18,8 +21,10 @@ pub struct SchedRequest {
 
 pub struct ScheduleQueue {
     sched_req: VecDeque<SchedRequest>,
+    notify_req: VecDeque<SchedRequest>,
     clients: HashMap<i32, ClientStatistics>,
     cooldown_until: Instant,
+    active_client: ActiveClientState,
 }
 
 // interface to the scheduler
@@ -27,8 +32,10 @@ impl ScheduleQueue {
     pub fn new() -> Self {
         Self {
             sched_req: VecDeque::new(),
+            notify_req: VecDeque::new(),
             clients: HashMap::new(),
             cooldown_until: Instant::now(),
+            active_client: ActiveClientState::None,
         }
     }
 
@@ -61,7 +68,7 @@ impl ScheduleQueue {
         match &args {
             ActivityUpdate::Idle => {
                 // higher priority for idle
-                self.sched_req.push_front(SchedRequest {
+                self.notify_req.push_front(SchedRequest {
                     pid,
                     args,
                     time: Instant::now(),
@@ -78,17 +85,60 @@ impl ScheduleQueue {
     }
 
     pub fn pop(&mut self, active_client: ActiveClientState) -> Option<SchedRequest> {
+        self.update_priority();
         self.compute_prioritization();
+        if let Some(front) = self.notify_req.pop_front() {
+            return Some(front);
+        }
         let will_preempt = self.compute_preemption(active_client);
-        if Instant::now() < self.cooldown_until && !will_preempt {
+        if Instant::now() < self.cooldown_until || !will_preempt {
             None
         } else {
             self.sched_req.pop_front()
         }
     }
 
+    pub fn update_active(&mut self, active_client: ActiveClientState) {
+        self.active_client = active_client;
+    }
+
+    fn update_priority(&mut self) {
+        let active = match self.active_client {
+            ActiveClientState::Active { pid, since } => Some((pid, since)),
+            _ => None,
+        };
+        for (_, client) in self.clients.iter_mut() {
+            if let Some(active_since) = active
+                .filter(|(pid, _)| *pid == client.pid)
+                .map(|(_, since)| since)
+            {
+                // active client
+                if active_since.elapsed() > Duration::from_secs(10)
+                    && client.priority_since() > Duration::from_secs(10)
+                {
+                    if client.decrease_priority(Some(PriorityLevel::Batch)) {
+                        tracing::trace!(
+                            "Process {}: priority decreased to {:?}",
+                            client.pid,
+                            client.priority.level()
+                        );
+                    }
+                }
+            } else {
+                if client.priority_since() > Duration::from_secs(30) {
+                    if client.increase_priority(None) {
+                        tracing::trace!(
+                            "Process {}: priority increased to {:?}",
+                            client.pid,
+                            client.priority.level()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn compute_prioritization(&mut self) {
-        // let current = Instant::now();
         // sort by priority
         self.sched_req.make_contiguous().sort_by(|a, b| {
             let Some(stat_a) = self.clients.get(&a.pid) else {
@@ -97,9 +147,6 @@ impl ScheduleQueue {
             let Some(stat_b) = self.clients.get(&b.pid) else {
                 return std::cmp::Ordering::Less;
             };
-            // let rank_a = ranking_running_history(stat_a.active_time_history.iter(), &current);
-            // let rank_b = ranking_running_history(stat_b.active_time_history.iter(), &current);
-            // rank_a.total_cmp(&rank_b)
             match stat_a.priority.level().cmp(&stat_b.priority.level()) {
                 std::cmp::Ordering::Equal => {
                     // if same priority, sort by time
@@ -116,12 +163,14 @@ impl ScheduleQueue {
             if let Some(active_stat) = self.clients.get(&pid) {
                 if let Some(front) = self.sched_req.front() {
                     if let Some(front_stats) = self.clients.get(&front.pid) {
-                        return front_stats.priority.level() > active_stat.priority.level();
+                        // only preempt if the most front process has higher or equal priority
+                        return front_stats.priority.level() >= active_stat.priority.level();
                     }
                 }
             }
+            return false;
         }
-        false
+        true
     }
 }
 

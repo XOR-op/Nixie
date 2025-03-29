@@ -24,7 +24,7 @@ use super::{
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ActiveClientState {
     None,
-    Active { pid: i32 },
+    Active { pid: i32, since: Instant },
     LastActive { pid: i32, last_active: Instant },
 }
 
@@ -70,6 +70,7 @@ impl Scheduler {
     }
 
     async fn poll_queue(&mut self, last_polled: &mut Instant) {
+        self.sched_queue.update_active(self.active_client);
         if let Some(req) = self.sched_queue.pop(self.active_client) {
             if let Err(e) = self.handle_activity_update(req.pid, req.args).await {
                 tracing::error!(
@@ -107,7 +108,7 @@ impl Scheduler {
         let mut swap_out_mb = None;
         if let Some(active_pid) = match self.active_client {
             ActiveClientState::None => None,
-            ActiveClientState::Active { pid } => {
+            ActiveClientState::Active { pid, .. } => {
                 if let Some(client) = self.sched_queue.get_client_mut(pid) {
                     client.make_idle();
                 }
@@ -174,7 +175,10 @@ impl Scheduler {
 
         let client = self.sched_queue.get_client_mut_or_insert(incoming_pid);
 
-        self.active_client = ActiveClientState::Active { pid: incoming_pid };
+        self.active_client = ActiveClientState::Active {
+            pid: incoming_pid,
+            since: Instant::now(),
+        };
         tracing::trace!("Scheduling in process {}", incoming_pid);
         control
             .get(&incoming_pid)
@@ -205,7 +209,10 @@ impl Scheduler {
 
     async fn handle_activity_idle(&mut self, pid: i32) {
         // TODO: LastActive
-        if let ActiveClientState::Active { pid: active_pid } = self.active_client {
+        if let ActiveClientState::Active {
+            pid: active_pid, ..
+        } = self.active_client
+        {
             if let Some(client) = self.sched_queue.get_client_mut(pid) {
                 if active_pid == pid {
                     client.make_resident_idle();

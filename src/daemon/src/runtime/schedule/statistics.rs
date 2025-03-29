@@ -1,8 +1,8 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ringbuffer::{AllocRingBuffer, RingBuffer};
 
-use super::Priority;
+use super::{Priority, PriorityLevel};
 
 #[derive(Clone)]
 pub(super) struct RunningChunk {
@@ -64,6 +64,7 @@ pub(crate) struct ClientStatistics {
 
     pub(super) state: ClientState,
     pub(super) priority: Priority,
+    pub(super) last_priority_update: Instant,
 }
 
 impl std::fmt::Debug for ClientStatistics {
@@ -83,6 +84,7 @@ impl ClientStatistics {
             state: ClientState::Idle,
             active_time_history: AllocRingBuffer::new(32),
             priority: Priority::default_dynamic(),
+            last_priority_update: Instant::now(),
         }
     }
 
@@ -94,6 +96,7 @@ impl ClientStatistics {
             since: Instant::now(),
         };
         self.allocated_mem_est = mem_est;
+        self.last_priority_update = Instant::now();
     }
 
     pub fn make_resident_idle(&mut self) {
@@ -113,6 +116,7 @@ impl ClientStatistics {
             }
         }
         self.state = ClientState::ResidentIdle;
+        self.last_priority_update = Instant::now();
     }
 
     pub fn make_idle(&mut self) {
@@ -133,6 +137,21 @@ impl ClientStatistics {
             }
         }
         self.state = ClientState::Idle;
+        self.last_priority_update = Instant::now();
+    }
+
+    pub fn increase_priority(&mut self, until: Option<PriorityLevel>) -> bool {
+        self.last_priority_update = Instant::now();
+        self.priority.increase(until)
+    }
+
+    pub fn decrease_priority(&mut self, until: Option<PriorityLevel>) -> bool {
+        self.last_priority_update = Instant::now();
+        self.priority.decrease(until)
+    }
+
+    pub fn priority_since(&self) -> Duration {
+        self.last_priority_update.elapsed()
     }
 
     pub fn update_on_gpu_mem_est(&mut self, on_gpu_est: u64) {

@@ -21,6 +21,40 @@ impl Priority {
             weight: 0,
         }
     }
+
+    pub fn increase(&mut self, until: Option<PriorityLevel>) -> bool {
+        match self {
+            Priority::Dynamic { level, weight } => {
+                let next = level.to_u8().saturating_add(1);
+                if next > until.unwrap_or(PriorityLevel::max()).to_u8() {
+                    return false;
+                }
+                *self = Priority::Dynamic {
+                    level: PriorityLevel::from(next),
+                    weight: *weight,
+                };
+                true
+            }
+            Priority::Fixed(_) => false,
+        }
+    }
+
+    pub fn decrease(&mut self, until: Option<PriorityLevel>) -> bool {
+        match self {
+            Priority::Dynamic { level, weight } => {
+                let next = level.to_u8().saturating_sub(1);
+                if next == level.to_u8() || next < until.unwrap_or(PriorityLevel::min()).to_u8() {
+                    return false;
+                }
+                *self = Priority::Dynamic {
+                    level: PriorityLevel::from(next),
+                    weight: *weight,
+                };
+                true
+            }
+            Priority::Fixed(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +72,27 @@ impl PriorityLevel {
             PriorityLevel::LowInteractive => 2,
             PriorityLevel::Batch => 1,
             PriorityLevel::Background => 0,
+        }
+    }
+
+    pub const fn max() -> Self {
+        PriorityLevel::Interactive
+    }
+
+    pub const fn min() -> Self {
+        PriorityLevel::Background
+    }
+}
+
+// from u8
+impl From<u8> for PriorityLevel {
+    fn from(val: u8) -> Self {
+        match val {
+            3 => PriorityLevel::Interactive,
+            2 => PriorityLevel::LowInteractive,
+            1 => PriorityLevel::Batch,
+            0 => PriorityLevel::Background,
+            _ => panic!("Invalid priority level"),
         }
     }
 }
