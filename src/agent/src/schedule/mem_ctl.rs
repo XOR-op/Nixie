@@ -4,6 +4,7 @@ use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUmem_advise};
 use nihilipc::shm::AllocationEntry;
 
 use crate::{
+    debug_eprintln, info_eprintln,
     intercept::VALID_UVM_FD,
     memory::{prefetch::prefetch_call, CUDA_CPU_DEVICE_ID},
     schedule::uvm_api::{self, UvmSetReadDuplicationParams, UvmUnsetPreferredLocationParams},
@@ -46,7 +47,7 @@ pub(crate) fn release_gpu_mem(size_mb: Vec<Option<NonZeroU64>>, blocking: bool) 
         let start = std::time::Instant::now();
         if entry.is_readonly {
             move_readonly_mem(entry, evict_bytes, &mut cur_cuda_device);
-            warn_eprintln!(
+            info_eprintln!(
                 "Release #{}: size={}, time={:?}",
                 alloc_idx,
                 size_to_string(evict_bytes),
@@ -182,7 +183,7 @@ fn move_readonly_mem(entry: &AllocationEntry, size_bytes: usize, cur_cuda_device
         },
         "unset read mostly",
     );
-    warn_eprintln!("Evict costs: {:?}", start.elapsed());
+    debug_eprintln!("Evict costs: {:?}", start.elapsed());
     checked_error(
         unsafe {
             cuda_lib().cuMemAdvise(

@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use crate::comm::notify_init_info;
 use crate::memory::get_dup_daemon;
 use crate::utils::size_to_string;
-use crate::{info_eprintln, warn_eprintln, GenericData, GENERIC_DATA};
+use crate::{debug_eprintln, warn_eprintln, GenericData, GENERIC_DATA};
 
 type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
 type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
@@ -87,7 +87,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             dup_daemon.record(idx, &alloc_entry);
         }
         let total_size = ptr_mapping.iter().map(|pr| pr.len).sum();
-        info_eprintln!(
+        debug_eprintln!(
             "{} {}: at={}, size={}, total_size={}, count={}",
             "[libcuda_hook]".bold(),
             "cudaMalloc".green(),
@@ -120,7 +120,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         }
     }
 
-    info_eprintln!(
+    debug_eprintln!(
         "{} {}: at={:#018x}",
         "[libcuda_hook]".bold(),
         "cudaFree".green(),

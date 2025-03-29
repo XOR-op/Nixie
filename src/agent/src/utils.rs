@@ -24,6 +24,15 @@ pub(crate) fn should_log(level: u8) -> bool {
 }
 
 #[macro_export]
+macro_rules! debug_eprintln {
+    ($($arg:tt)*) => {
+        if $crate::utils::should_log(3) {
+            eprintln!("{} {}", colored::Colorize::blue("NIHIL-DEBUG"), format!($($arg)*));
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! info_eprintln {
     ($($arg:tt)*) => {
         if $crate::utils::should_log(2) {

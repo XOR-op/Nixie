@@ -4,8 +4,8 @@ use nihilipc::shm::AllocationEntry;
 use std::sync::mpsc;
 
 use crate::{
-    info_eprintln, memory::CUDA_CPU_DEVICE_ID, stream_get_or_init, utils::size_to_string,
-    warn_eprintln, CuStreamWrapper, GENERIC_DATA, PREFETCH_REQ_QUEUE,
+    debug_eprintln, info_eprintln, memory::CUDA_CPU_DEVICE_ID, stream_get_or_init,
+    utils::size_to_string, warn_eprintln, CuStreamWrapper, GENERIC_DATA, PREFETCH_REQ_QUEUE,
 };
 
 pub(crate) fn filtered_prefetch_impl(size_mb: u64, to_gpu: bool, blocking: bool) {
@@ -34,7 +34,7 @@ pub(crate) fn prefetch_call(
     stream: &CuStreamWrapper,
 ) {
     use chrono::Local;
-    warn_eprintln!("{}: prefetch_call", Local::now().format("%H:%M:%S%.6f"));
+    debug_eprintln!("{}: prefetch_call", Local::now().format("%H:%M:%S%.6f"));
     let start = std::time::Instant::now();
     let ptr = entry.addr;
     let size = size_bytes.unwrap_or(entry.len);
@@ -54,7 +54,7 @@ pub(crate) fn prefetch_call(
     if res != cudaError_enum::CUDA_SUCCESS {
         warn_eprintln!("Failed to prefetch memory: {:?}", res);
     }
-    warn_eprintln!(
+    info_eprintln!(
         "Prefetch: size={}, time={:?} to {}",
         size_to_string(size),
         start.elapsed(),

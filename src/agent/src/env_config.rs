@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AgentConfig {
-    pub log_level: u8, // 0=none, 1=warn, 2=info
+    pub log_level: u8, // 0=none, 1=warn, 2=info, 3=debug
     pub auto_dup: bool,
     pub auto_dup_delay: u64,
     pub auto_idle: bool,
@@ -41,6 +41,7 @@ pub(crate) fn agent_config() -> &'static AgentConfig {
                                     "0" | "none" => 0,
                                     "1" | "warn" | "error" => 1,
                                     "2" | "info" => 2,
+                                    "3" | "debug" => 3,
                                     _ => DEFAULT_LOG_LEVEL,
                                 }
                             }

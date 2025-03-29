@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::{info_eprintln, warn_eprintln, FusedPtrMapping};
+use crate::{debug_eprintln, warn_eprintln, FusedPtrMapping};
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
 use nihilipc::AttrType;
 
@@ -34,7 +34,7 @@ pub(crate) fn set_attribute(
                     entry.is_move_reduced = will_set;
                 }
             }
-            info_eprintln!(
+            debug_eprintln!(
                 "Set {:?}: address={:#018x}, size={}, value={}",
                 attr_val,
                 ptr,
@@ -81,7 +81,7 @@ pub(crate) fn set_attribute_single(
                 entry.is_move_reduced = will_set;
             }
         };
-        info_eprintln!(
+        debug_eprintln!(
             "Set {:?}: address={:#018x}, size={}, value={}",
             attr_val,
             address,
