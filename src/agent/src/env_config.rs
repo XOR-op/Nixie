@@ -70,6 +70,13 @@ pub(crate) fn agent_config() -> &'static AgentConfig {
                     }
                 }
             }
+            if cfg.log_level >= 2 {
+                eprintln!(
+                    "{} Agent inited with {:?}",
+                    colored::Colorize::green("NIHIL-INFO"),
+                    cfg
+                );
+            }
         }
         cfg
     })

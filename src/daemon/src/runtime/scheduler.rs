@@ -70,6 +70,15 @@ impl Scheduler {
     }
 
     async fn poll_queue(&mut self, last_polled: &mut Instant) {
+        if let ActiveClientState::Active { pid, .. } = self.active_client {
+            let control = self.list.write().await;
+            if control.get(&pid).is_none() {
+                // the active process has exited
+                self.active_client = ActiveClientState::None;
+                self.sched_queue.remove_client(pid);
+                tracing::debug!("Process {} exited", pid);
+            }
+        }
         self.sched_queue.update_active(self.active_client);
         if let Some(req) = self.sched_queue.pop(self.active_client) {
             if let Err(e) = self.handle_activity_update(req.pid, req.args).await {
