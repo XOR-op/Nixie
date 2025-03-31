@@ -13,7 +13,7 @@ pub struct Handshake {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitInfo {
-    pub fd: i32,
+    pub fd: Option<i32>,
     pub shm_path: String,
     pub visible_devices: String,
 }

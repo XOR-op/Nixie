@@ -255,7 +255,13 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         let peer_pid = state.client_pid;
         let (pid_fd, uvm_fd) =
             checked!(duplicate_peer_fd(peer_pid, params.fd).map_err(|e| (e, peer_pid)));
-        let event_queue = checked!(EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid)));
+        let event_queue = if let Some(uvm_fd) = uvm_fd {
+            Some(checked!(
+                EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))
+            ))
+        } else {
+            None
+        };
         state
             .builder
             .with_pid_fd(checked!(
@@ -295,7 +301,11 @@ impl nihilipc::rpc::Daemon for DaemonServer {
     }
 }
 
-fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), DaemonError> {
+// if `remote_fd` is Some, the `Ok` result must be a tuple of (pid_fd, ,Some(uvm_fd))
+fn duplicate_peer_fd(
+    pid: i32,
+    remote_fd: Option<i32>,
+) -> Result<(OwnedFd, Option<OwnedFd>), DaemonError> {
     let pid_fd = match unsafe { syscall!(Sysno::pidfd_open, pid, nix::libc::PIDFD_NONBLOCK) } {
         Ok(fd) => fd as c_int,
         Err(e) => {
@@ -305,19 +315,23 @@ fn duplicate_peer_fd(pid: i32, remote_fd: i32) -> Result<(OwnedFd, OwnedFd), Dae
             ));
         }
     };
-    match unsafe { syscall!(Sysno::pidfd_getfd, pid_fd, remote_fd, 0) } {
-        Ok(fd) => {
-            let pid_fd = unsafe { OwnedFd::from_raw_fd(pid_fd) };
-            let uvm_fd = unsafe { OwnedFd::from_raw_fd(fd as c_int) };
-            Ok((pid_fd, uvm_fd))
+    if let Some(remote_fd) = remote_fd {
+        match unsafe { syscall!(Sysno::pidfd_getfd, pid_fd, remote_fd, 0) } {
+            Ok(fd) => {
+                let pid_fd = unsafe { OwnedFd::from_raw_fd(pid_fd) };
+                let uvm_fd = unsafe { OwnedFd::from_raw_fd(fd as c_int) };
+                Ok((pid_fd, Some(uvm_fd)))
+            }
+            Err(e) => {
+                let _ = nix::unistd::close(pid_fd);
+                Err(DaemonError::Errno(
+                    "pidfd_getfd",
+                    nix::errno::Errno::from_raw(e.into_raw()),
+                ))
+            }
         }
-        Err(e) => {
-            let _ = nix::unistd::close(pid_fd);
-            Err(DaemonError::Errno(
-                "pidfd_getfd",
-                nix::errno::Errno::from_raw(e.into_raw()),
-            ))
-        }
+    } else {
+        Ok((unsafe { OwnedFd::from_raw_fd(pid_fd) }, None))
     }
 }
 

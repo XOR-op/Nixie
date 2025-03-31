@@ -93,7 +93,7 @@ fn init_comm() -> Option<flume::Sender<A2SMessage>> {
     }
 }
 
-pub(crate) fn notify_init_info(fd: i32, shm_path: String, visible_devices: String) {
+pub(crate) fn notify_init_info(fd: Option<i32>, shm_path: String, visible_devices: String) {
     let Some(chan) = COMM.get_or_init(init_comm) else {
         return;
     };

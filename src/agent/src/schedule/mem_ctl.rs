@@ -5,7 +5,7 @@ use nihilipc::shm::AllocationEntry;
 
 use crate::{
     debug_eprintln, info_eprintln,
-    intercept::VALID_UVM_FD,
+    init::VALID_UVM_FD,
     memory::{prefetch::prefetch_call, CUDA_CPU_DEVICE_ID},
     schedule::uvm_api::{self, UvmSetReadDuplicationParams, UvmUnsetPreferredLocationParams},
     stream_get_or_init,

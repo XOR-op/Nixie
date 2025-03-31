@@ -6,7 +6,9 @@ use std::{
 use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 use stats::LaunchStats;
 
-use crate::{env_config::agent_config, utils::CudaContextGuard, GENERIC_DATA};
+use crate::{
+    env_config::agent_config, init::init_generic_data, utils::CudaContextGuard, GENERIC_DATA,
+};
 
 mod mem_ctl;
 mod stats;
@@ -70,7 +72,9 @@ impl Scheduler {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         if !sched_ctx.allow_running {
             // request to run
-            let ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
+            let ptr_mapping = GENERIC_DATA
+                .get_or_init(init_generic_data)
+                .lock_ptr_mapping();
             let mut allocs = Vec::new();
             for entry in ptr_mapping.iter() {
                 if allocs.len() <= entry.device as usize {

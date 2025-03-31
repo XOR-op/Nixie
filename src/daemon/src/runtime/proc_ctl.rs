@@ -19,7 +19,7 @@ use super::{daemon_server::DeviceOrdinalMapping, ProcCtlReq, ProcessMetadata};
 pub(crate) struct ProcessControl {
     peer_pid: i32,
     pid_fd: AsyncFd<OwnedFd>,
-    event_queue: EventQueue,
+    event_queue: Option<EventQueue>,
     shm: ShmGuard,
     dev_mapping: DeviceOrdinalMapping,
     rpc_sender: SidecarClient,
@@ -37,32 +37,51 @@ impl ProcessControl {
     }
 
     async fn run_inner(mut self) -> Result<(), NihilphaseError> {
-        self.event_queue
-            .enable_event(UvmEventType_UvmEventTypeGpuFault)?;
-
-        tracing::info!("Listen events from process [pid={}]", self.peer_pid);
-        loop {
-            tokio::select! {
-                // _ = self.event_queue.ready() => {
-                _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
-                    self.process_event().await?;
+        if let Some(mut event_queue) = self.event_queue.take() {
+            tracing::info!("Listen events from process [pid={}]", self.peer_pid);
+            event_queue.enable_event(UvmEventType_UvmEventTypeGpuFault)?;
+            loop {
+                tokio::select! {
+                    // _ = self.event_queue.ready() => {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+                        self.process_event(&mut event_queue).await?;
+                    }
+                    Some(inst) = self.inst_rx.recv() => {
+                        self.handle_inst(inst).await;
+                    }
+                    _ = self.pid_fd.readable() => {
+                        break;
+                    }
                 }
-                Some(inst) = self.inst_rx.recv() => {
-                    self.handle_inst(inst).await;
-                }
-                _ = self.pid_fd.readable() => {
-                    break;
+            }
+        } else {
+            tracing::info!(
+                "Listen events from process [pid={}] <UVM Disabled>",
+                self.peer_pid
+            );
+            loop {
+                tokio::select! {
+                    Some(inst) = self.inst_rx.recv() => {
+                        self.handle_inst(inst).await;
+                    }
+                    _ = self.pid_fd.readable() => {
+                        break;
+                    }
                 }
             }
         }
+
         tracing::info!("ProcessControl [pid={}] finished", self.peer_pid);
         let _ = self.exit_tx.send(self.peer_pid);
         Ok(())
     }
 
-    async fn process_event(&mut self) -> Result<u32, NihilphaseError> {
+    async fn process_event(
+        &mut self,
+        event_queue: &mut EventQueue,
+    ) -> Result<u32, NihilphaseError> {
         let mut fault_tree = BTreeSet::new();
-        let (n_completed, num_fault) = self.event_queue.read_events(|event| {
+        let (n_completed, num_fault) = event_queue.read_events(|event| {
             let event_type = unsafe { event.__bindgen_anon_1.eventData.eventType };
             match event_type as u32 {
                 UvmEventType_UvmEventTypeGpuFault => {
@@ -185,7 +204,7 @@ impl ProcessControl {
 pub(super) struct ProcessControlBuilder {
     pid: Option<i32>,
     pid_fd: Option<AsyncFd<OwnedFd>>,
-    event_queue: Option<EventQueue>,
+    event_queue: Option<Option<EventQueue>>,
     shm: Option<ShmGuard>,
     dev_mapping: Option<DeviceOrdinalMapping>,
     msg_sender: Option<SidecarClient>,
@@ -227,7 +246,7 @@ impl ProcessControlBuilder {
         self
     }
 
-    pub fn with_event_queue(&mut self, event_queue: EventQueue) -> &mut Self {
+    pub fn with_event_queue(&mut self, event_queue: Option<EventQueue>) -> &mut Self {
         if self.event_queue.is_some() {
             tracing::warn!("event_queue is already set");
         }

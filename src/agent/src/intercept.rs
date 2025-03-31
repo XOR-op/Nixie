@@ -5,10 +5,10 @@ use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
-use crate::comm::notify_init_info;
+use crate::init::{init_generic_data, UVM_FD_CANDIDATES, VALID_UVM_FD};
 use crate::memory::get_dup_daemon;
 use crate::utils::size_to_string;
-use crate::{debug_eprintln, warn_eprintln, GenericData, GENERIC_DATA};
+use crate::{debug_eprintln, warn_eprintln, GENERIC_DATA};
 
 type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
 type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
@@ -22,9 +22,6 @@ static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
 static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
 static CLOSE_FN: OnceLock<CloseType> = OnceLock::new();
 static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
-
-pub(crate) static VALID_UVM_FD: OnceLock<i32> = OnceLock::new();
-static UVM_FD_CANDIDATES: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 
 #[allow(non_snake_case)]
 #[no_mangle]
@@ -48,30 +45,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         };
 
         let mut ptr_mapping = GENERIC_DATA
-            .get_or_init(|| {
-                // CUDA libraries initialized; send UVM FD to daemon
-                assert!(VALID_UVM_FD.get().is_none(), "UVM FD already set");
-                let list = UVM_FD_CANDIDATES.lock().unwrap();
-                let uvm_fd = if let Some(fd) = list.first().copied() {
-                    let _ = VALID_UVM_FD.set(fd);
-                    fd
-                } else {
-                    warn_eprintln!("Failed to find valid UVM FD");
-                    -1
-                };
-                // And create ptr mapping
-                let uuid = uuid::Uuid::new_v4();
-                let path = format!(
-                    "/nihilphase_ipc-{}-{}.shm",
-                    std::process::id(),
-                    uuid.to_string().split_at(8).0
-                );
-                let result = GenericData::new(&path);
-                let cuda_visible_devices =
-                    std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default();
-                notify_init_info(uvm_fd, path, cuda_visible_devices);
-                result
-            })
+            .get_or_init(init_generic_data)
             .lock_ptr_mapping();
         let mut dup_daemon = get_dup_daemon().lock().unwrap();
         let alloc_entry = AllocationEntry {
@@ -141,6 +115,13 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
         std::mem::transmute(func)
     });
     let res = open_func(path, oflag, mode);
+    debug_eprintln!(
+        "{} {}: path={}, fd={}",
+        "[libcuda_hook]".bold(),
+        "open".green(),
+        std::ffi::CStr::from_ptr(path).to_str().unwrap_or(""),
+        res
+    );
 
     if std::ffi::CStr::from_ptr(path)
         .to_str()
@@ -160,27 +141,36 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
 #[allow(non_snake_case)]
 #[no_mangle]
 pub unsafe extern "C" fn close(fd: c_int) -> c_int {
-    let close_func = CLOSE_FN.get_or_init(|| {
-        let func = dlsym(RTLD_NEXT, cr"close".as_ptr()) as *mut CloseType;
-        if func.is_null() {
-            panic!("Failed to get original close function");
-        }
-        std::mem::transmute(func)
-    });
+    let close_func = CLOSE_FN.get_or_init(init_close_fn);
     let res = close_func(fd);
     if VALID_UVM_FD.get().is_none() {
         let mut guard = UVM_FD_CANDIDATES.lock().unwrap();
         if let Some(idx) = guard.iter().position(|&x| x == fd) {
             guard.remove(idx);
-            // warn_eprintln!(
-            //     "!!! UVM FD closed: {} from pid={}: {:?}",
-            //     fd,
-            //     std::process::id(),
-            //     *guard
-            // );
+            debug_eprintln!(
+                "!!! UVM FD closed: {} from pid={}: {:?}",
+                fd,
+                std::process::id(),
+                *guard
+            );
         }
     }
     res
+}
+
+pub(crate) fn real_libc_close(fd: c_int) -> c_int {
+    let close_func = CLOSE_FN.get_or_init(init_close_fn);
+    close_func(fd)
+}
+
+fn init_close_fn() -> CloseType {
+    unsafe {
+        let func = dlsym(RTLD_NEXT, cr"close".as_ptr()) as *mut CloseType;
+        if func.is_null() {
+            panic!("Failed to get original close function");
+        }
+        std::mem::transmute(func)
+    }
 }
 
 #[allow(non_snake_case)]
