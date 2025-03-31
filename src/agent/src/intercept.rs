@@ -12,6 +12,7 @@ use crate::{debug_eprintln, warn_eprintln, GENERIC_DATA};
 
 type CudaMallocManagedType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
 type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
+type CudaMemGetInfoType = extern "C" fn(*mut usize, *mut usize) -> cudaError_enum;
 
 type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
 type CloseType = extern "C" fn(c_int) -> c_int;
@@ -19,6 +20,7 @@ type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
 
 static MALLOC_FN: OnceLock<CudaMallocManagedType> = OnceLock::new();
 static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
+static MEM_GET_INFO_FN: OnceLock<CudaMemGetInfoType> = OnceLock::new();
 static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
 static CLOSE_FN: OnceLock<CloseType> = OnceLock::new();
 static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
@@ -187,6 +189,28 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
 pub(crate) fn real_libc_close(fd: c_int) -> c_int {
     let close_func = CLOSE_FN.get_or_init(init_close_fn);
     close_func(fd)
+}
+
+#[allow(non_snake_case)]
+#[no_mangle]
+pub unsafe extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_enum {
+    let mem_get_info_func = MEM_GET_INFO_FN.get_or_init(|| {
+        let func = dlsym(RTLD_NEXT, cr"cudaMemGetInfo".as_ptr()) as *mut CudaMemGetInfoType;
+        if func.is_null() {
+            panic!("Failed to get original cudaMemGetInfo function");
+        }
+        std::mem::transmute(func)
+    });
+    let res = mem_get_info_func(free, total);
+    if let Some(ptr) = GENERIC_DATA.get() {
+        let ptr_mapping = ptr.lock_ptr_mapping();
+        let used_size = ptr_mapping.iter().map(|pr| pr.len).sum::<usize>();
+        let other_size = (*total / 10 * 9 - used_size) / 3 * 2;
+        if *free < other_size {
+            *free = other_size;
+        }
+    }
+    res
 }
 
 fn init_close_fn() -> CloseType {
