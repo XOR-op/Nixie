@@ -32,7 +32,7 @@ unsafe impl Sync for CuStreamWrapper {}
 
 /// For some reasons, cudaMemPrefetchAsync exhibits blocking behavior.
 /// Use a separate thread to prefetch.
-pub(crate) static PREFETCH_REQ_QUEUE: OnceLock<mpsc::Sender<u64>> = OnceLock::new();
+pub(crate) static PREFETCH_REQ_QUEUE: OnceLock<mpsc::Sender<(u64, bool)>> = OnceLock::new();
 
 /// All streams used for prefetching
 

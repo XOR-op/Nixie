@@ -64,14 +64,14 @@ pub(crate) fn prefetch_call(
 
 pub fn filtered_prefetch_non_blocking(size_mb: u64, to_gpu: bool) -> u64 {
     let sender = PREFETCH_REQ_QUEUE.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel::<(u64, bool)>();
         std::thread::spawn(move || {
-            while let Ok(mut len) = receiver.recv() {
+            while let Ok(mut res) = receiver.recv() {
                 // exhaust the queue
-                while let Ok(l) = receiver.try_recv() {
-                    len = l;
+                while let Ok(r) = receiver.try_recv() {
+                    res = r;
                 }
-                filtered_prefetch_impl(len, to_gpu, false);
+                filtered_prefetch_impl(res.0, res.1, false);
             }
             warn_eprintln!("WARN: Prefetch thread exited");
         });
@@ -84,6 +84,6 @@ pub fn filtered_prefetch_non_blocking(size_mb: u64, to_gpu: bool) -> u64 {
         size_mb,
         if to_gpu { "GPU" } else { "CPU" }
     );
-    let _ = sender.send(size_mb);
+    let _ = sender.send((size_mb, to_gpu));
     0
 }
