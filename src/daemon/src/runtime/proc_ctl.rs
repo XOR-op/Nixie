@@ -161,6 +161,7 @@ impl ProcessControl {
                             .unwrap_or_default(),
                         readonly: entry.is_readonly,
                         move_reduced: entry.is_move_reduced,
+                        likely_on_gpu: entry.likely_on_gpu,
                     });
                 }
                 drop(mapping);

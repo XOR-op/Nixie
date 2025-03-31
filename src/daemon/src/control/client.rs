@@ -149,11 +149,12 @@ impl ControlClient {
                     // print each allocation info
                     for (idx, a) in allocations.into_iter().enumerate() {
                         println!(
-                            "\t{}: size = {}, readonly = {}, move_reduced = {}",
+                            "\t{}: size = {}, readonly = {}, move_reduced = {}, likely_on_gpu = {}",
                             format!("<Allocation {}>", idx).cyan(),
                             pretty_size(a.size).blue(),
                             colored_bool(a.readonly),
-                            colored_bool(a.move_reduced)
+                            colored_bool(a.move_reduced),
+                            colored_bool(a.likely_on_gpu),
                         )
                     }
                 }

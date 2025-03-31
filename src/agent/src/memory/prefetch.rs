@@ -84,6 +84,6 @@ pub fn filtered_prefetch_non_blocking(size_mb: u64, to_gpu: bool) -> u64 {
         size_mb,
         if to_gpu { "GPU" } else { "CPU" }
     );
-    dbg!(sender.send(size_mb).ok());
+    let _ = sender.send(size_mb);
     0
 }

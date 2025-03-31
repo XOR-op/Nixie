@@ -52,4 +52,5 @@ pub(crate) struct AllocationData {
     pub device: i32,
     pub readonly: bool,
     pub move_reduced: bool,
+    pub likely_on_gpu: bool,
 }
