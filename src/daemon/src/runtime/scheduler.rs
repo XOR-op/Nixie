@@ -230,6 +230,7 @@ impl Scheduler {
                         last_active: Instant::now(),
                     };
                     tracing::debug!("Process {} becomes idle", pid);
+                    self.sched_queue.cooldown(None);
                     return;
                 }
             }
