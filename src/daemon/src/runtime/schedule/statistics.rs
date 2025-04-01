@@ -1,18 +1,31 @@
-use std::time::{Duration, Instant};
-
-use ringbuffer::{AllocRingBuffer, RingBuffer};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use super::{Priority, PriorityLevel};
 
+#[derive(Clone, Copy, Debug)]
+pub enum StopReason {
+    Idle,
+    Preempted,
+}
+
 #[derive(Clone)]
-pub(super) struct RunningChunk {
+pub struct RunningChunk {
     pub start: Instant,
     pub end: Instant,
+    pub reason: StopReason,
 }
 
 impl std::fmt::Debug for RunningChunk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}ms", (self.end - self.start).as_millis())
+        write!(
+            f,
+            "{}ms({:?})",
+            (self.end - self.start).as_millis(),
+            self.reason
+        )
     }
 }
 
@@ -53,18 +66,43 @@ impl ClientState {
     }
 }
 
-pub(crate) struct ClientStatistics {
-    pub(super) pid: i32,
+pub struct History {
+    inner: VecDeque<RunningChunk>,
+    max_size: usize,
+}
 
-    // across all devices
-    pub(super) allocated_mem_est: u64,
-    // across all devices
-    pub(super) on_gpu_mem_est: u64,
-    pub(super) active_time_history: AllocRingBuffer<RunningChunk>,
+impl History {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            inner: VecDeque::with_capacity(max_size),
+            max_size,
+        }
+    }
 
-    pub(super) state: ClientState,
-    pub(super) priority: Priority,
-    pub(super) last_priority_update: Instant,
+    pub fn push(&mut self, chunk: RunningChunk) {
+        if self.inner.len() == self.max_size {
+            self.inner.pop_front();
+        }
+        self.inner.push_back(chunk);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &RunningChunk> {
+        self.inner.iter()
+    }
+}
+
+pub struct ClientStatistics {
+    pub pid: i32,
+
+    // all devices
+    pub allocated_mem_est: u64,
+    // all devices
+    pub on_gpu_mem_est: u64,
+    pub active_time_history: History,
+
+    pub state: ClientState,
+    pub priority: Priority,
+    pub last_priority_update: Instant,
 }
 
 impl std::fmt::Debug for ClientStatistics {
@@ -82,7 +120,7 @@ impl ClientStatistics {
             allocated_mem_est: 0,
             on_gpu_mem_est: 0,
             state: ClientState::Idle,
-            active_time_history: AllocRingBuffer::new(32),
+            active_time_history: History::new(32),
             priority: Priority::default_dynamic(),
             last_priority_update: Instant::now(),
         }
@@ -99,12 +137,13 @@ impl ClientStatistics {
         self.last_priority_update = Instant::now();
     }
 
-    pub fn make_resident_idle(&mut self) {
+    pub fn make_resident_idle(&mut self, reason: StopReason) {
         match &self.state {
             ClientState::Active { since } => {
                 self.active_time_history.push(RunningChunk {
                     start: *since,
                     end: Instant::now(),
+                    reason,
                 });
             }
             state => {
@@ -119,12 +158,13 @@ impl ClientStatistics {
         self.last_priority_update = Instant::now();
     }
 
-    pub fn make_idle(&mut self) {
+    pub fn make_idle(&mut self, reason: StopReason) {
         match &self.state {
             ClientState::Active { since } => {
                 self.active_time_history.push(RunningChunk {
                     start: *since,
                     end: Instant::now(),
+                    reason,
                 });
             }
             ClientState::ResidentIdle => {}

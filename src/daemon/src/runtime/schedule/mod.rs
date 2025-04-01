@@ -1,5 +1,8 @@
-pub(super) mod policy;
-pub(super) mod statistics;
+mod policy;
+mod scheduler;
+mod statistics;
+
+pub use scheduler::Scheduler;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Priority {

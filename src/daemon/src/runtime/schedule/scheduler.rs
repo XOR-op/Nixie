@@ -11,15 +11,14 @@ use hashlink::LinkedHashMap;
 use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 use tokio::sync::mpsc;
 
-use crate::{
-    config::load_config, error::ScheduleError, general::CallParameter, runtime::ProcCtlReq,
+use crate::{config::load_config, error::ScheduleError, general::CallParameter};
+
+use crate::runtime::{
+    daemon_server::{DaemonServerHandle, DeviceOrdinalMapping},
+    ProcCtlReq, ProcessMetadata,
 };
 
-use super::{
-    daemon_server::{DaemonServerHandle, DeviceOrdinalMapping},
-    schedule::policy::ScheduleQueue,
-    ProcessMetadata,
-};
+use super::{policy::ScheduleQueue, statistics::StopReason};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ActiveClientState {
@@ -119,13 +118,13 @@ impl Scheduler {
             ActiveClientState::None => None,
             ActiveClientState::Active { pid, .. } => {
                 if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                    client.make_idle();
+                    client.make_idle(StopReason::Preempted);
                 }
                 Some(pid)
             }
             ActiveClientState::LastActive { pid, .. } => {
                 if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                    client.make_idle();
+                    client.make_idle(StopReason::Preempted);
                 }
                 Some(pid)
             }
@@ -224,7 +223,7 @@ impl Scheduler {
         {
             if let Some(client) = self.sched_queue.get_client_mut(pid) {
                 if active_pid == pid {
-                    client.make_resident_idle();
+                    client.make_resident_idle(StopReason::Idle);
                     self.active_client = ActiveClientState::LastActive {
                         pid,
                         last_active: Instant::now(),

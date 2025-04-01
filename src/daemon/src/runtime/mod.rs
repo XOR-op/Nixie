@@ -2,7 +2,6 @@ pub mod daemon;
 mod daemon_server;
 pub mod proc_ctl;
 mod schedule;
-pub mod scheduler;
 pub mod shm;
 
 use std::path::Path;

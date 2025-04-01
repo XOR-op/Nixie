@@ -24,7 +24,7 @@ use crate::{
 };
 
 use super::{
-    daemon_server::DaemonServerHandle, scheduler::Scheduler, socket_chown, ProcessMetadata,
+    daemon_server::DaemonServerHandle, schedule::Scheduler, socket_chown, ProcessMetadata,
 };
 
 #[derive(Clone)]

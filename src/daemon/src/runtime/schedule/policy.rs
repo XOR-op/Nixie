@@ -5,7 +5,7 @@ use std::{
 
 use nihilipc::ActivityUpdate;
 
-use crate::runtime::scheduler::ActiveClientState;
+use super::scheduler::ActiveClientState;
 
 use super::{
     statistics::{ClientStatistics, RunningChunk},
