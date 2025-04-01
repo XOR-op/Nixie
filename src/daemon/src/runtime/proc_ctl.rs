@@ -87,6 +87,7 @@ impl ProcessControl {
                 UvmEventType_UvmEventTypeGpuFault => {
                     let event_ref = unsafe { &event.__bindgen_anon_1.eventData.gpuFault };
                     const UVM_FAULT_TYPE_WRITE: u8 = 3;
+                    #[allow(clippy::single_match)]
                     match event_ref.faultType {
                         UVM_FAULT_TYPE_WRITE => {
                             fault_tree.insert(event_ref.address);

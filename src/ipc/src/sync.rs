@@ -48,6 +48,9 @@ impl<T> IpcMutex<T> {
         IpcMutexGuard { lock: self }
     }
 
+    /// # Safety
+    ///
+    /// This involves libc::semaphore
     pub unsafe fn close(&mut self) {
         let old_ref_count = self
             .ref_count

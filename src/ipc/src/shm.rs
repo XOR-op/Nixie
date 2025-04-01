@@ -55,6 +55,9 @@ impl Shm {
         }
     }
 
+    /// # Safety
+    ///
+    /// This involves mmap
     pub unsafe fn open_copy_at(shm_fd: i32, len: u32) -> Result<Pin<&'static mut Self>, c_int> {
         if len < core::mem::size_of::<Self>() as u32 {
             return Err(libc::EINVAL);
@@ -117,6 +120,7 @@ impl<T, const N: usize> ShmVec<T, N> {
         }
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn push(&mut self, val: T) -> Result<usize, ()> {
         if self.len as usize >= N {
             return Err(());

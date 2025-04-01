@@ -28,34 +28,8 @@ static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_enum {
-    cuda_malloc_inner(dev_ptr, size)
-}
-
-// #[allow(non_snake_case)]
-// #[no_mangle]
-// pub extern "C" fn cudaMallocAsync(
-//     dev_ptr: *mut *mut libc::c_void,
-//     size: usize,
-//     // _mem_poll_handler: *mut libc::c_void,
-//     _h_stream: *mut libc::c_void,
-// ) -> cudaError_enum {
-//     let res = cuda_malloc_inner(dev_ptr, size);
-//     if res != cudaError_enum::CUDA_SUCCESS {
-//         warn_eprintln!(
-//             "{} {}: at={:#018x}, size={}, error={:?}",
-//             "[libcuda_hook]".bold(),
-//             "cudaMallocAsync".green(),
-//             unsafe { *dev_ptr as u64 },
-//             size,
-//             res
-//         );
-//     }
-//     res
-// }
-
-fn cuda_malloc_inner(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_enum {
     let malloc_func = MALLOC_FN.get_or_init(|| unsafe {
-        let func = dlsym(RTLD_NEXT, cr"cudaMallocManaged".as_ptr()) as *mut CudaMallocManagedType;
+        let func = dlsym(RTLD_NEXT, cr"cudaMallocManaged".as_ptr());
         if func.is_null() {
             panic!("Failed to get original cudaMalloc function");
         }
@@ -106,7 +80,7 @@ fn cuda_malloc_inner(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_
 #[no_mangle]
 pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     let free_func = FREE_FN.get_or_init(|| unsafe {
-        let func = dlsym(RTLD_NEXT, cr"cudaFree".as_ptr()) as *mut CudaFreeType;
+        let func = dlsym(RTLD_NEXT, cr"cudaFree".as_ptr());
         if func.is_null() {
             panic!("Failed to get original cudaFree function");
         }
@@ -135,7 +109,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
 #[no_mangle]
 pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
     let open_func = OPEN_FN.get_or_init(|| {
-        let func = dlsym(RTLD_NEXT, cr"open".as_ptr()) as *mut OpenType;
+        let func = dlsym(RTLD_NEXT, cr"open".as_ptr());
         if func.is_null() {
             panic!("Failed to get original open function");
         }
@@ -195,7 +169,7 @@ pub(crate) fn real_libc_close(fd: c_int) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_enum {
     let mem_get_info_func = MEM_GET_INFO_FN.get_or_init(|| {
-        let func = dlsym(RTLD_NEXT, cr"cudaMemGetInfo".as_ptr()) as *mut CudaMemGetInfoType;
+        let func = dlsym(RTLD_NEXT, cr"cudaMemGetInfo".as_ptr());
         if func.is_null() {
             panic!("Failed to get original cudaMemGetInfo function");
         }
@@ -215,7 +189,7 @@ pub unsafe extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> 
 
 fn init_close_fn() -> CloseType {
     unsafe {
-        let func = dlsym(RTLD_NEXT, cr"close".as_ptr()) as *mut CloseType;
+        let func = dlsym(RTLD_NEXT, cr"close".as_ptr());
         if func.is_null() {
             panic!("Failed to get original close function");
         }
@@ -227,7 +201,7 @@ fn init_close_fn() -> CloseType {
 #[no_mangle]
 pub unsafe extern "C" fn ioctl(fd: c_int, request: c_int, arg: *mut libc::c_void) -> c_int {
     let ioctl_func = IOCTL_FN.get_or_init(|| {
-        let func = dlsym(RTLD_NEXT, cr"ioctl".as_ptr()) as *mut IoCtlType;
+        let func = dlsym(RTLD_NEXT, cr"ioctl".as_ptr());
         if func.is_null() {
             panic!("Failed to get original ioctl function");
         }

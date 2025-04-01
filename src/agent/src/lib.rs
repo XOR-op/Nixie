@@ -35,7 +35,6 @@ unsafe impl Sync for CuStreamWrapper {}
 pub(crate) static PREFETCH_REQ_QUEUE: OnceLock<mpsc::Sender<(u64, bool)>> = OnceLock::new();
 
 /// All streams used for prefetching
-
 pub(crate) fn stream_get_or_init() -> &'static Vec<CuStreamWrapper> {
     static STREAM_VEC: OnceLock<Vec<CuStreamWrapper>> = OnceLock::new();
     STREAM_VEC.get_or_init(|| {

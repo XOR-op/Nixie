@@ -28,8 +28,8 @@ impl Priority {
     pub fn increase(&mut self, until: Option<PriorityLevel>) -> bool {
         match self {
             Priority::Dynamic { level, weight } => {
-                let next = level.to_u8().saturating_add(1);
-                if next > until.unwrap_or(PriorityLevel::max()).to_u8() {
+                let next = level.as_u8().saturating_add(1);
+                if next > until.unwrap_or(PriorityLevel::max()).as_u8() {
                     return false;
                 }
                 *self = Priority::Dynamic {
@@ -45,8 +45,8 @@ impl Priority {
     pub fn decrease(&mut self, until: Option<PriorityLevel>) -> bool {
         match self {
             Priority::Dynamic { level, weight } => {
-                let next = level.to_u8().saturating_sub(1);
-                if next == level.to_u8() || next < until.unwrap_or(PriorityLevel::min()).to_u8() {
+                let next = level.as_u8().saturating_sub(1);
+                if next == level.as_u8() || next < until.unwrap_or(PriorityLevel::min()).as_u8() {
                     return false;
                 }
                 *self = Priority::Dynamic {
@@ -69,7 +69,7 @@ pub(super) enum PriorityLevel {
 }
 
 impl PriorityLevel {
-    fn to_u8(&self) -> u8 {
+    fn as_u8(&self) -> u8 {
         match self {
             PriorityLevel::Interactive => 3,
             PriorityLevel::LowInteractive => 2,
@@ -102,12 +102,12 @@ impl From<u8> for PriorityLevel {
 
 impl PartialOrd for PriorityLevel {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.to_u8().partial_cmp(&other.to_u8())
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for PriorityLevel {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.to_u8().cmp(&other.to_u8())
+        self.as_u8().cmp(&other.as_u8())
     }
 }

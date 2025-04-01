@@ -44,7 +44,7 @@ pub extern "C" fn cudaLaunchKernel(
     stream: CUstream,
 ) -> cudaError_enum {
     let launch_kernel_func = LAUNCH_KERNEL_FN.get_or_init(|| unsafe {
-        let func = dlsym(RTLD_NEXT, cr"cudaLaunchKernel".as_ptr()) as *mut CudaLaunchKernelType;
+        let func = dlsym(RTLD_NEXT, cr"cudaLaunchKernel".as_ptr());
         if func.is_null() {
             panic!("Failed to get original cudaLaunchKernel function");
         }
@@ -58,7 +58,7 @@ pub extern "C" fn cudaLaunchKernel(
 #[no_mangle]
 pub extern "C" fn cudaGraphLaunch(graph: CUgraphExec, stream: CUstream) -> cudaError_enum {
     let graph_launch_func = GRAPH_LAUNCH_FN.get_or_init(|| unsafe {
-        let func = dlsym(RTLD_NEXT, cr"cudaGraphLaunch".as_ptr()) as *mut CudaGraphLaunchType;
+        let func = dlsym(RTLD_NEXT, cr"cudaGraphLaunch".as_ptr());
         if func.is_null() {
             panic!("Failed to get original cudaGraphLaunch function");
         }
@@ -72,8 +72,7 @@ pub extern "C" fn cudaGraphLaunch(graph: CUgraphExec, stream: CUstream) -> cudaE
 #[no_mangle]
 pub extern "C" fn cudaStreamCaptureBegin(stream: CUstream, mode: i32) -> cudaError_enum {
     let stream_capture_begin_func = STREAM_CAPTURE_BEGIN_FN.get_or_init(|| unsafe {
-        let func = dlsym(RTLD_NEXT, cr"cudaStreamBeginCapture".as_ptr())
-            as *mut CudaStreamBeginCaptureType;
+        let func = dlsym(RTLD_NEXT, cr"cudaStreamBeginCapture".as_ptr());
         if func.is_null() {
             panic!("Failed to get original cudaStreamCaptureBegin function");
         }
@@ -87,8 +86,7 @@ pub extern "C" fn cudaStreamCaptureBegin(stream: CUstream, mode: i32) -> cudaErr
 #[no_mangle]
 pub extern "C" fn cudaStreamEndCapture(stream: CUstream, pGraph: *mut c_void) -> cudaError_enum {
     let stream_end_capture_func = STREAM_END_CAPTURE_FN.get_or_init(|| unsafe {
-        let func =
-            dlsym(RTLD_NEXT, cr"cudaStreamEndCapture".as_ptr()) as *mut CudaStreamEndCaptureType;
+        let func = dlsym(RTLD_NEXT, cr"cudaStreamEndCapture".as_ptr());
         if func.is_null() {
             panic!("Failed to get original cudaStreamEndCapture function");
         }

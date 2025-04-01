@@ -113,6 +113,7 @@ impl ScheduleQueue {
                 .map(|(_, since)| since)
             {
                 // active client
+                #[allow(clippy::collapsible_if)]
                 if active_since.elapsed() > Duration::from_secs(10)
                     && client.priority_since() > Duration::from_secs(10)
                 {
@@ -124,15 +125,14 @@ impl ScheduleQueue {
                         );
                     }
                 }
-            } else {
-                if client.priority_since() > Duration::from_secs(30) {
-                    if client.increase_priority(None) {
-                        tracing::trace!(
-                            "Process {}: priority increased to {:?}",
-                            client.pid,
-                            client.priority.level()
-                        );
-                    }
+            } else if client.priority_since() > Duration::from_secs(30) {
+                #[allow(clippy::collapsible_if)]
+                if client.increase_priority(None) {
+                    tracing::trace!(
+                        "Process {}: priority increased to {:?}",
+                        client.pid,
+                        client.priority.level()
+                    );
                 }
             }
         }
