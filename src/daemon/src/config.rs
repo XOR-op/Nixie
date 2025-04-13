@@ -13,6 +13,7 @@ pub struct Config {
     pub device_memory_mb: Vec<u64>,
     pub device_threshold: f64,
     pub schedule_delay: Option<Duration>,
+    pub preempt_delay: Option<Duration>,
     pub schedule_cooldown: Option<Duration>,
 }
 
@@ -64,6 +65,7 @@ pub fn init_config(config_path: Option<PathBuf>) -> Result<(), DaemonError> {
         device_memory_mb,
         device_threshold: 0.95,
         schedule_delay: None,
+        preempt_delay: Some(Duration::from_millis(50)),
         schedule_cooldown: None,
     };
 

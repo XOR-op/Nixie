@@ -11,7 +11,12 @@ use hashlink::LinkedHashMap;
 use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 use tokio::sync::mpsc;
 
-use crate::{config::load_config, error::ScheduleError, general::CallParameter};
+use crate::{
+    config::load_config,
+    error::ScheduleError,
+    general::CallParameter,
+    runtime::schedule::{statistics::PreemptionReason, PriorityLevel},
+};
 
 use crate::runtime::{
     daemon_server::{DaemonServerHandle, DeviceOrdinalMapping},
@@ -112,21 +117,36 @@ impl Scheduler {
         mem_usage_per_device: Vec<MemoryUsage>,
     ) -> Result<(), ScheduleError> {
         let control = self.list.write().await;
+        let config = load_config();
         let mut should_prefetch = false;
         let mut swap_out_mb = None;
-        if let Some(active_pid) = match self.active_client {
+
+        if let Some((active_pid, previous_running)) = match self.active_client {
             ActiveClientState::None => None,
             ActiveClientState::Active { pid, .. } => {
+                let incoming_level = self
+                    .sched_queue
+                    .get_client(incoming_pid)
+                    // incoming client not exists, by default with the highest
+                    .map_or_else(|| PriorityLevel::max(), |c| c.priority.level());
+
                 if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                    client.make_idle(StopReason::Preempted);
+                    let preemption_reason = {
+                        if incoming_level > client.priority.level() {
+                            PreemptionReason::HigherPriority
+                        } else {
+                            PreemptionReason::RoundRobin
+                        }
+                    };
+                    client.make_idle(StopReason::PreemptedBy(incoming_pid, preemption_reason));
                 }
-                Some(pid)
+                Some((pid, true))
             }
             ActiveClientState::LastActive { pid, .. } => {
                 if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                    client.make_idle(StopReason::Preempted);
+                    client.make_idle(StopReason::LazyIdle);
                 }
-                Some(pid)
+                Some((pid, false))
             }
         } {
             if incoming_pid != active_pid {
@@ -160,6 +180,11 @@ impl Scheduler {
                             tarpc::context::current(),
                             SchedulingArgs::Disable {
                                 swap_out_mb: swap_out,
+                                delay: if previous_running {
+                                    Some(config.schedule_delay.unwrap_or_default())
+                                } else {
+                                    None
+                                },
                             },
                         )
                         .await
@@ -176,8 +201,11 @@ impl Scheduler {
             }
         }
 
-        let config = load_config();
-        if let Some(delay) = config.schedule_delay {
+        // use the larger one between preempt_delay and schedule_delay
+        if let Some(delay) = config
+            .schedule_delay
+            .map(|d| config.preempt_delay.unwrap_or_default().max(d))
+        {
             tokio::time::sleep(delay).await;
         }
 
@@ -202,7 +230,11 @@ impl Scheduler {
             .await
             .map_err(|e| ScheduleError::RpcError("schedule in", incoming_pid, e))?;
         client.make_active(mem_usage_per_device.iter().map(|x| x.mem_usage_bytes).sum());
-        let cooldown = compute_cooldown(swap_out_mb.unwrap_or_default(), config.schedule_cooldown);
+        let cooldown = ScheduleQueue::compute_cooldown(
+            swap_out_mb.unwrap_or_default(),
+            config.schedule_cooldown,
+            client.priority,
+        );
         tracing::debug!(
             "Process {}: {:?}, cooldown={:.2}s",
             incoming_pid,
@@ -328,12 +360,4 @@ impl Scheduler {
             );
         (swap_out, old_remaining_total)
     }
-}
-
-fn compute_cooldown(migration_mb: u64, config_cooldown: Option<Duration>) -> Duration {
-    // max of both
-    let pcie_speed = 16.0; // GB/s
-    let migration_s = Duration::from_secs_f64(migration_mb as f64 / 1024.0 / pcie_speed * 1.5);
-    let cooldown = migration_s * 2;
-    config_cooldown.unwrap_or_default().max(cooldown)
 }

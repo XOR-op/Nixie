@@ -1,4 +1,4 @@
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -72,6 +72,7 @@ pub enum SchedulingArgs {
     Disable {
         // index of device in agent side
         swap_out_mb: Vec<Option<NonZeroU64>>,
+        delay: Option<Duration>,
     },
 }
 

@@ -6,9 +6,17 @@ use std::{
 use super::{Priority, PriorityLevel};
 
 #[derive(Clone, Copy, Debug)]
+pub enum PreemptionReason {
+    RoundRobin,
+    HigherPriority,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum StopReason {
     Idle,
-    Preempted,
+    /// The process is in fact idle, but the states have not been evicted yet.
+    LazyIdle,
+    PreemptedBy(i32, PreemptionReason),
 }
 
 #[derive(Clone)]
@@ -16,6 +24,12 @@ pub struct RunningChunk {
     pub start: Instant,
     pub end: Instant,
     pub reason: StopReason,
+}
+
+impl RunningChunk {
+    pub fn duration(&self) -> Duration {
+        self.end - self.start
+    }
 }
 
 impl std::fmt::Debug for RunningChunk {
@@ -167,7 +181,9 @@ impl ClientStatistics {
                     reason,
                 });
             }
-            ClientState::ResidentIdle => {}
+            ClientState::ResidentIdle => {
+                assert!(matches!(reason, StopReason::LazyIdle));
+            }
             state => {
                 tracing::error!(
                     "make_idle: Client {} is not active, but in state {:?}",
@@ -190,11 +206,45 @@ impl ClientStatistics {
         self.priority.decrease(until)
     }
 
-    pub fn priority_since(&self) -> Duration {
+    pub fn update_on_gpu_mem_est(&mut self, on_gpu_est: u64) {
+        self.on_gpu_mem_est = on_gpu_est;
+    }
+}
+
+// Statistics helpers
+impl ClientStatistics {
+    pub fn priority_upd_since(&self) -> Duration {
         self.last_priority_update.elapsed()
     }
 
-    pub fn update_on_gpu_mem_est(&mut self, on_gpu_est: u64) {
-        self.on_gpu_mem_est = on_gpu_est;
+    pub fn last_unfinished_active_time(&self, since: Option<Instant>) -> Option<Duration> {
+        let mut last_unfinished = None;
+        for entry in self.active_time_history.inner.iter().rev() {
+            if matches!(entry.reason, StopReason::Idle) {
+                break;
+            }
+            if since.is_some_and(|s| entry.start < s) {
+                last_unfinished =
+                    Some(last_unfinished.unwrap_or_default() + (entry.end - since.unwrap()));
+                break;
+            } else {
+                last_unfinished = Some(last_unfinished.unwrap_or_default() + entry.duration());
+            }
+        }
+        last_unfinished
+    }
+
+    pub fn last_unfinished_schedule(&self, since: Option<Instant>) -> u32 {
+        let mut last_unfinished = 0;
+        for entry in self.active_time_history.inner.iter().rev() {
+            if matches!(entry.reason, StopReason::Idle) {
+                break;
+            }
+            last_unfinished += 1;
+            if since.is_some_and(|s| entry.start < s) {
+                break;
+            }
+        }
+        last_unfinished
     }
 }

@@ -60,8 +60,11 @@ impl Scheduler {
                 allow_running.allow_running = true;
                 allow_running.need_prefetch = prefetch;
             }
-            SchedulingArgs::Disable { swap_out_mb } => {
+            SchedulingArgs::Disable { swap_out_mb, delay } => {
                 allow_running.disable();
+                if let Some(delay) = delay {
+                    std::thread::sleep(delay);
+                }
                 mem_ctl::release_gpu_mem(swap_out_mb, false);
             }
         }
@@ -120,7 +123,7 @@ impl Scheduler {
             )
             .is_ok()
         {
-            const KERNEL_INTERVAL: Duration = Duration::from_millis(500);
+            const KERNEL_INTERVAL: Duration = Duration::from_millis(800);
             const GRAPH_INTERVAL: Duration = Duration::from_millis(1000);
             assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
             if agent_config().auto_idle {

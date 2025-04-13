@@ -5,12 +5,9 @@ use std::{
 
 use nihilipc::ActivityUpdate;
 
-use super::scheduler::ActiveClientState;
+use super::{scheduler::ActiveClientState, Priority};
 
-use super::{
-    statistics::{ClientStatistics, RunningChunk},
-    PriorityLevel,
-};
+use super::{statistics::ClientStatistics, PriorityLevel};
 
 #[derive(Debug, Clone)]
 pub struct SchedRequest {
@@ -59,6 +56,24 @@ impl ScheduleQueue {
 
     pub fn cooldown(&mut self, duration: Option<Duration>) {
         self.cooldown_until = Instant::now() + duration.unwrap_or_default();
+    }
+
+    pub fn compute_cooldown(
+        migration_mb: u64,
+        config_cooldown: Option<Duration>,
+        current_priority: Priority,
+    ) -> Duration {
+        // max of both
+        let pcie_speed = 16.0; // GB/s
+        let migration_s = Duration::from_secs_f64(migration_mb as f64 / 1024.0 / pcie_speed * 1.5);
+        let cooldown = migration_s * 2;
+        let cooldown = config_cooldown.unwrap_or_default().max(cooldown);
+        match current_priority.level() {
+            PriorityLevel::Interactive => cooldown,
+            PriorityLevel::LowInteractive => cooldown.max(Duration::from_secs(8)),
+            PriorityLevel::Batch => cooldown.max(Duration::from_secs(15)),
+            PriorityLevel::Background => cooldown.max(Duration::from_secs(30)),
+        }
     }
 }
 
@@ -115,7 +130,7 @@ impl ScheduleQueue {
                 // active client
                 #[allow(clippy::collapsible_if)]
                 if active_since.elapsed() > Duration::from_secs(10)
-                    && client.priority_since() > Duration::from_secs(10)
+                    && client.priority_upd_since() > Duration::from_secs(10)
                 {
                     if client.decrease_priority(Some(PriorityLevel::Batch)) {
                         tracing::trace!(
@@ -125,7 +140,7 @@ impl ScheduleQueue {
                         );
                     }
                 }
-            } else if client.priority_since() > Duration::from_secs(30) {
+            } else if client.priority_upd_since() > Duration::from_secs(30) {
                 #[allow(clippy::collapsible_if)]
                 if client.increase_priority(None) {
                     tracing::trace!(
@@ -164,7 +179,7 @@ impl ScheduleQueue {
                 if let Some(front) = self.sched_req.front() {
                     if let Some(front_stats) = self.clients.get(&front.pid) {
                         // only preempt if the most front process has higher or equal priority
-                        return front_stats.priority.level() >= active_stat.priority.level();
+                        return front_stats.priority.level() > active_stat.priority.level();
                     }
                 }
             }
@@ -172,18 +187,4 @@ impl ScheduleQueue {
         }
         true
     }
-}
-
-fn ranking_running_history<'a, I>(history: I, current: &Instant) -> f64
-where
-    I: Iterator<Item = &'a RunningChunk>,
-{
-    // sum of weighted running time
-    let mut total = 0.0;
-    for chunk in history {
-        let duration = chunk.end - chunk.start;
-        let weight = (current.saturating_duration_since(chunk.start) + duration / 2).as_secs_f64();
-        total += duration.as_secs_f64() * weight;
-    }
-    total
 }
