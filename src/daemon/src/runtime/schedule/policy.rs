@@ -167,7 +167,14 @@ impl ScheduleQueue {
                     // if same priority, sort by time
                     a.time.cmp(&b.time)
                 }
-                other => other,
+                std::cmp::Ordering::Less => {
+                    // a has lower priority
+                    std::cmp::Ordering::Greater
+                }
+                std::cmp::Ordering::Greater => {
+                    // a has higher priority
+                    std::cmp::Ordering::Less
+                }
             }
         });
     }
