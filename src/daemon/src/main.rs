@@ -105,6 +105,9 @@ struct UpdateConfigArgs {
     /// Set device threshold
     #[arg(short = 't', long)]
     pub device_threshold: Option<f64>,
+    /// Set preempt delay in ms
+    #[arg(short = 'p', long)]
+    pub preempt_delay: Option<u32>,
 }
 
 #[derive(Debug, Parser)]

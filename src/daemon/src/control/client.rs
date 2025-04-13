@@ -203,6 +203,13 @@ impl ControlClient {
                 config.schedule_cooldown = Some(Duration::from_millis(schedule_cooldown as u64));
             }
         }
+        if let Some(preempt_delay) = args.preempt_delay {
+            if preempt_delay == 0 {
+                config.preempt_delay = None;
+            } else {
+                config.preempt_delay = Some(Duration::from_millis(preempt_delay as u64));
+            }
+        }
         self.client
             .update_config(tarpc::context::current(), config.to_configurable_args())
             .await

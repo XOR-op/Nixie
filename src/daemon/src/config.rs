@@ -23,6 +23,7 @@ impl Config {
             schedule_delay: self.schedule_delay,
             schedule_cooldown: self.schedule_cooldown,
             device_threshold: Some(self.device_threshold),
+            preempt_delay: self.preempt_delay,
         }
     }
 }
@@ -32,6 +33,7 @@ pub struct ConfigurableArgs {
     pub schedule_delay: Option<Duration>,
     pub schedule_cooldown: Option<Duration>,
     pub device_threshold: Option<f64>,
+    pub preempt_delay: Option<Duration>,
 }
 
 static CONFIG: RwLock<Option<Arc<Config>>> = RwLock::new(None);
@@ -99,4 +101,5 @@ fn update_config_from(config: &mut Config, args: ConfigurableArgs) {
     if let Some(device_threshold) = args.device_threshold {
         config.device_threshold = device_threshold;
     }
+    config.preempt_delay = args.preempt_delay;
 }
