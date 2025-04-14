@@ -6,8 +6,11 @@ use std::{
 use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
 use stats::LaunchStats;
 
+use cudarc::driver::sys::lib as cuda_lib;
+
 use crate::{
-    env_config::agent_config, init::init_generic_data, utils::CudaContextGuard, GENERIC_DATA,
+    check_cu_err, env_config::agent_config, init::init_generic_data, set_device,
+    utils::CudaContextGuard, GENERIC_DATA,
 };
 
 mod mem_ctl;
@@ -62,6 +65,19 @@ impl Scheduler {
             }
             SchedulingArgs::Disable { swap_out_mb, delay } => {
                 allow_running.disable();
+                let mut dev_count = 0;
+                unsafe {
+                    check_cu_err!(
+                        cuda_lib().cuDeviceGetCount(&mut dev_count),
+                        "get device count"
+                    )
+                };
+                for i in 0..dev_count {
+                    set_device(i);
+                    unsafe {
+                        check_cu_err!(cuda_lib().cuCtxSynchronize(), "synchronize all contexts")
+                    };
+                }
                 if let Some(delay) = delay {
                     std::thread::sleep(delay);
                 }
@@ -123,7 +139,7 @@ impl Scheduler {
             )
             .is_ok()
         {
-            const KERNEL_INTERVAL: Duration = Duration::from_millis(800);
+            const KERNEL_INTERVAL: Duration = Duration::from_millis(500);
             const GRAPH_INTERVAL: Duration = Duration::from_millis(1000);
             assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
             if agent_config().auto_idle {
