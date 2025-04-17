@@ -361,19 +361,29 @@ impl DeviceOrdinalMapping {
                 visible_to_real.insert(i, i);
             }
         } else {
+            let device_mapping = get_device_uuid_mapping();
             for (visible_dev, real_str) in visible_devices.split(',').enumerate() {
                 let real_dev = if let Ok(dev) = real_str.parse::<i32>() {
                     dev
                 } else {
-                    // TODO: support UUID
-                    return Err(DaemonError::Cuda(
-                        if real_str.starts_with("GPU-") {
-                            "UUID is not supported yet"
-                        } else {
-                            "parse visible devices"
-                        },
-                        cudarc::driver::sys::cudaError_enum::CUDA_ERROR_INVALID_VALUE,
-                    ));
+                    let mut real_dev = None;
+                    if real_str.starts_with("GPU-") {
+                        // GPU UUID
+                        if let Some(dev) =
+                            device_mapping.get(real_str.to_ascii_lowercase().as_str())
+                        {
+                            real_dev = Some(*dev);
+                        }
+                    }
+                    match real_dev {
+                        Some(dev) => dev,
+                        None => {
+                            return Err(DaemonError::Cuda(
+                                "parse visible devices",
+                                cudarc::driver::sys::cudaError_enum::CUDA_ERROR_INVALID_VALUE,
+                            ));
+                        }
+                    }
                 };
                 real_to_visible.insert(real_dev, visible_dev as i32);
                 visible_to_real.insert(visible_dev as i32, real_dev);
@@ -402,4 +412,37 @@ impl DeviceOrdinalMapping {
             None
         }
     }
+}
+
+fn get_device_uuid_mapping() -> HashMap<String, i32> {
+    let mut uuid_mapping = HashMap::new();
+    let mut num_dev = 0;
+    let res = unsafe { cuda_lib().cuDeviceGetCount(&mut num_dev as *mut _) };
+    if res != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+        tracing::error!("Failed to get device count: {:?}", res);
+        return uuid_mapping;
+    }
+    for i in 0..num_dev {
+        let mut uuid = [0u8; 16];
+        let res = unsafe { cuda_lib().cuDeviceGetUuid_v2(uuid.as_mut_ptr() as *mut _, i) };
+        if res != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+            tracing::error!("Failed to get device {} UUID: {:?}", i, res);
+            continue;
+        }
+        let uuid_str = format_uuid(&uuid);
+        uuid_mapping.insert(uuid_str, i);
+    }
+    uuid_mapping
+}
+
+fn format_uuid(uuid: &[u8; 16]) -> String {
+    let mut uuid_str = String::new();
+    uuid_str.push_str("gpu-");
+    for (i, byte) in uuid.iter().enumerate() {
+        if i == 4 || i == 6 || i == 8 || i == 10 {
+            uuid_str.push('-');
+        }
+        uuid_str.push_str(&format!("{:02x}", byte));
+    }
+    uuid_str
 }
