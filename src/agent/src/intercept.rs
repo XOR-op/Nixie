@@ -10,31 +10,36 @@ use crate::memory::get_dup_daemon;
 use crate::utils::size_to_string;
 use crate::{debug_eprintln, warn_eprintln, GENERIC_DATA};
 
-type CudaMallocManagedType = extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
-type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
-type CudaMemGetInfoType = extern "C" fn(*mut usize, *mut usize) -> cudaError_enum;
+#[macro_export]
+macro_rules! generate_init_fn_as {
+    ($func_type:ty, $func_name:expr, $init_func_name:ident) => {
+        fn $init_func_name() -> $func_type {
+            unsafe {
+                let func = dlsym(RTLD_NEXT, $func_name.as_ptr());
+                if func.is_null() {
+                    panic!("Failed to get original {:?} function", $func_name);
+                }
+                std::mem::transmute(func)
+            }
+        }
+    };
+}
 
-type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
-type CloseType = extern "C" fn(c_int) -> c_int;
-type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
-
-static MALLOC_FN: OnceLock<CudaMallocManagedType> = OnceLock::new();
-static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
-static MEM_GET_INFO_FN: OnceLock<CudaMemGetInfoType> = OnceLock::new();
-static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
-static CLOSE_FN: OnceLock<CloseType> = OnceLock::new();
-static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
+#[macro_export]
+macro_rules! generate_init_fn {
+    ($func_type:ty, $func_name:expr) => {
+        generate_init_fn_as!($func_type, $func_name, init_fn);
+    };
+}
 
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_enum {
-    let malloc_func = MALLOC_FN.get_or_init(|| unsafe {
-        let func = dlsym(RTLD_NEXT, cr"cudaMallocManaged".as_ptr());
-        if func.is_null() {
-            panic!("Failed to get original cudaMalloc function");
-        }
-        std::mem::transmute(func)
-    });
+    type CudaMallocManagedType =
+        extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
+    static MALLOC_FN: OnceLock<CudaMallocManagedType> = OnceLock::new();
+    generate_init_fn!(CudaMallocManagedType, cr"cudaMallocManaged");
+    let malloc_func = MALLOC_FN.get_or_init(init_fn);
     let res = malloc_func(dev_ptr, size, 0x01);
     if res == cudaError_enum::CUDA_SUCCESS {
         let device_id = {
@@ -79,13 +84,10 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
-    let free_func = FREE_FN.get_or_init(|| unsafe {
-        let func = dlsym(RTLD_NEXT, cr"cudaFree".as_ptr());
-        if func.is_null() {
-            panic!("Failed to get original cudaFree function");
-        }
-        std::mem::transmute(func)
-    });
+    type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
+    static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
+    generate_init_fn!(CudaFreeType, cr"cudaFree");
+    let free_func = FREE_FN.get_or_init(init_fn);
     if let Some(mapping) = GENERIC_DATA.get() {
         let mut mapping = mapping.lock_ptr_mapping();
         let idx = mapping.iter().position(|pr| pr.addr == dev_ptr as u64);
@@ -108,14 +110,10 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
 #[allow(non_snake_case)]
 #[no_mangle]
 pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
-    let open_func = OPEN_FN.get_or_init(|| {
-        let func = dlsym(RTLD_NEXT, cr"open".as_ptr());
-        if func.is_null() {
-            panic!("Failed to get original open function");
-        }
-        // print address
-        std::mem::transmute(func)
-    });
+    type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
+    static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
+    generate_init_fn!(OpenType, cr"open");
+    let open_func = OPEN_FN.get_or_init(init_fn);
     let res = open_func(path, oflag, mode);
     debug_eprintln!(
         "{} {}: path={}, fd={}",
@@ -139,6 +137,10 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
     }
     res
 }
+
+type CloseType = extern "C" fn(c_int) -> c_int;
+static CLOSE_FN: OnceLock<CloseType> = OnceLock::new();
+generate_init_fn_as!(CloseType, cr"close", init_close_fn);
 
 #[allow(non_snake_case)]
 #[no_mangle]
@@ -168,13 +170,10 @@ pub(crate) fn real_libc_close(fd: c_int) -> c_int {
 #[allow(non_snake_case)]
 #[no_mangle]
 pub unsafe extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_enum {
-    let mem_get_info_func = MEM_GET_INFO_FN.get_or_init(|| {
-        let func = dlsym(RTLD_NEXT, cr"cudaMemGetInfo".as_ptr());
-        if func.is_null() {
-            panic!("Failed to get original cudaMemGetInfo function");
-        }
-        std::mem::transmute(func)
-    });
+    type CudaMemGetInfoType = extern "C" fn(*mut usize, *mut usize) -> cudaError_enum;
+    static MEM_GET_INFO_FN: OnceLock<CudaMemGetInfoType> = OnceLock::new();
+    generate_init_fn!(CudaMemGetInfoType, cr"cudaMemGetInfo");
+    let mem_get_info_func = MEM_GET_INFO_FN.get_or_init(init_fn);
     let res = mem_get_info_func(free, total);
     if let Some(ptr) = GENERIC_DATA.get() {
         let ptr_mapping = ptr.lock_ptr_mapping();
@@ -187,25 +186,12 @@ pub unsafe extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> 
     res
 }
 
-fn init_close_fn() -> CloseType {
-    unsafe {
-        let func = dlsym(RTLD_NEXT, cr"close".as_ptr());
-        if func.is_null() {
-            panic!("Failed to get original close function");
-        }
-        std::mem::transmute(func)
-    }
-}
-
 #[allow(non_snake_case)]
 #[no_mangle]
 pub unsafe extern "C" fn ioctl(fd: c_int, request: c_int, arg: *mut libc::c_void) -> c_int {
-    let ioctl_func = IOCTL_FN.get_or_init(|| {
-        let func = dlsym(RTLD_NEXT, cr"ioctl".as_ptr());
-        if func.is_null() {
-            panic!("Failed to get original ioctl function");
-        }
-        std::mem::transmute(func)
-    });
+    type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
+    static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
+    generate_init_fn!(IoCtlType, cr"ioctl");
+    let ioctl_func = IOCTL_FN.get_or_init(init_fn);
     ioctl_func(fd, request, arg)
 }
