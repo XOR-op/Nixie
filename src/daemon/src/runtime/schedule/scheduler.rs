@@ -171,7 +171,20 @@ impl Scheduler {
                             (Vec::new(), 0)
                         }
                     };
-                    tracing::trace!("Swap out {:?} from {}", swap_out, active_pid);
+                    {
+                        let swap_out_in_gb = swap_out
+                            .iter()
+                            .map(|x| x.map_or(0.0, |x| x.get() as f64))
+                            .sum::<f64>()
+                            / 1024.0;
+                        tracing::trace!(
+                            "Swap out {:2} GB from process {}, remaining estimate: {} MB",
+                            swap_out_in_gb,
+                            active_pid,
+                            old_remaining_est / (1024 * 1024)
+                        );
+                        tracing::trace!("Swap out {:?} from {}", swap_out, active_pid);
+                    }
 
                     swap_out_mb = Some(swap_out.iter().map(|x| x.map_or(0, |x| x.get())).sum());
                     handle
