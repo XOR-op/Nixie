@@ -1,4 +1,4 @@
-use crate::{ActivityUpdate, AttrArgs, Handshake, InitInfo, PrefetchArgs, SchedulingArgs};
+use crate::{ActivityUpdate, Handshake, InitInfo, MigrationArgs, SchedulingArgs};
 use futures::future::{AbortHandle, Abortable};
 use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -21,9 +21,7 @@ pub trait Daemon {
 // Receive requests from the daemon
 #[tarpc::service]
 pub trait Sidecar {
-    async fn set_attr(params: AttrArgs);
-
-    async fn prefetch(params: PrefetchArgs);
+    async fn migrate(params: MigrationArgs);
 
     async fn schedule(params: SchedulingArgs);
 }

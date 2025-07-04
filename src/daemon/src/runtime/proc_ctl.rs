@@ -1,11 +1,7 @@
 #![allow(non_upper_case_globals)]
-use std::{collections::BTreeSet, num::NonZeroU64, os::fd::OwnedFd};
+use std::{collections::BTreeSet, os::fd::OwnedFd};
 
-use nihilipc::{
-    rpc::SidecarClient,
-    shm::{AllocationEntry, ShmGuard},
-};
-use tarpc::context::Context;
+use nihil_common::{rpc::SidecarClient, shm::ShmGuard};
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use crate::{
@@ -103,28 +99,13 @@ impl ProcessControl {
             }
         });
         self.num_fault += num_fault as u64;
-        let mut disabled = BTreeSet::new();
-        // disable read duplication
-        if !fault_tree.is_empty() {
-            let mapping = self.shm.inner.ptr_mapping.lock();
-            for entry in mapping.iter() {
-                let start = entry.addr;
-                let end = start + entry.len as u64;
-                if fault_tree.range(start..end).next().is_some() {
-                    disabled.insert(*entry);
-                }
-            }
-            drop(mapping);
-            self.batched_read_dup(disabled.iter(), false).await;
-        }
 
         if !fault_tree.is_empty() {
             tracing::trace!(
-                "[pid={}] Received {} events: write_fault={}, num_disable={}",
+                "[pid={}] Received {} events: write_fault={}",
                 self.peer_pid,
                 n_completed,
                 fault_tree.len(),
-                disabled.len()
             );
         }
         Ok(n_completed)
@@ -132,37 +113,17 @@ impl ProcessControl {
 
     async fn handle_inst(&mut self, inst: ProcCtlReq) {
         match inst {
-            ProcCtlReq::SetAttr(inst) => {
-                if let Err(e) = self
-                    .rpc_sender
-                    .set_attr(
-                        Context::current(),
-                        nihilipc::AttrArgs {
-                            addr: None,
-                            len: inst.size_low.unwrap_or(0),
-                            value: inst.attr,
-                            will_set: inst.set,
-                            device: 0, // TODO: real device
-                        },
-                    )
-                    .await
-                {
-                    tracing::warn!("Failed to set read duplication: {:?}", e);
-                }
-            }
             ProcCtlReq::List(param) => {
                 let mut allocations = Vec::new();
                 let mapping = self.shm.inner.ptr_mapping.lock();
-                for entry in mapping.iter() {
+                for entry in mapping.entry.iter() {
                     allocations.push(AllocationData {
                         size: entry.len as u64,
                         device: self
                             .dev_mapping
                             .visible_to_real(entry.device)
                             .unwrap_or_default(),
-                        readonly: entry.is_readonly,
-                        move_reduced: entry.is_move_reduced,
-                        likely_on_gpu: entry.likely_on_gpu,
+                        on_gpu_bytes: todo!(),
                     });
                 }
                 drop(mapping);
@@ -174,30 +135,6 @@ impl ProcessControl {
                         num_fault: self.num_fault,
                     })
                     .await;
-            }
-        }
-    }
-
-    async fn batched_read_dup<'a, I>(&self, iter: I, set: bool)
-    where
-        I: Iterator<Item = &'a AllocationEntry>,
-    {
-        for entry in iter {
-            if let Err(e) = self
-                .rpc_sender
-                .set_attr(
-                    Context::current(),
-                    nihilipc::AttrArgs {
-                        addr: NonZeroU64::new(entry.addr),
-                        len: entry.len as u64,
-                        value: nihilipc::AttrType::ReadDup,
-                        will_set: set,
-                        device: entry.device,
-                    },
-                )
-                .await
-            {
-                tracing::warn!("Failed to set read duplication: {:?}", e);
             }
         }
     }
@@ -302,7 +239,7 @@ impl ProcessControlBuilder {
     }
 }
 
-fn serialize_msg(msg: nihilipc::S2AMessage) -> Vec<u8> {
+fn serialize_msg(msg: nihil_common::S2AMessage) -> Vec<u8> {
     let buf = bincode::serialize(&msg).unwrap();
     let length = buf.len() as u32;
     let length_buf = length.to_le_bytes();

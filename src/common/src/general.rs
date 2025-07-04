@@ -31,7 +31,7 @@ impl<P, R> CallParameter<P, R> {
     }
 }
 
-pub(crate) fn pretty_size(size_in_bytes: u64) -> String {
+pub fn pretty_size(size_in_bytes: u64) -> String {
     let units = ["B", "KB", "MB", "GB"];
     let mut size = size_in_bytes as f64;
     let mut unit = 0;

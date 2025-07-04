@@ -9,9 +9,6 @@ use control::client::ControlClient;
 mod config;
 mod control;
 mod error;
-mod general;
-#[deprecated]
-mod inject;
 mod logging;
 mod runtime;
 mod staticly;
@@ -43,38 +40,6 @@ struct PrefetchArgs {
     pub low_filter: Option<u64>,
     #[arg(short, long)]
     pub dest: DeviceArgs,
-    #[command(flatten)]
-    pub proc: ProcArgs,
-}
-
-#[derive(Debug, Parser)]
-struct ReadDupArgs {
-    /// set read duplicatoin attribute
-    #[arg(short, long, conflicts_with = "unset")]
-    pub set: bool,
-    /// unset read duplicatoin attribute
-    #[arg(short, long, conflicts_with = "set")]
-    pub unset: bool,
-    /// only show memory regions with size larger than filter
-    #[arg(short, long)]
-    pub low_filter: Option<u64>,
-    #[command(flatten)]
-    pub proc: ProcArgs,
-}
-
-#[derive(Debug, Parser)]
-struct ReduceMoveArgs {
-    /// set accessed by attribute
-    #[arg(short, long, conflicts_with = "unset")]
-    pub set: bool,
-    /// unset accessed by attribute
-    #[arg(short, long, conflicts_with = "set")]
-    pub unset: bool,
-    /// only show memory regions with size larger than filter
-    #[arg(short, long)]
-    pub low_filter: Option<u64>,
-    #[arg(short, long)]
-    pub high_filter: Option<u64>,
     #[command(flatten)]
     pub proc: ProcArgs,
 }
@@ -121,8 +86,6 @@ struct DaemonArgs {
 enum Args {
     Daemon(DaemonArgs),
     Prefetch(PrefetchArgs),
-    ReadDup(ReadDupArgs),
-    ReduceMove(ReduceMoveArgs),
     List(ListArgs),
     #[clap(subcommand)]
     Config(ConfigArgs),
@@ -167,24 +130,6 @@ fn main() {
                     check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
                 client
                     .prefetch(matches!(args.dest, DeviceArgs::Gpu), args.low_filter)
-                    .await
-                    .unwrap();
-            }
-            Args::ReadDup(args) => {
-                let is_set = is_set(args.set, args.unset);
-                let client =
-                    check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
-                client.read_dup(args.low_filter, is_set).await.unwrap();
-            }
-            Args::ReduceMove(args) => {
-                let is_set = is_set(args.set, args.unset);
-                let client =
-                    check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
-                if args.high_filter.is_some() {
-                    eprintln!("{}[] high filter is not supported yet", "[Warn]".yellow());
-                }
-                client
-                    .reduce_move(args.low_filter, args.high_filter, is_set)
                     .await
                     .unwrap();
             }

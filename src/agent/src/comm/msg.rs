@@ -1,4 +1,4 @@
-use nihilipc::*;
+use nihil_common::*;
 
 #[derive(Debug, Clone)]
 pub enum A2SMessage {

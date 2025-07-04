@@ -1,12 +1,109 @@
 use core::{ffi::c_int, pin::Pin};
+use std::num::NonZeroU32;
 
 use nix::libc;
 
 use crate::sync::IpcMutex;
 
+const HANDLE_NUM: usize = 40960;
+pub struct AllocationTable {
+    // usize
+    pub entry: ShmVec<AllocationEntry, 40960>,
+    // NonZeroU32
+    handles: [PhysicalMemoryHandle; HANDLE_NUM],
+    freelist_head: Option<NonZeroU32>,
+}
+
+impl AllocationTable {
+    pub fn new() -> Self {
+        let mut handles = [PhysicalMemoryHandle {
+            addr: 0,
+            size: 0,
+            cu_handle: None,
+            next_handle_idx: None,
+            on_gpu: false,
+        }; HANDLE_NUM];
+        for i in 1..HANDLE_NUM {
+            handles[i].next_handle_idx = NonZeroU32::new(i as u32 + 1);
+        }
+        Self {
+            entry: ShmVec::new(),
+            handles,
+            freelist_head: NonZeroU32::new(1),
+        }
+    }
+
+    pub fn allocate_handle(&mut self, addr: u64, size: usize) -> Option<NonZeroU32> {
+        if let Some(idx) = self.freelist_head {
+            let handle = &mut self.handles[idx.get() as usize];
+            self.freelist_head = handle.next_handle_idx;
+            handle.next_handle_idx = None;
+            handle.addr = addr;
+            handle.size = size;
+            handle.on_gpu = false;
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    pub fn free_handle(&mut self, idx: NonZeroU32) {
+        let handle = &mut self.handles[idx.get() as usize];
+        handle.addr = 0;
+        handle.on_gpu = false;
+        handle.next_handle_idx = self.freelist_head;
+        self.freelist_head = Some(idx);
+    }
+
+    pub fn get_handle(&self, idx: NonZeroU32) -> Option<&PhysicalMemoryHandle> {
+        if idx.get() as usize >= HANDLE_NUM {
+            return None;
+        }
+        Some(&self.handles[idx.get() as usize])
+    }
+
+    pub fn get_handle_mut(&mut self, idx: NonZeroU32) -> Option<&mut PhysicalMemoryHandle> {
+        if idx.get() as usize >= HANDLE_NUM {
+            return None;
+        }
+        Some(&mut self.handles[idx.get() as usize])
+    }
+
+    // return (on_gpu, not_on_gpu)
+    pub fn memory_usage(&self, idx: usize) -> Option<(usize, usize)> {
+        if let Some(entry) = self.entry.at(idx) {
+            let mut on_gpu = 0;
+            let mut not_on_gpu = 0;
+            let mut cur_index = Some(entry.handle_idx);
+            while let Some(index) = cur_index {
+                let handle = self.get_handle(index)?;
+                if handle.on_gpu {
+                    on_gpu += handle.size;
+                } else {
+                    not_on_gpu += handle.size;
+                }
+                cur_index = handle.next_handle_idx;
+            }
+            Some((on_gpu, not_on_gpu))
+        } else {
+            None
+        }
+    }
+}
+
 pub struct Shm {
     all_len: u32,
-    pub ptr_mapping: IpcMutex<ShmVec<AllocationEntry, 4096>>,
+    pub ptr_mapping: IpcMutex<AllocationTable>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PhysicalMemoryHandle {
+    pub addr: u64,
+    pub size: usize,
+    pub cu_handle: Option<cudarc::driver::sys::CUmemGenericAllocationHandle>,
+    pub next_handle_idx: Option<NonZeroU32>,
+    pub on_gpu: bool,
 }
 
 #[repr(C)]
@@ -15,10 +112,7 @@ pub struct AllocationEntry {
     pub addr: u64,
     pub len: usize,
     pub device: i32,
-    pub is_readonly: bool,
-    /// ACCESSED_BY with GPU device
-    pub is_move_reduced: bool,
-    pub likely_on_gpu: bool,
+    pub handle_idx: NonZeroU32,
 }
 
 impl Shm {
@@ -48,7 +142,7 @@ impl Shm {
             }
             let val = Self {
                 all_len: len,
-                ptr_mapping: IpcMutex::new(ShmVec::new()),
+                ptr_mapping: IpcMutex::new(AllocationTable::new()),
             };
             core::ptr::write(ptr as *mut Self, val);
             Ok(Pin::new(&mut *(ptr as *mut Self)))
@@ -177,6 +271,10 @@ impl<T, const N: usize> ShmVec<T, N> {
 
     pub fn at(&self, idx: usize) -> Option<&T> {
         self.as_slice().get(idx)
+    }
+
+    pub fn at_mut(&mut self, idx: usize) -> Option<&mut T> {
+        self.as_mut_slice().get_mut(idx)
     }
 
     pub fn iter(&self) -> core::slice::Iter<'_, T> {

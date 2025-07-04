@@ -4,11 +4,10 @@ use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::{
-    control::AllocationData, error::DaemonError, general::pretty_size, ProcArgs, UpdateConfigArgs,
-};
+use crate::{control::AllocationData, error::DaemonError, ProcArgs, UpdateConfigArgs};
+use nihil_common::general::pretty_size;
 
-use super::{AttrMsg, ControllableClient, PrefetchMsg};
+use super::{ControllableClient, PrefetchMsg};
 
 pub(crate) struct ControlClient {
     client: ControllableClient,
@@ -52,45 +51,6 @@ impl ControlClient {
                 nix::errno::Errno::EINVAL,
             )),
         }
-    }
-
-    pub async fn read_dup(&self, size_low: Option<u64>, set: bool) -> Result<(), DaemonError> {
-        self.client
-            .set_attr(
-                tarpc::context::current(),
-                AttrMsg {
-                    pid: self.pid,
-                    size_low,
-                    size_high: None,
-                    attr: nihilipc::AttrType::ReadDup,
-                    set,
-                },
-            )
-            .await
-            .map_err(|e| DaemonError::ClientRpc("read_dup", e))?;
-        Ok(())
-    }
-
-    pub async fn reduce_move(
-        &self,
-        size_low: Option<u64>,
-        size_high: Option<u64>,
-        set: bool,
-    ) -> Result<(), DaemonError> {
-        self.client
-            .set_attr(
-                tarpc::context::current(),
-                AttrMsg {
-                    pid: self.pid,
-                    size_low,
-                    size_high,
-                    attr: nihilipc::AttrType::AccessedBy,
-                    set,
-                },
-            )
-            .await
-            .map_err(|e| DaemonError::ClientRpc("reduce_move", e))?;
-        Ok(())
     }
 
     pub async fn prefetch(&self, to_gpu: bool, size_low: Option<u64>) -> Result<(), DaemonError> {
@@ -149,12 +109,10 @@ impl ControlClient {
                     // print each allocation info
                     for (idx, a) in allocations.into_iter().enumerate() {
                         println!(
-                            "\t{}: size = {}, readonly = {}, move_reduced = {}, likely_on_gpu = {}",
+                            "\t{}: size = {}, on_gpu_size = {}",
                             format!("<Allocation {}>", idx).cyan(),
                             pretty_size(a.size).blue(),
-                            colored_bool(a.readonly),
-                            colored_bool(a.move_reduced),
-                            colored_bool(a.likely_on_gpu),
+                            pretty_size(a.on_gpu_bytes).blue()
                         )
                     }
                 }

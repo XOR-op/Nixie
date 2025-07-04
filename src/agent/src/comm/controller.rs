@@ -1,11 +1,8 @@
 use colored::Colorize;
-use nihilipc::{rpc::DaemonClient, S2AMessage};
+use nihil_common::{rpc::DaemonClient, S2AMessage};
 
 use super::msg::A2SMessage;
-use crate::{
-    info_eprintln, memory::prefetch, schedule::Scheduler, utils::set_device, warn_eprintln,
-    GENERIC_DATA,
-};
+use crate::{info_eprintln, schedule::Scheduler, warn_eprintln};
 
 /// handler for agent<->daemon communication
 pub(crate) struct Controller {
@@ -60,39 +57,7 @@ impl Controller {
                     }
                 }
                 SidecarSelect::Daemon(msg) => match msg {
-                    S2AMessage::SetAttr(args) => {
-                        set_device(args.device);
-                        info_eprintln!(
-                            "{} {}: {:?}=>{:?} address={}, len={}, device={}",
-                            "[libcuda_hook]".bold(),
-                            "rpc_set_attribute".blue(),
-                            args.value,
-                            args.will_set,
-                            args.addr
-                                .map_or_else(|| "None".to_string(), |x| format!("{:#x}", x)),
-                            args.len,
-                            args.device,
-                        );
-                        let mut ptr_mapping = GENERIC_DATA.get().unwrap().lock_ptr_mapping();
-                        if let Some(addr) = args.addr {
-                            crate::memory::set_attribute_single(
-                                &mut ptr_mapping,
-                                args.value,
-                                args.will_set,
-                                addr,
-                                args.len,
-                                args.device,
-                            );
-                        } else {
-                            crate::memory::set_attribute(
-                                &mut ptr_mapping,
-                                args.value,
-                                args.will_set,
-                                args.len,
-                            )
-                        }
-                    }
-                    S2AMessage::Prefetch(args) => {
+                    S2AMessage::Migration(args) => {
                         info_eprintln!(
                             "{} {}: address={}, len={:#x}, to_gpu={}",
                             "[libcuda_hook]".bold(),
@@ -101,7 +66,6 @@ impl Controller {
                             args.len,
                             args.to_gpu
                         );
-                        prefetch::filtered_prefetch_non_blocking(args.len, args.to_gpu);
                     }
                     S2AMessage::Scheduling(args) => {
                         self.sched_ctrl.set_allow_running(args);

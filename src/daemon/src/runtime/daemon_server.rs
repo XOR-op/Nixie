@@ -5,7 +5,7 @@ use crate::{
 };
 use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
-use nihilipc::rpc::{rpc_multiplex_twoway, Daemon, SidecarClient};
+use nihil_common::rpc::{rpc_multiplex_twoway, Daemon, SidecarClient};
 use nix::libc::c_int;
 use std::{
     collections::HashMap,
@@ -151,7 +151,7 @@ impl DaemonServer {
     pub fn launch(
         conn: UnixStream,
         exit_tx: mpsc::UnboundedSender<i32>,
-        rpc_data_tx: mpsc::UnboundedSender<(i32, nihilipc::ActivityUpdate)>,
+        rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
     ) -> DaemonServerHandleFuture {
         // construct a bidirectional RPC tunnel based on single UDS connection
         let mut codec_builder = LengthDelimitedCodec::builder();
@@ -196,20 +196,20 @@ struct StateOfStarting {
     rpc_client: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
     exit_tx: mpsc::UnboundedSender<i32>,
-    rpc_data_tx: mpsc::UnboundedSender<(i32, nihilipc::ActivityUpdate)>,
+    rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
     ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
 }
 
 struct StateOfBuilding {
     client_pid: i32,
-    rpc_data_tx: mpsc::UnboundedSender<(i32, nihilipc::ActivityUpdate)>,
+    rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
     builder: ProcessControlBuilder,
     ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
 }
 
 struct DaemonServerState {
     client_pid: i32,
-    rpc_data_tx: mpsc::UnboundedSender<(i32, nihilipc::ActivityUpdate)>,
+    rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
 }
 
 enum ServerState {
@@ -231,8 +231,8 @@ impl ServerState {
     }
 }
 
-impl nihilipc::rpc::Daemon for DaemonServer {
-    async fn handshake(self, _ctx: Context, params: nihilipc::Handshake) {
+impl nihil_common::rpc::Daemon for DaemonServer {
+    async fn handshake(self, _ctx: Context, params: nihil_common::Handshake) {
         let mut state_guard = self.state.lock().await;
         let state = extract_guard_and_swap!(state_guard, ServerState::Start, "init_client");
         let rpc_client = state.rpc_client.clone();
@@ -247,7 +247,7 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         });
     }
 
-    async fn initialize(self, _ctx: Context, params: nihilipc::InitInfo) {
+    async fn initialize(self, _ctx: Context, params: nihil_common::InitInfo) {
         let mut state_guard = self.state.lock().await;
         let mut state = extract_guard_and_swap!(state_guard, ServerState::Building, "initialize");
 
@@ -294,7 +294,7 @@ impl nihilipc::rpc::Daemon for DaemonServer {
         }
     }
 
-    async fn notify_activity(self, _context: Context, params: nihilipc::ActivityUpdate) {
+    async fn notify_activity(self, _context: Context, params: nihil_common::ActivityUpdate) {
         let mut state_guard = self.state.lock().await;
         let state = extract_guard!(state_guard, ServerState::Launched, "notify_activity");
         let _ = state.rpc_data_tx.send((state.client_pid, params));

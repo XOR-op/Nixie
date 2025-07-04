@@ -683,6 +683,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nihil_common"
+version = "0.1.0"
+dependencies = [
+ "cudarc",
+ "futures",
+ "nix",
+ "serde",
+ "tarpc",
+ "thiserror 2.0.6",
+ "tokio",
+]
+
+[[package]]
 name = "nihilagent"
 version = "0.1.0"
 dependencies = [
@@ -692,23 +705,12 @@ dependencies = [
  "cudarc",
  "flume",
  "futures",
- "nihilipc",
+ "nihil_common",
  "nix",
  "tarpc",
  "tokio",
  "tokio-serde",
  "uuid",
-]
-
-[[package]]
-name = "nihilipc"
-version = "0.1.0"
-dependencies = [
- "futures",
- "nix",
- "serde",
- "tarpc",
- "thiserror 2.0.6",
 ]
 
 [[package]]
@@ -725,7 +727,7 @@ dependencies = [
  "goblin",
  "hashlink",
  "is-root",
- "nihilipc",
+ "nihil_common",
  "nix",
  "nvml-wrapper",
  "serde",

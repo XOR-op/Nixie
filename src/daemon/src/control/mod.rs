@@ -1,6 +1,5 @@
 pub mod client;
 
-use nihilipc::AttrType;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, ConfigurableArgs};
@@ -13,22 +12,11 @@ pub(crate) trait Controllable {
 
     async fn list_processes() -> Vec<ProcessMetadata>;
 
-    async fn set_attr(args: AttrMsg);
-
     async fn prefetch(args: PrefetchMsg);
 
     async fn update_config(config: ConfigurableArgs);
 
     async fn get_config() -> Config;
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AttrMsg {
-    pub pid: i32,
-    pub size_low: Option<u64>,
-    pub size_high: Option<u64>,
-    pub attr: AttrType,
-    pub set: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,8 +37,6 @@ pub(crate) struct ProcessMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AllocationData {
     pub size: u64,
+    pub on_gpu_bytes: u64,
     pub device: i32,
-    pub readonly: bool,
-    pub move_reduced: bool,
-    pub likely_on_gpu: bool,
 }

@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use hashlink::LinkedHashMap;
-use nihilipc::{ActivityUpdate, PrefetchArgs};
+use nihil_common::{ActivityUpdate, MigrationArgs};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -17,11 +17,11 @@ use tokio::{
 
 use crate::{
     config::{init_config, update_config, Config, ConfigurableArgs},
-    control::{self, AttrMsg, Controllable, PrefetchMsg},
+    control::{self, Controllable, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
-    general::{CallFuture, CallParameter},
     runtime::{daemon_server::DaemonServer, ProcCtlReq},
 };
+use nihil_common::general::{CallFuture, CallParameter};
 
 use super::{
     daemon_server::DaemonServerHandle, schedule::Scheduler, socket_chown, ProcessMetadata,
@@ -192,17 +192,6 @@ impl Controllable for ControllableDaemon {
         results.into_iter().flatten().collect()
     }
 
-    async fn set_attr(self, _context: Context, args: AttrMsg) {
-        let guard = self.data.processes.read().await;
-        let Some(handle) = guard.get(&args.pid) else {
-            tracing::warn!("set_attr: pid {} not found", args.pid);
-            return;
-        };
-        let inst_tx = handle.inst_tx();
-        drop(guard);
-        let _ = inst_tx.send(ProcCtlReq::SetAttr(args));
-    }
-
     async fn prefetch(self, _context: Context, args: PrefetchMsg) {
         let guard = self.data.processes.read().await;
         let Some(handle) = guard.get(&args.pid) else {
@@ -212,9 +201,9 @@ impl Controllable for ControllableDaemon {
         drop(guard);
         tracing::warn!("prefetch half implemented: %addr");
         let _ = client
-            .prefetch(
+            .migrate(
                 Context::current(),
-                PrefetchArgs {
+                MigrationArgs {
                     addr: 0,
                     len: args.size_low.unwrap_or(0),
                     to_gpu: args.to_gpu,

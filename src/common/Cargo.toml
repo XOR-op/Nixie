@@ -1,5 +1,5 @@
 [package]
-name = "nihilipc"
+name = "nihil_common"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,5 +12,7 @@ nix.workspace = true
 tarpc.workspace = true
 thiserror.workspace = true
 serde.workspace = true
+cudarc.workspace = true
+tokio = { version = "1" }
 
 futures = "0.3.31"

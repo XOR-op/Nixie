@@ -6,13 +6,9 @@ pub mod shm;
 
 use std::path::Path;
 
+use crate::{control::ProcessMetadata, error::DaemonError};
 pub use daemon::Daemon;
-
-use crate::{
-    control::{AttrMsg, ProcessMetadata},
-    error::DaemonError,
-    general::CallParameter,
-};
+use nihil_common::general::CallParameter;
 
 fn get_user() -> Option<nix::unistd::User> {
     if let Ok(n) = std::env::var("SUDO_USER") {
@@ -39,6 +35,5 @@ fn socket_chown<P: AsRef<Path>>(path: P) -> Result<(), DaemonError> {
 }
 
 pub(crate) enum ProcCtlReq {
-    SetAttr(AttrMsg),
     List(CallParameter<(), ProcessMetadata>),
 }

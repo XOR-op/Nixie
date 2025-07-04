@@ -1,7 +1,6 @@
-use std::{num::NonZeroU64, time::Duration};
-
 use serde::{Deserialize, Serialize};
 
+pub mod general;
 pub mod rpc;
 pub mod shm;
 pub mod sync;
@@ -28,7 +27,8 @@ pub enum ActivityUpdate {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MemoryUsage {
-    pub mem_usage_bytes: u64,
+    pub on_gpu_bytes: u64,
+    pub off_gpu_bytes: u64,
     pub alloc_count: u32,
 }
 
@@ -36,29 +36,12 @@ pub struct MemoryUsage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum S2AMessage {
-    SetAttr(AttrArgs),
-    Prefetch(PrefetchArgs),
+    Migration(MigrationArgs),
     Scheduling(SchedulingArgs),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum AttrType {
-    ReadDup,
-    PrefLoc,
-    AccessedBy,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct AttrArgs {
-    pub addr: Option<NonZeroU64>,
-    pub len: u64,
-    pub value: AttrType,
-    pub will_set: bool,
-    pub device: i32,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct PrefetchArgs {
+pub struct MigrationArgs {
     pub addr: u64,
     pub len: u64,
     pub to_gpu: bool,
@@ -66,14 +49,8 @@ pub struct PrefetchArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SchedulingArgs {
-    Enable {
-        prefetch: bool,
-    },
-    Disable {
-        // index of device in agent side
-        swap_out_mb: Vec<Option<NonZeroU64>>,
-        delay: Option<Duration>,
-    },
+    Enable,
+    Disable,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

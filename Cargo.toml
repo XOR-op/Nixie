@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["src/daemon", "src/ipc", "src/agent"]
+members = ["src/daemon", "src/common", "src/agent"]
 
 [workspace.dependencies]
-nihilipc = { path = "src/ipc" }
+nihil_common = { path = "src/common" }
 bincode = "1.3.3"
 colored = "2.1.0"
 cudarc = { version = "0.13.0", default-features = false, features = [

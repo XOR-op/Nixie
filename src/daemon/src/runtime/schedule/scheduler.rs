@@ -8,13 +8,12 @@ use std::{
 use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
-use nihilipc::{ActivityUpdate, MemoryUsage, SchedulingArgs};
+use nihil_common::{general::CallParameter, ActivityUpdate, MemoryUsage, SchedulingArgs};
 use tokio::sync::mpsc;
 
 use crate::{
     config::load_config,
     error::ScheduleError,
-    general::CallParameter,
     runtime::schedule::{statistics::PreemptionReason, PriorityLevel},
 };
 
@@ -189,17 +188,7 @@ impl Scheduler {
                     swap_out_mb = Some(swap_out.iter().map(|x| x.map_or(0, |x| x.get())).sum());
                     handle
                         .client()
-                        .schedule(
-                            tarpc::context::current(),
-                            SchedulingArgs::Disable {
-                                swap_out_mb: swap_out,
-                                delay: if previous_running {
-                                    Some(config.schedule_delay.unwrap_or_default())
-                                } else {
-                                    None
-                                },
-                            },
-                        )
+                        .schedule(tarpc::context::current(), SchedulingArgs::Disable)
                         .await
                         .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
                     // update statistics for old process
@@ -236,9 +225,7 @@ impl Scheduler {
             .schedule(
                 tarpc::context::current(),
                 // Only prefetch when the active process is different from the new one
-                SchedulingArgs::Enable {
-                    prefetch: should_prefetch,
-                },
+                SchedulingArgs::Enable,
             )
             .await
             .map_err(|e| ScheduleError::RpcError("schedule in", incoming_pid, e))?;

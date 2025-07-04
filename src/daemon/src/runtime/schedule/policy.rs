@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nihilipc::ActivityUpdate;
+use nihil_common::ActivityUpdate;
 
 use super::{scheduler::ActiveClientState, Priority};
 

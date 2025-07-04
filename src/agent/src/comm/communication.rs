@@ -2,9 +2,9 @@ use std::sync::OnceLock;
 
 use colored::Colorize;
 use futures::StreamExt;
-use nihilipc::{
+use nihil_common::{
     rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
-    ActivityUpdate, AttrArgs, Handshake, InitInfo, PrefetchArgs, S2AMessage, SchedulingArgs,
+    ActivityUpdate, Handshake, InitInfo, MigrationArgs, S2AMessage, SchedulingArgs,
 };
 use tarpc::{
     context::Context,
@@ -116,13 +116,9 @@ pub(crate) struct SidecarServer {
     sender: flume::Sender<S2AMessage>,
 }
 
-impl nihilipc::rpc::Sidecar for SidecarServer {
-    async fn set_attr(self, _context: Context, params: AttrArgs) {
-        chan_send!(self.sender.send(S2AMessage::SetAttr(params)));
-    }
-
-    async fn prefetch(self, _context: Context, params: PrefetchArgs) {
-        chan_send!(self.sender.send(S2AMessage::Prefetch(params)));
+impl nihil_common::rpc::Sidecar for SidecarServer {
+    async fn migrate(self, _context: Context, params: MigrationArgs) {
+        chan_send!(self.sender.send(S2AMessage::Migration(params)));
     }
 
     async fn schedule(self, _context: Context, params: SchedulingArgs) {

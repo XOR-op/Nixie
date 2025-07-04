@@ -1,13 +1,12 @@
 use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
-use nihilipc::shm::AllocationEntry;
+use nihil_common::shm::AllocationEntry;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
 use crate::init::{init_generic_data, UVM_FD_CANDIDATES, VALID_UVM_FD};
-use crate::memory::get_dup_daemon;
-use crate::utils::size_to_string;
+use crate::memory::{deallocate_list, populate_entry};
 use crate::{debug_eprintln, warn_eprintln, GENERIC_DATA};
 
 #[macro_export]
@@ -32,15 +31,30 @@ macro_rules! generate_init_fn {
     };
 }
 
+const MIN_ALLOCATION_SIZE: usize = 2 * 1024 * 1024;
+const MAX_ALLOCATION_SIZE: usize = 128 * 1024 * 1024;
+
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_enum {
-    type CudaMallocManagedType =
-        extern "C" fn(*mut *mut libc::c_void, usize, u32) -> cudaError_enum;
-    static MALLOC_FN: OnceLock<CudaMallocManagedType> = OnceLock::new();
-    generate_init_fn!(CudaMallocManagedType, cr"cudaMallocManaged");
+    type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize) -> cudaError_enum;
+    static MALLOC_FN: OnceLock<CudaMallocType> = OnceLock::new();
+    generate_init_fn!(CudaMallocType, cr"cudaMalloc");
     let malloc_func = MALLOC_FN.get_or_init(init_fn);
-    let res = malloc_func(dev_ptr, size, 0x01);
+    if size < MIN_ALLOCATION_SIZE {
+        return malloc_func(dev_ptr, size);
+    }
+
+    let rounded_up_size = (size + MIN_ALLOCATION_SIZE - 1) & !(MIN_ALLOCATION_SIZE - 1);
+    let res = unsafe {
+        cuda_lib().cuMemAddressReserve(
+            dev_ptr as *mut _,
+            rounded_up_size,
+            MIN_ALLOCATION_SIZE,
+            0,
+            0,
+        )
+    };
     if res == cudaError_enum::CUDA_SUCCESS {
         let device_id = {
             let mut device_id = CUdevice::default();
@@ -51,32 +65,38 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             device_id
         };
 
-        let mut ptr_mapping = GENERIC_DATA
-            .get_or_init(init_generic_data)
-            .lock_ptr_mapping();
-        let mut dup_daemon = get_dup_daemon().lock().unwrap();
+        let mut table = GENERIC_DATA.get_or_init(init_generic_data).lock();
+
+        let mut remaining_size = rounded_up_size;
+        let mut cur_addr = unsafe { *dev_ptr } as u64;
+        let mut handle_idx = None;
+        // Allocate bookkeeping structures
+        while remaining_size > 0 {
+            let alloc_size = remaining_size.min(MAX_ALLOCATION_SIZE);
+            if let Some(idx) = table.allocate_handle(cur_addr, alloc_size) {
+                handle_idx = Some(idx);
+                cur_addr += alloc_size as u64;
+                remaining_size -= alloc_size;
+            } else {
+                warn_eprintln!(
+                    "Failed to allocate bookkeeping for {} bytes at address {:x}",
+                    alloc_size,
+                    cur_addr
+                );
+                return cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY;
+            }
+        }
+
         let alloc_entry = AllocationEntry {
             addr: unsafe { *dev_ptr } as u64,
-            len: size,
+            len: rounded_up_size,
             device: device_id,
-            is_readonly: false,
-            is_move_reduced: false,
-            likely_on_gpu: true,
+            handle_idx: handle_idx.expect("Failed to allocate handle"),
         };
-        // if the allocation is stored successfully, record it
-        if let Some(idx) = ptr_mapping.push(alloc_entry) {
-            dup_daemon.record(idx, &alloc_entry);
+
+        if !populate_entry(&alloc_entry, device_id, &mut table) {
+            return cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY;
         }
-        let total_size = ptr_mapping.iter().map(|pr| pr.len).sum();
-        debug_eprintln!(
-            "{} {}: at={}, size={}, total_size={}, count={}",
-            "[libcuda_hook]".bold(),
-            "cudaMallocManaged".green(),
-            format!("{:#018x}", unsafe { *dev_ptr as u64 }).blue(),
-            size_to_string(size),
-            size_to_string(total_size),
-            ptr_mapping.len()
-        );
     }
     res
 }
@@ -88,23 +108,39 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
     generate_init_fn!(CudaFreeType, cr"cudaFree");
     let free_func = FREE_FN.get_or_init(init_fn);
-    if let Some(mapping) = GENERIC_DATA.get() {
-        let mut mapping = mapping.lock_ptr_mapping();
-        let idx = mapping.iter().position(|pr| pr.addr == dev_ptr as u64);
-        if let Some(idx) = idx {
-            mapping.remove(idx);
-        } else {
-            warn_eprintln!("Failed to find ptr mapping for {}", dev_ptr as u64);
-        }
+
+    // first check if is non-managed allocation
+    if dev_ptr as usize % MIN_ALLOCATION_SIZE != 0 {
+        // if not, just call the original function
+        return free_func(dev_ptr);
     }
 
-    debug_eprintln!(
-        "{} {}: at={:#018x}",
-        "[libcuda_hook]".bold(),
-        "cudaFree".green(),
-        dev_ptr as u64
-    );
-    free_func(dev_ptr)
+    let mut table = GENERIC_DATA.get_or_init(init_generic_data).lock();
+    // find the allocation entry
+    let mut entry_idx = None;
+    for entry in table.entry.iter() {
+        if entry.addr == dev_ptr as u64 {
+            entry_idx = Some(entry.handle_idx);
+            break;
+        }
+    }
+    if let Some(idx) = entry_idx {
+        let entry = table.entry.at(idx.get() as usize).unwrap();
+        let handle_idx = entry.handle_idx;
+        deallocate_list(handle_idx, &mut table);
+        // bypass ownership issue
+        let entry = table.entry.at(idx.get() as usize).unwrap();
+        let mut cur_index = Some(entry.handle_idx);
+        while let Some(index) = cur_index {
+            let handle = table.get_handle(index).unwrap();
+            cur_index = handle.next_handle_idx;
+            table.free_handle(index);
+        }
+
+        cudaError_enum::CUDA_SUCCESS
+    } else {
+        cudaError_enum::CUDA_ERROR_INVALID_VALUE
+    }
 }
 
 #[allow(non_snake_case)]
@@ -165,33 +201,4 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
 pub(crate) fn real_libc_close(fd: c_int) -> c_int {
     let close_func = CLOSE_FN.get_or_init(init_close_fn);
     close_func(fd)
-}
-
-#[allow(non_snake_case)]
-#[no_mangle]
-pub unsafe extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_enum {
-    type CudaMemGetInfoType = extern "C" fn(*mut usize, *mut usize) -> cudaError_enum;
-    static MEM_GET_INFO_FN: OnceLock<CudaMemGetInfoType> = OnceLock::new();
-    generate_init_fn!(CudaMemGetInfoType, cr"cudaMemGetInfo");
-    let mem_get_info_func = MEM_GET_INFO_FN.get_or_init(init_fn);
-    let res = mem_get_info_func(free, total);
-    if let Some(ptr) = GENERIC_DATA.get() {
-        let ptr_mapping = ptr.lock_ptr_mapping();
-        let used_size = ptr_mapping.iter().map(|pr| pr.len).sum::<usize>();
-        let other_size = (*total / 10 * 9 - used_size) / 3 * 2;
-        if *free < other_size {
-            *free = other_size;
-        }
-    }
-    res
-}
-
-#[allow(non_snake_case)]
-#[no_mangle]
-pub unsafe extern "C" fn ioctl(fd: c_int, request: c_int, arg: *mut libc::c_void) -> c_int {
-    type IoCtlType = extern "C" fn(c_int, c_int, *mut libc::c_void) -> c_int;
-    static IOCTL_FN: OnceLock<IoCtlType> = OnceLock::new();
-    generate_init_fn!(IoCtlType, cr"ioctl");
-    let ioctl_func = IOCTL_FN.get_or_init(init_fn);
-    ioctl_func(fd, request, arg)
 }
