@@ -4,10 +4,7 @@ use nihil_common::{
     sync::IpcMutexGuard,
 };
 use nix::libc;
-use std::{
-    ffi::CString,
-    sync::{mpsc, OnceLock},
-};
+use std::{ffi::CString, sync::OnceLock};
 use utils::set_device;
 
 mod comm;
@@ -64,7 +61,7 @@ impl GenericData {
     /// Global mapping of device pointers and their sizes
     pub fn lock(&self) -> IpcMutexGuard<'_, AllocationTable> {
         // We always lock shared memory first
-        self.shm.inner.ptr_mapping.lock()
+        self.shm.inner.alloc_table.lock()
     }
 
     pub fn new(path: &str) -> Self {

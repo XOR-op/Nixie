@@ -77,7 +77,7 @@ impl Scheduler {
             // request to run
             let table = GENERIC_DATA.get_or_init(init_generic_data).lock();
             let mut allocs = Vec::new();
-            for (entry_idx, entry) in table.entry.iter().enumerate() {
+            for entry in table.entry.iter() {
                 if allocs.len() <= entry.device as usize {
                     allocs.resize(
                         entry.device as usize + 1,
@@ -88,7 +88,7 @@ impl Scheduler {
                         },
                     );
                 }
-                let (on_gpu, off_gpu) = table.memory_usage(entry_idx).unwrap();
+                let (on_gpu, off_gpu) = table.handle_list.memory_usage(entry.handle_idx);
                 allocs[entry.device as usize].on_gpu_bytes += on_gpu as u64;
                 allocs[entry.device as usize].off_gpu_bytes += off_gpu as u64;
                 allocs[entry.device as usize].alloc_count += 1;

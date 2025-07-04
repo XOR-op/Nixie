@@ -9,12 +9,24 @@ const HANDLE_NUM: usize = 40960;
 pub struct AllocationTable {
     // usize
     pub entry: ShmVec<AllocationEntry, 40960>,
+    pub handle_list: HandleList,
+}
+
+pub struct HandleList {
     // NonZeroU32
     handles: [PhysicalMemoryHandle; HANDLE_NUM],
     freelist_head: Option<NonZeroU32>,
 }
 
 impl AllocationTable {
+    pub fn new() -> Self {
+        Self {
+            entry: ShmVec::new(),
+            handle_list: HandleList::new(),
+        }
+    }
+}
+impl HandleList {
     pub fn new() -> Self {
         let mut handles = [PhysicalMemoryHandle {
             addr: 0,
@@ -27,7 +39,6 @@ impl AllocationTable {
             handles[i].next_handle_idx = NonZeroU32::new(i as u32 + 1);
         }
         Self {
-            entry: ShmVec::new(),
             handles,
             freelist_head: NonZeroU32::new(1),
         }
@@ -70,30 +81,26 @@ impl AllocationTable {
     }
 
     // return (on_gpu, not_on_gpu)
-    pub fn memory_usage(&self, idx: usize) -> Option<(usize, usize)> {
-        if let Some(entry) = self.entry.at(idx) {
-            let mut on_gpu = 0;
-            let mut not_on_gpu = 0;
-            let mut cur_index = Some(entry.handle_idx);
-            while let Some(index) = cur_index {
-                let handle = self.get_handle(index)?;
-                if handle.on_gpu {
-                    on_gpu += handle.size;
-                } else {
-                    not_on_gpu += handle.size;
-                }
-                cur_index = handle.next_handle_idx;
+    pub fn memory_usage(&self, handle_idx: NonZeroU32) -> (usize, usize) {
+        let mut on_gpu = 0;
+        let mut not_on_gpu = 0;
+        let mut cur_index = Some(handle_idx);
+        while let Some(index) = cur_index {
+            let handle = self.get_handle(index).unwrap();
+            if handle.on_gpu {
+                on_gpu += handle.size;
+            } else {
+                not_on_gpu += handle.size;
             }
-            Some((on_gpu, not_on_gpu))
-        } else {
-            None
+            cur_index = handle.next_handle_idx;
         }
+        (on_gpu, not_on_gpu)
     }
 }
 
 pub struct Shm {
     all_len: u32,
-    pub ptr_mapping: IpcMutex<AllocationTable>,
+    pub alloc_table: IpcMutex<AllocationTable>,
 }
 
 #[repr(C)]
@@ -142,7 +149,7 @@ impl Shm {
             }
             let val = Self {
                 all_len: len,
-                ptr_mapping: IpcMutex::new(AllocationTable::new()),
+                alloc_table: IpcMutex::new(AllocationTable::new()),
             };
             core::ptr::write(ptr as *mut Self, val);
             Ok(Pin::new(&mut *(ptr as *mut Self)))
@@ -169,13 +176,13 @@ impl Shm {
             Err(nix::errno::Errno::last_raw())
         } else {
             let r = Pin::new(&mut *(ptr as *mut Self));
-            r.ptr_mapping.increase_ref_count();
+            r.alloc_table.increase_ref_count();
             Ok(r)
         }
     }
 
     unsafe fn close(&mut self) {
-        self.ptr_mapping.close();
+        self.alloc_table.close();
         libc::munmap(
             self as *const Self as *mut libc::c_void,
             self.all_len as usize,

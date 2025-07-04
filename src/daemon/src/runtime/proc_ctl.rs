@@ -5,12 +5,12 @@ use nihil_common::{rpc::SidecarClient, shm::ShmGuard};
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use crate::{
-    control::AllocationData,
+    control::{AllocationData, ProcessMetadata},
     error::NihilphaseError,
     uvm::{event_queue::EventQueue, uvm_binding::UvmEventType_UvmEventTypeGpuFault},
 };
 
-use super::{daemon_server::DeviceOrdinalMapping, ProcCtlReq, ProcessMetadata};
+use super::{daemon_server::DeviceOrdinalMapping, ProcCtlReq};
 
 pub(crate) struct ProcessControl {
     peer_pid: i32,
@@ -115,15 +115,16 @@ impl ProcessControl {
         match inst {
             ProcCtlReq::List(param) => {
                 let mut allocations = Vec::new();
-                let mapping = self.shm.inner.ptr_mapping.lock();
+                let mapping = self.shm.inner.alloc_table.lock();
                 for entry in mapping.entry.iter() {
+                    let (on_gpu, off_gpu) = mapping.handle_list.memory_usage(entry.handle_idx);
                     allocations.push(AllocationData {
-                        size: entry.len as u64,
                         device: self
                             .dev_mapping
                             .visible_to_real(entry.device)
                             .unwrap_or_default(),
-                        on_gpu_bytes: todo!(),
+                        on_gpu_bytes: on_gpu as u64,
+                        off_gpu_bytes: off_gpu as u64,
                     });
                 }
                 drop(mapping);

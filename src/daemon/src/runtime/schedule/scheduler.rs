@@ -229,7 +229,7 @@ impl Scheduler {
             )
             .await
             .map_err(|e| ScheduleError::RpcError("schedule in", incoming_pid, e))?;
-        client.make_active(mem_usage_per_device.iter().map(|x| x.mem_usage_bytes).sum());
+        client.make_active(mem_usage_per_device.iter().map(|x| todo!()).sum());
         let cooldown = ScheduleQueue::compute_cooldown(
             swap_out_mb.unwrap_or_default(),
             config.schedule_cooldown,
@@ -298,7 +298,7 @@ impl Scheduler {
                         match map.entry(real_dev) {
                             Entry::Occupied(mut e) => {
                                 let val: &mut MemoryUsage = e.get_mut();
-                                val.mem_usage_bytes += alloc.size;
+                                val.on_gpu_bytes += alloc.size;
                                 val.alloc_count += 1;
                             }
                             Entry::Vacant(e) => {

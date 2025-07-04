@@ -73,7 +73,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         // Allocate bookkeeping structures
         while remaining_size > 0 {
             let alloc_size = remaining_size.min(MAX_ALLOCATION_SIZE);
-            if let Some(idx) = table.allocate_handle(cur_addr, alloc_size) {
+            if let Some(idx) = table.handle_list.allocate_handle(cur_addr, alloc_size) {
                 handle_idx = Some(idx);
                 cur_addr += alloc_size as u64;
                 remaining_size -= alloc_size;
@@ -115,7 +115,8 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         return free_func(dev_ptr);
     }
 
-    let mut table = GENERIC_DATA.get_or_init(init_generic_data).lock();
+    let mut table_guard = GENERIC_DATA.get_or_init(init_generic_data).lock();
+    let table = &mut *table_guard;
     // find the allocation entry
     let mut entry_idx = None;
     for entry in table.entry.iter() {
@@ -127,16 +128,13 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     if let Some(idx) = entry_idx {
         let entry = table.entry.at(idx.get() as usize).unwrap();
         let handle_idx = entry.handle_idx;
-        deallocate_list(handle_idx, &mut table);
-        // bypass ownership issue
-        let entry = table.entry.at(idx.get() as usize).unwrap();
         let mut cur_index = Some(entry.handle_idx);
+        deallocate_list(handle_idx, &mut table.handle_list);
         while let Some(index) = cur_index {
-            let handle = table.get_handle(index).unwrap();
+            let handle = table.handle_list.get_handle(index).unwrap();
             cur_index = handle.next_handle_idx;
-            table.free_handle(index);
+            table.handle_list.free_handle(index);
         }
-
         cudaError_enum::CUDA_SUCCESS
     } else {
         cudaError_enum::CUDA_ERROR_INVALID_VALUE

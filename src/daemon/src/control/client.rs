@@ -98,7 +98,10 @@ impl ControlClient {
             );
             for (device, allocations) in group_by_device {
                 // print aggregated per device info
-                let alloc_size = allocations.iter().map(|a| a.size).sum::<u64>();
+                let alloc_size = allocations
+                    .iter()
+                    .map(|a| a.on_gpu_bytes + a.off_gpu_bytes)
+                    .sum::<u64>();
                 println!(
                     "{} #alloc = {}, size = {}",
                     format!("<Device {}>", device).cyan(),
@@ -111,7 +114,7 @@ impl ControlClient {
                         println!(
                             "\t{}: size = {}, on_gpu_size = {}",
                             format!("<Allocation {}>", idx).cyan(),
-                            pretty_size(a.size).blue(),
+                            pretty_size(a.on_gpu_bytes + a.off_gpu_bytes).blue(),
                             pretty_size(a.on_gpu_bytes).blue()
                         )
                     }

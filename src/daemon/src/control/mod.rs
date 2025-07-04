@@ -36,7 +36,7 @@ pub(crate) struct ProcessMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AllocationData {
-    pub size: u64,
     pub on_gpu_bytes: u64,
+    pub off_gpu_bytes: u64,
     pub device: i32,
 }
