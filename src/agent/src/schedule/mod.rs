@@ -8,9 +8,7 @@ use stats::LaunchStats;
 
 use cudarc::driver::sys::lib as cuda_lib;
 
-use crate::{
-    check_cu_err, env_config::agent_config, init::init_generic_data, set_device, GENERIC_DATA,
-};
+use crate::{check_cu_err, env_config::agent_config, init_generic_data, set_device, GENERIC_DATA};
 
 mod stats;
 pub(crate) use stats::LaunchType;

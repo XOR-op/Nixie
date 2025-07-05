@@ -1,11 +1,14 @@
 use crate::{
     error::{DaemonError, UvmError},
-    runtime::shm::open_shm,
-    uvm::event_queue::EventQueue,
+    runtime::{proc_ctl::ProcessControl, shm::open_shm},
 };
 use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
-use nihil_common::rpc::{rpc_multiplex_twoway, Daemon, SidecarClient};
+use goblin::pe;
+use nihil_common::{
+    rpc::{rpc_multiplex_twoway, Daemon, SidecarClient},
+    HandshakeResponse, MigrationResponse,
+};
 use nix::libc::c_int;
 use std::{
     collections::HashMap,
@@ -27,26 +30,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use super::{proc_ctl::ProcessControlBuilder, ProcCtlReq};
-
-macro_rules! extract_guard_and_swap {
-    ($state:expr, $expected:path, $funcname: literal) => {
-        match &*$state {
-            $expected(_) => {
-                let state = std::mem::replace(&mut *$state, ServerState::Partial);
-                if let $expected(val) = state {
-                    val
-                } else {
-                    unreachable!()
-                }
-            }
-            _ => {
-                tracing::error!("[{}] bad state: {}", $funcname, $state.state_name());
-                return;
-            }
-        }
-    };
-}
+use super::ProcCtlReq;
 
 macro_rules! extract_guard {
     ($state:expr, $expected:path, $funcname: literal) => {
@@ -79,7 +63,7 @@ macro_rules! checked {
             Ok(val) => val,
             Err((err, pid)) => {
                 tracing::error!("[pid={}] {}", pid, err);
-                return;
+                return None;
             }
         }
     };
@@ -152,6 +136,7 @@ impl DaemonServer {
         conn: UnixStream,
         exit_tx: mpsc::UnboundedSender<i32>,
         rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
+        buffer_shmem_path: String,
     ) -> DaemonServerHandleFuture {
         // construct a bidirectional RPC tunnel based on single UDS connection
         let mut codec_builder = LengthDelimitedCodec::builder();
@@ -174,6 +159,7 @@ impl DaemonServer {
                 inst_rx,
                 rpc_data_tx,
                 exit_tx,
+                buffer_shmem_path,
             }))),
         };
         tokio::spawn(
@@ -198,13 +184,7 @@ struct StateOfStarting {
     exit_tx: mpsc::UnboundedSender<i32>,
     rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
     ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
-}
-
-struct StateOfBuilding {
-    client_pid: i32,
-    rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
-    builder: ProcessControlBuilder,
-    ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
+    buffer_shmem_path: String,
 }
 
 struct DaemonServerState {
@@ -214,7 +194,6 @@ struct DaemonServerState {
 
 enum ServerState {
     Start(StateOfStarting),
-    Building(StateOfBuilding),
     Launched(DaemonServerState),
     // Used for ownership workaround
     Partial,
@@ -224,7 +203,6 @@ impl ServerState {
     fn state_name(&self) -> &'static str {
         match self {
             ServerState::Start(_) => "Start",
-            ServerState::Building(_) => "Building",
             ServerState::Launched(_) => "Launched",
             ServerState::Partial => "Inconsistent state when lock is hold",
         }
@@ -232,66 +210,56 @@ impl ServerState {
 }
 
 impl nihil_common::rpc::Daemon for DaemonServer {
-    async fn handshake(self, _ctx: Context, params: nihil_common::Handshake) {
+    async fn handshake(
+        self,
+        _ctx: Context,
+        params: nihil_common::Handshake,
+    ) -> Option<HandshakeResponse> {
         let mut state_guard = self.state.lock().await;
-        let state = extract_guard_and_swap!(state_guard, ServerState::Start, "init_client");
+        let state = std::mem::replace(&mut *state_guard, ServerState::Partial);
+        let state = if let ServerState::Start(state) = state {
+            state
+        } else {
+            tracing::error!("Handshake called in wrong state: {}", state.state_name());
+            return None;
+        };
         let rpc_client = state.rpc_client.clone();
         tracing::info!("Client[pid={}] connected", params.pid);
-        let mut builder = ProcessControlBuilder::new(rpc_client, state.inst_rx, state.exit_tx);
-        builder.with_pid(params.pid);
-        *state_guard = ServerState::Building(StateOfBuilding {
-            client_pid: params.pid,
-            rpc_data_tx: state.rpc_data_tx,
-            builder,
-            ret: state.ret.clone(),
-        });
-    }
 
-    async fn initialize(self, _ctx: Context, params: nihil_common::InitInfo) {
-        let mut state_guard = self.state.lock().await;
-        let mut state = extract_guard_and_swap!(state_guard, ServerState::Building, "initialize");
-
-        // duplicate UVM fd from agent process
-        let peer_pid = state.client_pid;
-        let (pid_fd, uvm_fd) =
-            checked!(duplicate_peer_fd(peer_pid, params.fd).map_err(|e| (e, peer_pid)));
-        let event_queue = if let Some(uvm_fd) = uvm_fd {
-            Some(checked!(
-                EventQueue::new(uvm_fd, 1024).map_err(|e| (e, peer_pid))
-            ))
-        } else {
-            None
-        };
-        state
-            .builder
-            .with_pid_fd(checked!(
-                AsyncFd::new(pid_fd).map_err(|e| (UvmError::Io("Create PID fd", e), peer_pid))
-            ))
-            .with_event_queue(event_queue);
+        let peer_pid = params.pid;
+        let (pid_fd, _) = checked!(duplicate_peer_fd(peer_pid, None).map_err(|e| (e, peer_pid)));
+        let pid_fd = checked!(
+            AsyncFd::new(pid_fd).map_err(|e| (UvmError::Io("Create PID fd", e), peer_pid))
+        );
 
         // open shared memory
         let shmem = checked!(open_shm(params.shm_path).map_err(|e| (e, peer_pid)));
-        state.builder.with_shm(shmem);
 
         // parse CUDA_VISIBLE_DEVICES
         let device_mapping =
             checked!(DeviceOrdinalMapping::new(&params.visible_devices).map_err(|e| (e, peer_pid)));
-        state.builder.with_dev_mapping(device_mapping.clone());
 
-        if let Some(ctl) = state.builder.build() {
-            let task = tokio::spawn(async move {
-                ctl.run().await;
-            });
-            // should no have problem since state transition only happens once
-            let _ = state.ret.try_send((task, peer_pid, device_mapping));
-            *state_guard = ServerState::Launched(DaemonServerState {
-                client_pid: peer_pid,
-                rpc_data_tx: state.rpc_data_tx,
-            });
-        } else {
-            tracing::error!("Failed to build process control");
-            *state_guard = ServerState::Building(state);
-        }
+        let ctl = ProcessControl::new(
+            peer_pid,
+            pid_fd,
+            shmem,
+            device_mapping.clone(),
+            rpc_client.clone(),
+            state.inst_rx,
+            state.exit_tx,
+        );
+        let task = tokio::spawn(async move {
+            ctl.run().await;
+        });
+        // should no have problem since state transition only happens once
+        let _ = state.ret.try_send((task, peer_pid, device_mapping));
+        *state_guard = ServerState::Launched(DaemonServerState {
+            client_pid: peer_pid,
+            rpc_data_tx: state.rpc_data_tx,
+        });
+        Some(HandshakeResponse {
+            buffer_shm_path: state.buffer_shmem_path,
+        })
     }
 
     async fn notify_activity(self, _context: Context, params: nihil_common::ActivityUpdate) {
@@ -300,11 +268,11 @@ impl nihil_common::rpc::Daemon for DaemonServer {
         let _ = state.rpc_data_tx.send((state.client_pid, params));
     }
 
-    async fn request_memory(
-        self,
-        _context: Context,
-        params: nihil_common::SchedulingRequest,
-    ) -> () {
+    async fn request_memory(self, _context: Context, params: nihil_common::MemoryRequest) {
+        todo!()
+    }
+
+    async fn migrate_response_async(self, _context: Context, params: Vec<MigrationResponse>) {
         todo!()
     }
 }

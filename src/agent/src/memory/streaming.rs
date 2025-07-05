@@ -5,7 +5,7 @@ use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
 use nihil_common::{MigrationArgs, MigrationResponse};
 
 use crate::comm::migration_response_async;
-use crate::init::init_generic_data;
+use crate::init_generic_data;
 use crate::memory::{default_alloc_prop, map_mem_handle, unmap_and_release_mem_handle};
 use crate::{check_cu_err, set_device, warn_eprintln, CuStreamWrapper, GENERIC_DATA};
 
@@ -144,9 +144,7 @@ impl StreamingMemoryMigrator {
         while let Some((event, args)) = req_queue.recv().ok() {
             // wait for the event to complete
             check_cu_err!(
-                unsafe {
-                    cuda_lib().cuEventSynchronize(event.0);
-                },
+                unsafe { cuda_lib().cuEventSynchronize(event.0) },
                 "Failed to synchronize CUDA event"
             );
             // send back response
@@ -157,7 +155,7 @@ impl StreamingMemoryMigrator {
             };
             // copy finished, do the post-processing
             if !args.host_to_device {
-                let table = GENERIC_DATA
+                let mut table = GENERIC_DATA
                     .get_or_init(init_generic_data)
                     .lock(device_id as usize);
                 let handle = table

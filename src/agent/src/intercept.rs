@@ -1,4 +1,3 @@
-use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
 use nihil_common::shm::AllocationEntry;
 use nihil_common::MAX_GPUS;
@@ -6,9 +5,10 @@ use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
 
-use crate::init::{init_generic_data, UVM_FD_CANDIDATES, VALID_UVM_FD};
+use crate::comm::init::init_comm_entrypoint;
+use crate::init_generic_data;
 use crate::memory::{deallocate_list, populate_entry};
-use crate::{debug_eprintln, warn_eprintln, GENERIC_DATA};
+use crate::{warn_eprintln, GENERIC_DATA};
 
 #[macro_export]
 macro_rules! generate_init_fn_as {
@@ -155,6 +155,6 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
     generate_init_fn!(OpenType, cr"open");
     let open_func = OPEN_FN.get_or_init(init_fn);
     let res = open_func(path, oflag, mode);
-
+    init_comm_entrypoint();
     res
 }

@@ -89,12 +89,11 @@ impl ControlClient {
                 .map(|s| s.trim().to_string())
                 .ok();
             println!(
-                "[{}]{}: num_fault = {}",
+                "[{}]{}",
                 process.pid.to_string().yellow(),
                 process_name
                     .map_or("".to_string(), |s| format!(" {}", s))
                     .green(),
-                process.num_fault.to_string().blue()
             );
             for (device, allocations) in group_by_device {
                 // print aggregated per device info

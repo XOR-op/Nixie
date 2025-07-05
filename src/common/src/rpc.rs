@@ -1,5 +1,5 @@
 use crate::{
-    ActivityUpdate, Handshake, InitInfo, MemoryRequest, MigrationArgs, MigrationResponse,
+    ActivityUpdate, Handshake, HandshakeResponse, MemoryRequest, MigrationArgs, MigrationResponse,
     SchedulingArgs,
 };
 use futures::future::{AbortHandle, Abortable};
@@ -13,9 +13,7 @@ use thiserror::Error;
 
 #[tarpc::service]
 pub trait Daemon {
-    async fn handshake(params: Handshake);
-
-    async fn initialize(params: InitInfo);
+    async fn handshake(params: Handshake) -> Option<HandshakeResponse>;
 
     async fn notify_activity(params: ActivityUpdate);
 

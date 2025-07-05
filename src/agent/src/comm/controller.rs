@@ -33,14 +33,16 @@ impl Controller {
                 SidecarSelect::Process(msg) => {
                     if let Err(e) = match msg {
                         A2SMessage::Handshake(msg) => {
-                            self.daemon_client
+                            if let Ok(Some(resp)) = self
+                                .daemon_client
                                 .handshake(tarpc::context::current(), msg)
                                 .await
-                        }
-                        A2SMessage::InitInfo(msg) => {
-                            self.daemon_client
-                                .initialize(tarpc::context::current(), msg)
-                                .await
+                            {
+                                super::init::init_buffer_by_handshake_resp(resp);
+                            } else {
+                                panic!("Handshake failed, daemon did not respond with handshake response");
+                            }
+                            Ok(())
                         }
                         A2SMessage::NofityActivity(msg) => {
                             self.daemon_client

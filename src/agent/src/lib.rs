@@ -9,7 +9,6 @@ use utils::set_device;
 
 mod comm;
 mod env_config;
-mod init;
 mod intercept;
 mod intercept_launch;
 mod memory;
@@ -94,8 +93,12 @@ impl GenericData {
                 .expect("Failed to init shared memory"),
         );
         // close fd but not unlink; daemon will be responsible for unlinking
-        crate::intercept::real_libc_close(shm_fd);
+        unsafe { libc::close(shm_fd) };
 
         Self { shm }
     }
+}
+
+pub(crate) fn init_generic_data() -> GenericData {
+    unreachable!("GENERIC_DATA should already be initialized by init_comm");
 }

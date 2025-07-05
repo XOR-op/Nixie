@@ -9,16 +9,16 @@ pub mod shm;
 pub mod sync;
 pub use constant::*;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Handshake {
     pub pid: i32,
+    pub shm_path: String,
+    pub visible_devices: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitInfo {
-    pub fd: Option<i32>,
-    pub shm_path: String,
-    pub visible_devices: String,
+pub struct HandshakeResponse {
+    pub buffer_shm_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
