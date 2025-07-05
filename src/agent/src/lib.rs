@@ -1,6 +1,7 @@
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUstream};
 use nihil_common::{
     shm::{AllocationTable, Shm, ShmGuard},
+    shm_buffer::ShmBuffer,
     sync::IpcMutexGuard,
 };
 use nix::libc;
@@ -41,21 +42,6 @@ impl CuStreamWrapper {
         }
         Self(stream)
     }
-}
-
-/// All streams used for prefetching
-pub(crate) fn stream_get_or_init() -> &'static Vec<CuStreamWrapper> {
-    static STREAM_VEC: OnceLock<Vec<CuStreamWrapper>> = OnceLock::new();
-    STREAM_VEC.get_or_init(|| {
-        // TODO: fix this buggy implementation;
-        set_device(0);
-        let mut vec = Vec::new();
-        for _ in 0..8 {
-            let stream = CuStreamWrapper::new(0);
-            vec.push(stream);
-        }
-        vec
-    })
 }
 
 pub(crate) static GENERIC_DATA: OnceLock<GenericData> = OnceLock::new();
@@ -101,4 +87,38 @@ impl GenericData {
 
 pub(crate) fn init_generic_data() -> GenericData {
     unreachable!("GENERIC_DATA should already be initialized by init_comm");
+}
+
+mod shm_buf {
+    use super::ShmBuffer;
+    use std::sync::OnceLock;
+    pub(crate) static SHM_BUFFER: OnceLock<ShmBuffer> = OnceLock::new();
+}
+
+// should be called only once, before any other code that uses SHM_BUFFER
+pub(crate) fn init_shm_buffer(path: String, size: usize) {
+    if shm_buf::SHM_BUFFER
+        .set(ShmBuffer::new(path, size, false).expect("Failed to create SHM buffer"))
+        .is_err()
+    {
+        panic!("SHM_BUFFER is already initialized");
+    }
+}
+
+pub(crate) fn global_shm_buffer() -> &'static ShmBuffer {
+    static GLOBAL_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let max_attempts = 10;
+    loop {
+        if let Some(buf) = shm_buf::SHM_BUFFER.get() {
+            return buf;
+        }
+        if GLOBAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < max_attempts {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        } else {
+            panic!(
+                "SHM_BUFFER is not initialized after {} attempts",
+                max_attempts
+            );
+        }
+    }
 }

@@ -4,7 +4,6 @@ use crate::{
 };
 use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
-use goblin::pe;
 use nihil_common::{
     rpc::{rpc_multiplex_twoway, Daemon, SidecarClient},
     HandshakeResponse, MigrationResponse,
@@ -137,6 +136,7 @@ impl DaemonServer {
         exit_tx: mpsc::UnboundedSender<i32>,
         rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
         buffer_shmem_path: String,
+        buffer_len: usize,
     ) -> DaemonServerHandleFuture {
         // construct a bidirectional RPC tunnel based on single UDS connection
         let mut codec_builder = LengthDelimitedCodec::builder();
@@ -160,6 +160,7 @@ impl DaemonServer {
                 rpc_data_tx,
                 exit_tx,
                 buffer_shmem_path,
+                buffer_len,
             }))),
         };
         tokio::spawn(
@@ -185,6 +186,7 @@ struct StateOfStarting {
     rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
     ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
     buffer_shmem_path: String,
+    buffer_len: usize,
 }
 
 struct DaemonServerState {
@@ -259,6 +261,7 @@ impl nihil_common::rpc::Daemon for DaemonServer {
         });
         Some(HandshakeResponse {
             buffer_shm_path: state.buffer_shmem_path,
+            buffer_length: state.buffer_len as u64,
         })
     }
 

@@ -17,6 +17,12 @@ impl<R> Future for CallFuture<R> {
     }
 }
 
+impl<R> CallFuture<R> {
+    pub fn wait_blocking(mut self) -> Option<R> {
+        self.rx.blocking_recv()
+    }
+}
+
 pub struct CallParameter<P, R> {
     pub param: P,
     ret_tx: mpsc::Sender<R>,
@@ -31,10 +37,23 @@ impl<P, R> CallParameter<P, R> {
     }
 
     pub fn ret(self, ret: R) {
-        if self.ret_tx.capacity() > 0 {
-            // should not panic
-            self.ret_tx.try_send(ret).unwrap()
-        }
+        // should not panic
+        self.ret_tx.try_send(ret).unwrap()
+    }
+
+    pub fn into_parts(self) -> (P, CallReturnChannel<R>) {
+        let ret_channel = CallReturnChannel { tx: self.ret_tx };
+        (self.param, ret_channel)
+    }
+}
+
+pub struct CallReturnChannel<R> {
+    tx: mpsc::Sender<R>,
+}
+impl<R> CallReturnChannel<R> {
+    pub fn ret(self, ret: R) {
+        // should not panic
+        self.tx.try_send(ret).unwrap()
     }
 }
 

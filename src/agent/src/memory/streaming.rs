@@ -1,20 +1,52 @@
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 
 use cudarc::driver::sys::CUevent;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
-use nihil_common::{MigrationArgs, MigrationResponse};
+use nihil_common::{MigrationArgs, MigrationResponse, MAX_GPUS};
 
 use crate::comm::migration_response_async;
-use crate::init_generic_data;
 use crate::memory::{default_alloc_prop, map_mem_handle, unmap_and_release_mem_handle};
 use crate::{check_cu_err, set_device, warn_eprintln, CuStreamWrapper, GENERIC_DATA};
+use crate::{global_shm_buffer, init_generic_data};
 
 use super::default_access_desc;
+
+pub static MEMORY_MIGRATION_CTL: OnceLock<MemoryMigrationControl> = OnceLock::new();
+
+pub fn init_memory_migration_ctl() -> MemoryMigrationControl {
+    MemoryMigrationControl::new()
+}
+
+pub struct MemoryMigrationControl {
+    migrators: Mutex<[StreamingMemoryMigrator; MAX_GPUS]>,
+}
+
+impl MemoryMigrationControl {
+    pub fn new() -> Self {
+        let migrators = std::array::from_fn(|i| StreamingMemoryMigrator::new(i as i32));
+        Self {
+            migrators: Mutex::new(migrators),
+        }
+    }
+
+    pub fn migrate(&self, tasks: Vec<MigrationArgs>) {
+        let mut migrators = self.migrators.lock().unwrap();
+        for task in tasks {
+            let device_id = task.device;
+            if device_id < 0 || device_id >= MAX_GPUS as i32 {
+                warn_eprintln!("Invalid device ID: {}", device_id);
+                continue;
+            }
+            migrators[device_id as usize].migrate(task);
+        }
+    }
+}
 
 struct CUeventWrapper(CUevent);
 unsafe impl Send for CUeventWrapper {}
 
-pub struct StreamingMemoryMigrator {
+struct StreamingMemoryMigrator {
     device_id: i32,
     d2h_stream: CuStreamWrapper,
     h2d_stream: CuStreamWrapper,
@@ -44,6 +76,20 @@ impl StreamingMemoryMigrator {
     pub fn migrate(&mut self, args: MigrationArgs) {
         set_device(self.device_id);
         let mut event = std::ptr::null_mut();
+        let host_buffer_ptr = {
+            let ptr = unsafe {
+                global_shm_buffer().at_offset(args.host_buffer_offset, args.size as usize)
+            };
+            if ptr.is_none() {
+                warn_eprintln!(
+                    "Invalid host buffer: offset={} size={}",
+                    args.host_buffer_offset,
+                    args.size
+                );
+                return;
+            };
+            ptr.unwrap()
+        };
         check_cu_err!(
             unsafe {
                 cuda_lib().cuEventCreate(
@@ -83,12 +129,13 @@ impl StreamingMemoryMigrator {
                 phy_handle.on_gpu = true;
                 phy_handle.addr
             };
+
             // h2d copy
             check_cu_err!(
                 unsafe {
                     cuda_lib().cuMemcpyHtoDAsync_v2(
                         virtual_addr,
-                        todo!("Get host buffer pointer"),
+                        host_buffer_ptr as *const _,
                         args.size as usize,
                         self.h2d_stream.0,
                     )
@@ -120,7 +167,7 @@ impl StreamingMemoryMigrator {
             check_cu_err!(
                 unsafe {
                     cuda_lib().cuMemcpyDtoHAsync_v2(
-                        todo!("Get host buffer pointer"),
+                        host_buffer_ptr as *mut _,
                         virtual_addr,
                         args.size as usize,
                         self.d2h_stream.0,
@@ -149,9 +196,9 @@ impl StreamingMemoryMigrator {
             );
             // send back response
             let response = MigrationResponse {
-                device: args.device,
+                host_buffer_offset: args.host_buffer_offset,
                 size: args.size,
-                host_buffer_idx: args.host_buffer_idx,
+                device: args.device,
             };
             // copy finished, do the post-processing
             if !args.host_to_device {

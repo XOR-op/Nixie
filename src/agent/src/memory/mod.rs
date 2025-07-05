@@ -6,11 +6,13 @@ use cudarc::driver::sys::{
     CUmemAllocationProp, CUmemAllocationType, CUmemLocation, CUmemLocationType,
 };
 use nihil_common::{
+    general::CallParameter,
     shm::{AllocationEntry, AllocationTable, HandleList, PhysicalMemoryHandle},
     MemoryRequest,
 };
 
-use crate::check_cu_err;
+use crate::{check_cu_err, comm::request_memory};
+pub use streaming::{init_memory_migration_ctl, MEMORY_MIGRATION_CTL};
 
 pub(super) fn default_alloc_prop(device: i32) -> CUmemAllocationProp {
     CUmemAllocationProp {
@@ -158,5 +160,7 @@ pub(crate) fn deallocate_list(start_idx: NonZeroU32, handle_list: &mut HandleLis
 }
 
 pub(crate) fn reserve_memory_blocking(req: MemoryRequest) {
-    todo!()
+    let (parameter, rx) = CallParameter::new(req);
+    request_memory(parameter);
+    rx.wait_blocking();
 }

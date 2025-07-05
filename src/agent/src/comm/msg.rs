@@ -1,11 +1,10 @@
 use nihil_common::*;
 use nihil_common::{general::CallParameter, MigrationArgs, SchedulingArgs};
 
-#[derive(Debug, Clone)]
 pub enum A2SMessage {
     Handshake(Handshake),
     NofityActivity(ActivityUpdate),
-    MemoryRequest(MemoryRequest),
+    MemoryRequest(CallParameter<MemoryRequest, ()>),
     MigrationResponse(Vec<MigrationResponse>),
 }
 

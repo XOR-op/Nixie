@@ -6,6 +6,7 @@ mod constant;
 pub mod general;
 pub mod rpc;
 pub mod shm;
+pub mod shm_buffer;
 pub mod sync;
 pub use constant::*;
 
@@ -19,6 +20,7 @@ pub struct Handshake {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandshakeResponse {
     pub buffer_shm_path: String,
+    pub buffer_length: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,18 +40,18 @@ pub struct MemoryUsage {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MigrationArgs {
+    pub host_buffer_offset: u64,
     pub size: u64,
     pub device: i32,
     pub handle_idx: NonZeroU32,
-    pub host_buffer_idx: u32,
     pub host_to_device: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MigrationResponse {
+    pub host_buffer_offset: u64,
     pub size: u64,
     pub device: i32,
-    pub host_buffer_idx: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

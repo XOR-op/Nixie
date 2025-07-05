@@ -22,7 +22,7 @@ pub(crate) fn update_activity(activity: ActivityUpdate) {
     chan_send!(chan.send(A2SMessage::NofityActivity(activity)));
 }
 
-pub(crate) fn request_memory(req: MemoryRequest) {
+pub(crate) fn request_memory(req: CallParameter<MemoryRequest, ()>) {
     let Some(chan) = COMM.get_or_init(init_comm) else {
         return;
     };

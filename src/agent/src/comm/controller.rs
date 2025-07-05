@@ -2,7 +2,12 @@ use colored::Colorize;
 use nihil_common::rpc::DaemonClient;
 
 use super::msg::{A2SMessage, S2AMessage};
-use crate::{info_eprintln, schedule::Scheduler, warn_eprintln};
+use crate::{
+    info_eprintln,
+    memory::{init_memory_migration_ctl, MEMORY_MIGRATION_CTL},
+    schedule::Scheduler,
+    warn_eprintln,
+};
 
 /// handler for agent<->daemon communication
 pub(crate) struct Controller {
@@ -50,9 +55,15 @@ impl Controller {
                                 .await
                         }
                         A2SMessage::MemoryRequest(msg) => {
-                            self.daemon_client
-                                .request_memory(tarpc::context::current(), msg)
-                                .await
+                            let client = self.daemon_client.clone();
+                            tokio::spawn(async move {
+                                let (param, ret) = msg.into_parts();
+                                let _ = client
+                                    .request_memory(tarpc::context::current(), param)
+                                    .await;
+                                ret.ret(());
+                            });
+                            Ok(())
                         }
                         A2SMessage::MigrationResponse(msg) => {
                             self.daemon_client
@@ -70,7 +81,9 @@ impl Controller {
                 }
                 SidecarSelect::Daemon(msg) => match msg {
                     S2AMessage::MigrationRequest(args) => {
-                        todo!()
+                        MEMORY_MIGRATION_CTL
+                            .get_or_init(init_memory_migration_ctl)
+                            .migrate(args);
                     }
                     S2AMessage::Scheduling(args) => {
                         self.sched_ctrl.set_allow_running(args);
