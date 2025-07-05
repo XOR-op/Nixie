@@ -27,6 +27,23 @@ struct CuStreamWrapper(CUstream);
 unsafe impl Send for CuStreamWrapper {}
 unsafe impl Sync for CuStreamWrapper {}
 
+impl CuStreamWrapper {
+    pub fn new(device: i32) -> Self {
+        set_device(device);
+        let mut stream = std::ptr::null_mut();
+        let res = unsafe {
+            cuda_lib().cuStreamCreate(
+                &mut stream,
+                cudarc::driver::sys::CUstream_flags_enum::CU_STREAM_NON_BLOCKING as u32,
+            )
+        };
+        if res != cudaError_enum::CUDA_SUCCESS {
+            panic!("Failed to create stream: {:?}", res);
+        }
+        Self(stream)
+    }
+}
+
 /// All streams used for prefetching
 pub(crate) fn stream_get_or_init() -> &'static Vec<CuStreamWrapper> {
     static STREAM_VEC: OnceLock<Vec<CuStreamWrapper>> = OnceLock::new();
@@ -35,17 +52,8 @@ pub(crate) fn stream_get_or_init() -> &'static Vec<CuStreamWrapper> {
         set_device(0);
         let mut vec = Vec::new();
         for _ in 0..8 {
-            let mut stream = std::ptr::null_mut();
-            let res = unsafe {
-                cuda_lib().cuStreamCreate(
-                    &mut stream,
-                    cudarc::driver::sys::CUstream_flags_enum::CU_STREAM_NON_BLOCKING as u32,
-                )
-            };
-            if res != cudaError_enum::CUDA_SUCCESS {
-                panic!("Failed to create stream: {:?}", res);
-            }
-            vec.push(CuStreamWrapper(stream));
+            let stream = CuStreamWrapper::new(0);
+            vec.push(stream);
         }
         vec
     })
@@ -59,9 +67,9 @@ pub(crate) struct GenericData {
 
 impl GenericData {
     /// Global mapping of device pointers and their sizes
-    pub fn lock(&self) -> IpcMutexGuard<'_, AllocationTable> {
+    pub fn lock(&self, nth_table: usize) -> IpcMutexGuard<'_, AllocationTable> {
         // We always lock shared memory first
-        self.shm.inner.alloc_table.lock()
+        self.shm.inner.alloc_tables[nth_table].lock()
     }
 
     pub fn new(path: &str) -> Self {

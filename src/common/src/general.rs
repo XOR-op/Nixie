@@ -19,7 +19,7 @@ impl<R> Future for CallFuture<R> {
 
 pub struct CallParameter<P, R> {
     pub param: P,
-    pub ret_tx: mpsc::Sender<R>,
+    ret_tx: mpsc::Sender<R>,
 }
 
 impl<P, R> CallParameter<P, R> {
@@ -28,6 +28,13 @@ impl<P, R> CallParameter<P, R> {
         let param = Self { param, ret_tx: tx };
         let future = CallFuture { rx };
         (param, future)
+    }
+
+    pub fn ret(self, ret: R) {
+        if self.ret_tx.capacity() > 0 {
+            // should not panic
+            self.ret_tx.try_send(ret).unwrap()
+        }
     }
 }
 

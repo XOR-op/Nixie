@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use nihil_common::{ActivityUpdate, MemoryUsage, SchedulingArgs};
+use nihil_common::{general::CallParameter, ActivityUpdate, SchedulingArgs, MAX_GPUS};
 use stats::LaunchStats;
 
 use cudarc::driver::sys::lib as cuda_lib;
@@ -44,14 +44,14 @@ impl Scheduler {
         }
     }
 
-    pub fn set_allow_running(&'static self, params: SchedulingArgs) {
+    pub fn set_allow_running(&'static self, params: CallParameter<SchedulingArgs, ()>) {
         self.spawn_idle_monitor_once();
         let mut allow_running = self.allow_running.lock().unwrap();
-        match params {
-            SchedulingArgs::Enable {} => {
+        match params.param {
+            SchedulingArgs::Enable => {
                 allow_running.allow_running = true;
             }
-            SchedulingArgs::Disable {} => {
+            SchedulingArgs::Disable => {
                 allow_running.allow_running = false;
                 let mut dev_count = 0;
                 unsafe {
@@ -68,6 +68,7 @@ impl Scheduler {
                 }
             }
         }
+        params.ret(());
         self.cond_var.notify_all();
     }
 
@@ -75,27 +76,16 @@ impl Scheduler {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         if !sched_ctx.allow_running {
             // request to run
-            let table = GENERIC_DATA.get_or_init(init_generic_data).lock();
-            let mut allocs = Vec::new();
-            for entry in table.entry.iter() {
-                if allocs.len() <= entry.device as usize {
-                    allocs.resize(
-                        entry.device as usize + 1,
-                        MemoryUsage {
-                            on_gpu_bytes: 0,
-                            off_gpu_bytes: 0,
-                            alloc_count: 0,
-                        },
-                    );
+            let mut allocs = [const { Vec::new() }; MAX_GPUS];
+            for i in 0..MAX_GPUS {
+                let table = GENERIC_DATA.get_or_init(init_generic_data).lock(i);
+                for entry in table.entry.iter() {
+                    let (_, off_gpu) = table.handle_list.memory_usage(entry.handle_idx);
+                    allocs[i].push(off_gpu as u64)
                 }
-                let (on_gpu, off_gpu) = table.handle_list.memory_usage(entry.handle_idx);
-                allocs[entry.device as usize].on_gpu_bytes += on_gpu as u64;
-                allocs[entry.device as usize].off_gpu_bytes += off_gpu as u64;
-                allocs[entry.device as usize].alloc_count += 1;
             }
-            drop(table);
             crate::comm::update_activity(ActivityUpdate::RequestScheduling {
-                mem_usage_per_device: allocs,
+                memory_request: nihil_common::MemoryRequest { mem_req: allocs },
             });
         }
         while !sched_ctx.allow_running {

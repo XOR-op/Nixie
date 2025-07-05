@@ -299,6 +299,14 @@ impl nihil_common::rpc::Daemon for DaemonServer {
         let state = extract_guard!(state_guard, ServerState::Launched, "notify_activity");
         let _ = state.rpc_data_tx.send((state.client_pid, params));
     }
+
+    async fn request_memory(
+        self,
+        _context: Context,
+        params: nihil_common::SchedulingRequest,
+    ) -> () {
+        todo!()
+    }
 }
 
 // if `remote_fd` is Some, the `Ok` result must be a tuple of (pid_fd, ,Some(uvm_fd))

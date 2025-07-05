@@ -206,7 +206,7 @@ impl Controllable for ControllableDaemon {
                 MigrationArgs {
                     addr: 0,
                     len: args.size_low.unwrap_or(0),
-                    to_gpu: args.to_gpu,
+                    host_to_device: args.to_gpu,
                 },
             )
             .await;

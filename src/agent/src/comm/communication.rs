@@ -3,8 +3,10 @@ use std::sync::OnceLock;
 use colored::Colorize;
 use futures::StreamExt;
 use nihil_common::{
+    general::CallParameter,
     rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar},
-    ActivityUpdate, Handshake, InitInfo, MigrationArgs, S2AMessage, SchedulingArgs,
+    ActivityUpdate, Handshake, InitInfo, MemoryRequest, MigrationArgs, MigrationResponse,
+    SchedulingArgs,
 };
 use tarpc::{
     context::Context,
@@ -13,7 +15,10 @@ use tarpc::{
 };
 use tokio::net::UnixStream;
 
-use super::{controller::Controller, msg::A2SMessage};
+use super::{
+    controller::Controller,
+    msg::{A2SMessage, S2AMessage},
+};
 use crate::schedule;
 
 macro_rules! chan_send {
@@ -111,17 +116,33 @@ pub(crate) fn update_activity(activity: ActivityUpdate) {
     chan_send!(chan.send(A2SMessage::NofityActivity(activity)));
 }
 
+pub(crate) fn request_memory(req: MemoryRequest) {
+    let Some(chan) = COMM.get_or_init(init_comm) else {
+        return;
+    };
+    chan_send!(chan.send(A2SMessage::MemoryRequest(req)));
+}
+
+pub(crate) fn migration_response_async(arg: Vec<MigrationResponse>) {
+    let Some(chan) = COMM.get_or_init(init_comm) else {
+        return;
+    };
+    chan_send!(chan.send(A2SMessage::MigrationResponse(arg)));
+}
+
 #[derive(Clone)]
 pub(crate) struct SidecarServer {
     sender: flume::Sender<S2AMessage>,
 }
 
 impl nihil_common::rpc::Sidecar for SidecarServer {
-    async fn migrate(self, _context: Context, params: MigrationArgs) {
-        chan_send!(self.sender.send(S2AMessage::Migration(params)));
+    async fn migrate_request_async(self, _context: Context, params: Vec<MigrationArgs>) {
+        chan_send!(self.sender.send(S2AMessage::MigrationRequest(params)));
     }
 
     async fn schedule(self, _context: Context, params: SchedulingArgs) {
+        let (params, fut) = CallParameter::new(params);
         chan_send!(self.sender.send(S2AMessage::Scheduling(params)));
+        fut.await.unwrap_or_default()
     }
 }

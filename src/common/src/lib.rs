@@ -1,9 +1,13 @@
+use std::num::NonZeroU32;
+
 use serde::{Deserialize, Serialize};
 
+mod constant;
 pub mod general;
 pub mod rpc;
 pub mod shm;
 pub mod sync;
+pub use constant::*;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Handshake {
@@ -19,9 +23,7 @@ pub struct InitInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActivityUpdate {
-    RequestScheduling {
-        mem_usage_per_device: Vec<MemoryUsage>,
-    },
+    RequestScheduling { memory_request: MemoryRequest },
     Idle,
 }
 
@@ -34,29 +36,29 @@ pub struct MemoryUsage {
 
 // ------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum S2AMessage {
-    Migration(MigrationArgs),
-    Scheduling(SchedulingArgs),
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct MigrationArgs {
+    pub size: u64,
+    pub device: i32,
+    pub handle_idx: NonZeroU32,
+    pub host_buffer_idx: u32,
+    pub host_to_device: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct MigrationArgs {
-    pub addr: u64,
-    pub len: u64,
-    pub to_gpu: bool,
+pub struct MigrationResponse {
+    pub size: u64,
+    pub device: i32,
+    pub host_buffer_idx: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRequest {
+    pub mem_req: [Vec<u64>; MAX_GPUS],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SchedulingArgs {
     Enable,
     Disable,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct SchedulingResults {
-    pub ro_size_mb: u64,
-    pub rw_size_mb: u64,
-    pub ro_duration: std::time::Duration,
-    pub rw_duration: std::time::Duration,
 }

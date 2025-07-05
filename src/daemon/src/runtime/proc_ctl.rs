@@ -43,7 +43,7 @@ impl ProcessControl {
                         self.process_event(&mut event_queue).await?;
                     }
                     Some(inst) = self.inst_rx.recv() => {
-                        self.handle_inst(inst).await;
+                        self.handle_inst(inst);
                     }
                     _ = self.pid_fd.readable() => {
                         break;
@@ -58,7 +58,7 @@ impl ProcessControl {
             loop {
                 tokio::select! {
                     Some(inst) = self.inst_rx.recv() => {
-                        self.handle_inst(inst).await;
+                        self.handle_inst(inst);
                     }
                     _ = self.pid_fd.readable() => {
                         break;
@@ -111,7 +111,7 @@ impl ProcessControl {
         Ok(n_completed)
     }
 
-    async fn handle_inst(&mut self, inst: ProcCtlReq) {
+    fn handle_inst(&mut self, inst: ProcCtlReq) {
         match inst {
             ProcCtlReq::List(param) => {
                 let mut allocations = Vec::new();
@@ -128,14 +128,11 @@ impl ProcessControl {
                     });
                 }
                 drop(mapping);
-                let _ = param
-                    .ret_tx
-                    .send(ProcessMetadata {
-                        pid: self.peer_pid,
-                        allocations,
-                        num_fault: self.num_fault,
-                    })
-                    .await;
+                param.ret(ProcessMetadata {
+                    pid: self.peer_pid,
+                    allocations,
+                    num_fault: self.num_fault,
+                });
             }
         }
     }
@@ -238,14 +235,4 @@ impl ProcessControlBuilder {
             num_fault: 0,
         })
     }
-}
-
-fn serialize_msg(msg: nihil_common::S2AMessage) -> Vec<u8> {
-    let buf = bincode::serialize(&msg).unwrap();
-    let length = buf.len() as u32;
-    let length_buf = length.to_le_bytes();
-    let mut coalesced_buf = Vec::with_capacity(4 + buf.len());
-    coalesced_buf.extend_from_slice(&length_buf);
-    coalesced_buf.extend_from_slice(&buf);
-    coalesced_buf
 }

@@ -1,7 +1,7 @@
 use colored::Colorize;
-use nihil_common::{rpc::DaemonClient, S2AMessage};
+use nihil_common::rpc::DaemonClient;
 
-use super::msg::A2SMessage;
+use super::msg::{A2SMessage, S2AMessage};
 use crate::{info_eprintln, schedule::Scheduler, warn_eprintln};
 
 /// handler for agent<->daemon communication
@@ -47,6 +47,16 @@ impl Controller {
                                 .notify_activity(tarpc::context::current(), msg)
                                 .await
                         }
+                        A2SMessage::MemoryRequest(msg) => {
+                            self.daemon_client
+                                .request_memory(tarpc::context::current(), msg)
+                                .await
+                        }
+                        A2SMessage::MigrationResponse(msg) => {
+                            self.daemon_client
+                                .migrate_response_async(tarpc::context::current(), msg)
+                                .await
+                        }
                     } {
                         warn_eprintln!(
                             "{} {}: {}",
@@ -57,15 +67,8 @@ impl Controller {
                     }
                 }
                 SidecarSelect::Daemon(msg) => match msg {
-                    S2AMessage::Migration(args) => {
-                        info_eprintln!(
-                            "{} {}: address={}, len={:#x}, to_gpu={}",
-                            "[libcuda_hook]".bold(),
-                            "rpc_prefetch".blue(),
-                            "#TODO".yellow(),
-                            args.len,
-                            args.to_gpu
-                        );
+                    S2AMessage::MigrationRequest(args) => {
+                        todo!()
                     }
                     S2AMessage::Scheduling(args) => {
                         self.sched_ctrl.set_allow_running(args);

@@ -1,6 +1,7 @@
 use colored::Colorize;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
 use nihil_common::shm::AllocationEntry;
+use nihil_common::MAX_GPUS;
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
@@ -65,7 +66,9 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             device_id
         };
 
-        let mut table = GENERIC_DATA.get_or_init(init_generic_data).lock();
+        let mut table = GENERIC_DATA
+            .get_or_init(init_generic_data)
+            .lock(device_id as usize);
 
         let mut remaining_size = rounded_up_size;
         let mut cur_addr = unsafe { *dev_ptr } as u64;
@@ -90,7 +93,6 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         let alloc_entry = AllocationEntry {
             addr: unsafe { *dev_ptr } as u64,
             len: rounded_up_size,
-            device: device_id,
             handle_idx: handle_idx.expect("Failed to allocate handle"),
         };
 
@@ -115,30 +117,34 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         return free_func(dev_ptr);
     }
 
-    let mut table_guard = GENERIC_DATA.get_or_init(init_generic_data).lock();
-    let table = &mut *table_guard;
-    // find the allocation entry
-    let mut entry_idx = None;
-    for entry in table.entry.iter() {
-        if entry.addr == dev_ptr as u64 {
-            entry_idx = Some(entry.handle_idx);
-            break;
+    for possible_dev in 0..MAX_GPUS {
+        let mut table_guard = GENERIC_DATA
+            .get_or_init(init_generic_data)
+            .lock(possible_dev);
+        let table = &mut *table_guard;
+        // find the allocation entry
+        let mut entry_idx = None;
+        for entry in table.entry.iter() {
+            if entry.addr == dev_ptr as u64 {
+                entry_idx = Some(entry.handle_idx);
+                break;
+            }
+        }
+        // on this device, we found the entry
+        if let Some(idx) = entry_idx {
+            let entry = table.entry.at(idx.get() as usize).unwrap();
+            let handle_idx = entry.handle_idx;
+            let mut cur_index = Some(entry.handle_idx);
+            deallocate_list(handle_idx, &mut table.handle_list);
+            while let Some(index) = cur_index {
+                let handle = table.handle_list.get_handle(index).unwrap();
+                cur_index = handle.next_handle_idx;
+                table.handle_list.free_handle(index);
+            }
+            return cudaError_enum::CUDA_SUCCESS;
         }
     }
-    if let Some(idx) = entry_idx {
-        let entry = table.entry.at(idx.get() as usize).unwrap();
-        let handle_idx = entry.handle_idx;
-        let mut cur_index = Some(entry.handle_idx);
-        deallocate_list(handle_idx, &mut table.handle_list);
-        while let Some(index) = cur_index {
-            let handle = table.handle_list.get_handle(index).unwrap();
-            cur_index = handle.next_handle_idx;
-            table.handle_list.free_handle(index);
-        }
-        cudaError_enum::CUDA_SUCCESS
-    } else {
-        cudaError_enum::CUDA_ERROR_INVALID_VALUE
-    }
+    cudaError_enum::CUDA_ERROR_INVALID_VALUE
 }
 
 #[allow(non_snake_case)]
@@ -149,54 +155,6 @@ pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -
     generate_init_fn!(OpenType, cr"open");
     let open_func = OPEN_FN.get_or_init(init_fn);
     let res = open_func(path, oflag, mode);
-    debug_eprintln!(
-        "{} {}: path={}, fd={}",
-        "[libcuda_hook]".bold(),
-        "open".green(),
-        std::ffi::CStr::from_ptr(path).to_str().unwrap_or(""),
-        res
-    );
 
-    if std::ffi::CStr::from_ptr(path)
-        .to_str()
-        .is_ok_and(|s| s == "/dev/nvidia-uvm")
-    {
-        // store potential UVM FDs used by CUDA libraries
-        if VALID_UVM_FD.get().is_none() {
-            let mut guard = UVM_FD_CANDIDATES.lock().unwrap();
-            if !guard.iter().any(|&fd| fd == res) {
-                guard.push(res);
-            }
-        }
-    }
     res
-}
-
-type CloseType = extern "C" fn(c_int) -> c_int;
-static CLOSE_FN: OnceLock<CloseType> = OnceLock::new();
-generate_init_fn_as!(CloseType, cr"close", init_close_fn);
-
-#[allow(non_snake_case)]
-#[no_mangle]
-pub unsafe extern "C" fn close(fd: c_int) -> c_int {
-    let close_func = CLOSE_FN.get_or_init(init_close_fn);
-    let res = close_func(fd);
-    if VALID_UVM_FD.get().is_none() {
-        let mut guard = UVM_FD_CANDIDATES.lock().unwrap();
-        if let Some(idx) = guard.iter().position(|&x| x == fd) {
-            guard.remove(idx);
-            debug_eprintln!(
-                "!!! UVM FD closed: {} from pid={}: {:?}",
-                fd,
-                std::process::id(),
-                *guard
-            );
-        }
-    }
-    res
-}
-
-pub(crate) fn real_libc_close(fd: c_int) -> c_int {
-    let close_func = CLOSE_FN.get_or_init(init_close_fn);
-    close_func(fd)
 }

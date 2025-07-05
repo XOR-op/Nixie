@@ -1,4 +1,7 @@
-use crate::{ActivityUpdate, Handshake, InitInfo, MigrationArgs, SchedulingArgs};
+use crate::{
+    ActivityUpdate, Handshake, InitInfo, MemoryRequest, MigrationArgs, MigrationResponse,
+    SchedulingArgs,
+};
 use futures::future::{AbortHandle, Abortable};
 use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -15,13 +18,17 @@ pub trait Daemon {
     async fn initialize(params: InitInfo);
 
     async fn notify_activity(params: ActivityUpdate);
+
+    async fn request_memory(params: MemoryRequest);
+
+    async fn migrate_response_async(params: Vec<MigrationResponse>);
 }
 
 // Services exposed by attached sidecars for applications
 // Receive requests from the daemon
 #[tarpc::service]
 pub trait Sidecar {
-    async fn migrate(params: MigrationArgs);
+    async fn migrate_request_async(params: Vec<MigrationArgs>);
 
     async fn schedule(params: SchedulingArgs);
 }

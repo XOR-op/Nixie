@@ -3,9 +3,8 @@ use std::num::NonZeroU32;
 
 use nix::libc;
 
-use crate::sync::IpcMutex;
+use crate::{sync::IpcMutex, HANDLE_NUM, MAX_GPUS};
 
-const HANDLE_NUM: usize = 40960;
 pub struct AllocationTable {
     // usize
     pub entry: ShmVec<AllocationEntry, 40960>,
@@ -34,6 +33,7 @@ impl HandleList {
             cu_handle: None,
             next_handle_idx: None,
             on_gpu: false,
+            valid: false,
         }; HANDLE_NUM];
         for i in 1..HANDLE_NUM {
             handles[i].next_handle_idx = NonZeroU32::new(i as u32 + 1);
@@ -52,6 +52,7 @@ impl HandleList {
             handle.addr = addr;
             handle.size = size;
             handle.on_gpu = false;
+            handle.valid = true;
             Some(idx)
         } else {
             None
@@ -61,8 +62,10 @@ impl HandleList {
     pub fn free_handle(&mut self, idx: NonZeroU32) {
         let handle = &mut self.handles[idx.get() as usize];
         handle.addr = 0;
-        handle.on_gpu = false;
+        handle.size = 0;
         handle.next_handle_idx = self.freelist_head;
+        handle.on_gpu = false;
+        handle.valid = false;
         self.freelist_head = Some(idx);
     }
 
@@ -100,7 +103,7 @@ impl HandleList {
 
 pub struct Shm {
     all_len: u32,
-    pub alloc_table: IpcMutex<AllocationTable>,
+    pub alloc_tables: [IpcMutex<AllocationTable>; MAX_GPUS],
 }
 
 #[repr(C)]
@@ -111,6 +114,7 @@ pub struct PhysicalMemoryHandle {
     pub cu_handle: Option<cudarc::driver::sys::CUmemGenericAllocationHandle>,
     pub next_handle_idx: Option<NonZeroU32>,
     pub on_gpu: bool,
+    pub valid: bool,
 }
 
 #[repr(C)]
@@ -118,7 +122,6 @@ pub struct PhysicalMemoryHandle {
 pub struct AllocationEntry {
     pub addr: u64,
     pub len: usize,
-    pub device: i32,
     pub handle_idx: NonZeroU32,
 }
 
@@ -149,7 +152,7 @@ impl Shm {
             }
             let val = Self {
                 all_len: len,
-                alloc_table: IpcMutex::new(AllocationTable::new()),
+                alloc_tables: std::array::from_fn(|_| IpcMutex::new(AllocationTable::new())),
             };
             core::ptr::write(ptr as *mut Self, val);
             Ok(Pin::new(&mut *(ptr as *mut Self)))
@@ -176,13 +179,19 @@ impl Shm {
             Err(nix::errno::Errno::last_raw())
         } else {
             let r = Pin::new(&mut *(ptr as *mut Self));
-            r.alloc_table.increase_ref_count();
+            for alloc_table in r.alloc_tables.iter() {
+                // Increase ref count for each allocation table
+                alloc_table.increase_ref_count();
+            }
             Ok(r)
         }
     }
 
     unsafe fn close(&mut self) {
-        self.alloc_table.close();
+        for alloc_table in self.alloc_tables.iter_mut() {
+            // Decrease ref count for each allocation table
+            alloc_table.close();
+        }
         libc::munmap(
             self as *const Self as *mut libc::c_void,
             self.all_len as usize,
