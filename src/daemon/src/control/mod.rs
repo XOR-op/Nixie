@@ -1,6 +1,8 @@
 pub mod client;
 
-use nihil_common::GlobalDeviceId;
+use std::{collections::HashMap, num::NonZeroU32};
+
+use nihil_common::{GlobalDeviceId, MAX_GPUS};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, ConfigurableArgs};
@@ -31,12 +33,32 @@ pub(crate) struct PrefetchMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProcessMetadata {
     pub pid: i32,
-    pub allocations: Vec<AllocationData>,
+    pub allocations: [Vec<AllocationData>; MAX_GPUS], // Global device ID
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProcessResidualRequest {
+    pub pid: i32,
+    pub on_gpu: bool,
+    pub gpu_list: Vec<GlobalDeviceId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProcessResidualData {
+    pub pid: i32,
+    pub allocations: HashMap<GlobalDeviceId, Vec<PhysicalMemoryData>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AllocationData {
     pub on_gpu_bytes: u64,
     pub off_gpu_bytes: u64,
-    pub device: GlobalDeviceId,
+    pub physical: Vec<PhysicalMemoryData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PhysicalMemoryData {
+    pub on_gpu: bool,
+    pub handle_idx: NonZeroU32,
+    pub size: u64,
 }

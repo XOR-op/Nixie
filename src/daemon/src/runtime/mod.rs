@@ -6,7 +6,10 @@ pub mod shm;
 
 use std::path::Path;
 
-use crate::{control::ProcessMetadata, error::DaemonError};
+use crate::{
+    control::{ProcessMetadata, ProcessResidualData, ProcessResidualRequest},
+    error::DaemonError,
+};
 pub use daemon::Daemon;
 use nihil_common::general::CallParameter;
 
@@ -36,4 +39,5 @@ fn socket_chown<P: AsRef<Path>>(path: P) -> Result<(), DaemonError> {
 
 pub(crate) enum ProcCtlReq {
     List(CallParameter<(), ProcessMetadata>),
+    ListProcessResidual(CallParameter<ProcessResidualRequest, ProcessResidualData>),
 }

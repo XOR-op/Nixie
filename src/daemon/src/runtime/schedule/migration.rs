@@ -37,6 +37,10 @@ impl DataMigrationTask {
         }
     }
 
+    pub fn get_src(&self) -> &[(i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>)] {
+        &self.src
+    }
+
     pub async fn run(self) {
         // clustering by global device ID
         let mut src_per_device: HashMap<

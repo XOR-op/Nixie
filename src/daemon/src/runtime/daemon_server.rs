@@ -6,7 +6,7 @@ use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
 use nihil_common::{
     rpc::{rpc_multiplex_twoway, Daemon, SidecarClient},
-    GlobalDeviceId, HandshakeResponse, MigrationResponse, ProcessLocalDeviceId,
+    GlobalDeviceId, HandshakeResponse, ProcessLocalDeviceId,
 };
 use nix::libc::c_int;
 use std::{
@@ -71,7 +71,7 @@ macro_rules! checked {
 pub(super) struct DaemonServerHandleFuture {
     client: SidecarClient,
     pid: Option<i32>,
-    task_rx: mpsc::Receiver<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
+    task_rx: mpsc::Receiver<(JoinHandle<()>, i32, Arc<DeviceOrdinalMapping>)>,
     inst_tx: mpsc::UnboundedSender<ProcCtlReq>,
 }
 
@@ -184,7 +184,7 @@ struct StateOfStarting {
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
     exit_tx: mpsc::UnboundedSender<i32>,
     rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
-    ret: mpsc::Sender<(JoinHandle<()>, i32, DeviceOrdinalMapping)>,
+    ret: mpsc::Sender<(JoinHandle<()>, i32, Arc<DeviceOrdinalMapping>)>,
     buffer_shmem_path: String,
     buffer_len: usize,
 }
@@ -254,7 +254,9 @@ impl nihil_common::rpc::Daemon for DaemonServer {
             ctl.run().await;
         });
         // should no have problem since state transition only happens once
-        let _ = state.ret.try_send((task, peer_pid, device_mapping));
+        let _ = state
+            .ret
+            .try_send((task, peer_pid, Arc::new(device_mapping)));
         *state_guard = ServerState::Launched(DaemonServerState {
             client_pid: peer_pid,
             rpc_data_tx: state.rpc_data_tx,
@@ -332,8 +334,8 @@ impl DeviceOrdinalMapping {
                 num_dev
             };
             for i in 0..num_dev {
-                real_to_visible.insert(i, i);
-                visible_to_real.insert(i, i);
+                real_to_visible.insert(GlobalDeviceId(i), ProcessLocalDeviceId(i));
+                visible_to_real.insert(ProcessLocalDeviceId(i), GlobalDeviceId(i));
             }
         } else {
             let device_mapping = get_device_uuid_mapping();
@@ -376,7 +378,7 @@ impl DeviceOrdinalMapping {
         if let Some(dev) = self.real_to_visible.get(&real) {
             Some(*dev)
         } else {
-            tracing::error!("Invalid real device ordinal: {}", real);
+            tracing::error!("Invalid real device ordinal: {}", real.0);
             None
         }
     }
@@ -385,7 +387,7 @@ impl DeviceOrdinalMapping {
         if let Some(dev) = self.visible_to_real.get(&visible) {
             Some(*dev)
         } else {
-            tracing::error!("Invalid visible device ordinal: {}", visible);
+            tracing::error!("Invalid visible device ordinal: {}", visible.0);
             None
         }
     }

@@ -1,11 +1,11 @@
 #![allow(non_upper_case_globals)]
-use std::os::fd::OwnedFd;
+use std::{collections::HashMap, os::fd::OwnedFd};
 
 use nihil_common::{rpc::SidecarClient, shm::ShmGuard, ProcessLocalDeviceId, MAX_GPUS};
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use crate::{
-    control::{AllocationData, ProcessMetadata},
+    control::{AllocationData, PhysicalMemoryData, ProcessMetadata, ProcessResidualData},
     error::NihilphaseError,
 };
 
@@ -70,24 +70,73 @@ impl ProcessControl {
     fn handle_inst(&mut self, inst: ProcCtlReq) {
         match inst {
             ProcCtlReq::List(param) => {
-                let mut allocations = Vec::new();
+                let mut allocations = std::array::from_fn(|_| Vec::new());
                 for device in 0..MAX_GPUS {
-                    let mapping = self.shm.inner.alloc_tables[device].lock();
-                    for entry in mapping.entry.iter() {
-                        let (on_gpu, off_gpu) = mapping.handle_list.memory_usage(entry.handle_idx);
-                        allocations.push(AllocationData {
-                            device: self
-                                .dev_mapping
-                                .visible_to_real(ProcessLocalDeviceId(device as i32))
-                                .unwrap_or_else(|| todo!("Handle device mapping error")),
-                            on_gpu_bytes: on_gpu as u64,
-                            off_gpu_bytes: off_gpu as u64,
-                        });
+                    if let Some(global_device_id) = self
+                        .dev_mapping
+                        .visible_to_real(ProcessLocalDeviceId(device as i32))
+                    {
+                        let mapping = self.shm.inner.alloc_tables[device].lock();
+                        for entry in mapping.entry.iter() {
+                            let mut physical = Vec::new();
+                            let mut cur_handle = Some(entry.handle_idx);
+                            let mut on_gpu_bytes = 0;
+                            let mut off_gpu_bytes = 0;
+                            while let Some(handle_idx) = cur_handle {
+                                let handle = mapping.handle_list.get_handle(handle_idx).unwrap();
+                                physical.push(PhysicalMemoryData {
+                                    on_gpu: handle.on_gpu,
+                                    handle_idx,
+                                    size: handle.size as u64,
+                                });
+                                cur_handle = handle.next_handle_idx;
+                                if handle.on_gpu {
+                                    on_gpu_bytes += handle.size as u64;
+                                } else {
+                                    off_gpu_bytes += handle.size as u64;
+                                }
+                            }
+                            allocations[global_device_id.0 as usize].push(AllocationData {
+                                on_gpu_bytes,
+                                off_gpu_bytes,
+                                physical,
+                            });
+                        }
                     }
                 }
+
                 param.ret(ProcessMetadata {
                     pid: self.peer_pid,
                     allocations,
+                });
+            }
+            ProcCtlReq::ListProcessResidual(call_parameter) => {
+                let (param, ret_chan) = call_parameter.into_parts();
+                let mut result = HashMap::new();
+                for device in param.gpu_list {
+                    if let Some(proc_local_id) = self.dev_mapping.real_to_visible(device) {
+                        let mut mem_list = Vec::new();
+                        let mapping = self.shm.inner.alloc_tables[proc_local_id.0 as usize].lock();
+                        for entry in mapping.entry.iter() {
+                            let mut cur_handle = Some(entry.handle_idx);
+                            while let Some(handle_idx) = cur_handle {
+                                let handle = mapping.handle_list.get_handle(handle_idx).unwrap();
+                                if handle.on_gpu == param.on_gpu {
+                                    mem_list.push(PhysicalMemoryData {
+                                        on_gpu: handle.on_gpu,
+                                        handle_idx,
+                                        size: handle.size as u64,
+                                    });
+                                }
+                                cur_handle = handle.next_handle_idx;
+                            }
+                        }
+                        result.insert(device, mem_list);
+                    }
+                }
+                ret_chan.ret(ProcessResidualData {
+                    pid: self.peer_pid,
+                    allocations: result,
                 });
             }
         }

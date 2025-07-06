@@ -103,7 +103,7 @@ impl HandleList {
 
 pub struct Shm {
     all_len: u32,
-    pub alloc_tables: [IpcMutex<AllocationTable>; MAX_GPUS],
+    pub alloc_tables: [IpcMutex<AllocationTable>; MAX_GPUS], // Process local device ID
 }
 
 #[repr(C)]

@@ -107,13 +107,7 @@ impl History {
 
 pub struct ClientStatistics {
     pub pid: i32,
-
-    // all devices
-    pub allocated_mem_est: u64,
-    // all devices
-    pub on_gpu_mem_est: u64,
     pub active_time_history: History,
-
     pub state: ClientState,
     pub priority: Priority,
     pub last_priority_update: Instant,
@@ -122,8 +116,11 @@ pub struct ClientStatistics {
 impl std::fmt::Debug for ClientStatistics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let history = self.active_time_history.iter().collect::<Vec<_>>();
-        write!(f, "ClientStatistics {{ alloc_est: {} MB, on_gpu_est: {} MB, state: [{:?}], active_time_history: {:?} }}", 
-            self.allocated_mem_est/1024/1024, self.on_gpu_mem_est/1024/1024, self.state, history)
+        write!(
+            f,
+            "ClientStatistics {{state: [{:?}], active_time_history: {:?} }}",
+            self.state, history
+        )
     }
 }
 
@@ -131,8 +128,6 @@ impl ClientStatistics {
     pub fn new(pid: i32) -> Self {
         Self {
             pid,
-            allocated_mem_est: 0,
-            on_gpu_mem_est: 0,
             state: ClientState::Idle,
             active_time_history: History::new(32),
             priority: Priority::default_dynamic(),
@@ -140,14 +135,13 @@ impl ClientStatistics {
         }
     }
 
-    pub fn make_active(&mut self, mem_est: u64) {
+    pub fn make_active(&mut self) {
         if self.state.is_active() {
             tracing::error!("make_active: Client {} is already active", self.pid);
         }
         self.state = ClientState::Active {
             since: Instant::now(),
         };
-        self.allocated_mem_est = mem_est;
         self.last_priority_update = Instant::now();
     }
 
@@ -204,10 +198,6 @@ impl ClientStatistics {
     pub fn decrease_priority(&mut self, until: Option<PriorityLevel>) -> bool {
         self.last_priority_update = Instant::now();
         self.priority.decrease(until)
-    }
-
-    pub fn update_on_gpu_mem_est(&mut self, on_gpu_est: u64) {
-        self.on_gpu_mem_est = on_gpu_est;
     }
 }
 

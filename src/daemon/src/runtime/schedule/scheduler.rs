@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    num::NonZeroU64,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -9,23 +8,22 @@ use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
 use nihil_common::{
-    general::CallParameter, shm_buffer::ShmBuffer, ActivityUpdate, MemoryRequest, MemoryUsage,
-    SchedulingArgs,
+    general::CallParameter, ActivityUpdate, GlobalDeviceId, SchedulingArgs, MAX_GPUS,
 };
 use tokio::sync::mpsc;
 
 use crate::{
     config::load_config,
+    control::{ProcessResidualData, ProcessResidualRequest},
     error::ScheduleError,
     runtime::schedule::{statistics::PreemptionReason, PriorityLevel},
 };
 
-use crate::runtime::{
-    daemon_server::{DaemonServerHandle, DeviceOrdinalMapping},
-    ProcCtlReq, ProcessMetadata,
-};
+use crate::runtime::{daemon_server::DaemonServerHandle, ProcCtlReq};
 
-use super::{policy::ScheduleQueue, statistics::StopReason, ShmBufferManager};
+use super::{
+    migration::DataMigrationTask, policy::ScheduleQueue, statistics::StopReason, ShmBufferManager,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ActiveClientState {
@@ -107,7 +105,9 @@ impl Scheduler {
     ) -> Result<(), ScheduleError> {
         match data {
             ActivityUpdate::RequestScheduling { memory_request } => {
-                self.handle_sched_request(pid, memory_request).await
+                // TODO: handle memory request
+                let _ = memory_request;
+                self.handle_sched_request(pid).await
             }
             ActivityUpdate::Idle => {
                 self.handle_activity_idle(pid).await;
@@ -116,17 +116,12 @@ impl Scheduler {
         }
     }
 
-    async fn handle_sched_request(
-        &mut self,
-        incoming_pid: i32,
-        memory_request: MemoryRequest,
-    ) -> Result<(), ScheduleError> {
+    async fn handle_sched_request(&mut self, incoming_pid: i32) -> Result<(), ScheduleError> {
         let control = self.list.write().await;
         let config = load_config();
-        let mut should_prefetch = false;
         let mut swap_out_mb = None;
 
-        if let Some((active_pid, previous_running)) = match self.active_client {
+        if let Some((active_pid, _previous_running)) = match self.active_client {
             ActiveClientState::None => None,
             ActiveClientState::Active { pid, .. } => {
                 let incoming_level = self
@@ -155,52 +150,66 @@ impl Scheduler {
             }
         } {
             if incoming_pid != active_pid {
-                should_prefetch = true;
-                // active pid can exit before scheduler knows
-                if let Some(handle) = control.get(&active_pid) {
+                // active pid can exit before scheduler knows in `else` branch
+                if let Some(cur_handle) = control.get(&active_pid) {
                     tracing::trace!("Scheduling out process {}", active_pid);
+                    let cur_client = cur_handle.client();
+                    let disable_current_fut = tokio::spawn(async move {
+                        cur_client
+                            .schedule(tarpc::context::current(), SchedulingArgs::Disable)
+                            .await
+                    });
 
-                    let (swap_out, old_remaining_est) = {
-                        let cur_proc_dev_mapping = handle.dev_mapping();
-                        if let Some(new_handle) = control.get(&incoming_pid) {
-                            let (para, fut) = CallParameter::new(());
-                            let _ = handle.inst_tx().send(ProcCtlReq::List(para));
-                            let cur_list = fut.await;
-                            Self::compute_eviction(
-                                &memory_request,
-                                cur_list,
-                                cur_proc_dev_mapping,
-                                new_handle.dev_mapping(),
-                            )
-                        } else {
-                            (Vec::new(), 0)
-                        }
-                    };
-                    {
-                        let swap_out_in_gb = swap_out
-                            .iter()
-                            .map(|x| x.map_or(0.0, |x| x.get() as f64))
-                            .sum::<f64>()
-                            / 1024.0;
-                        tracing::trace!(
-                            "Swap out {:2} GB from process {}, remaining estimate: {} MB",
-                            swap_out_in_gb,
-                            active_pid,
-                            old_remaining_est / (1024 * 1024)
-                        );
-                        tracing::trace!("Swap out {:?} from {}", swap_out, active_pid);
+                    // get info about incoming process
+                    let incoming_request = if let Some(new_handle) = control.get(&incoming_pid) {
+                        let (para, fut) = CallParameter::new(ProcessResidualRequest {
+                            pid: incoming_pid,
+                            on_gpu: false,
+                            gpu_list: (0..MAX_GPUS)
+                                .into_iter()
+                                .map(|i| GlobalDeviceId(i as i32))
+                                .collect(),
+                        });
+                        let _ = new_handle
+                            .inst_tx()
+                            .send(ProcCtlReq::ListProcessResidual(para));
+                        fut.await
+                    } else {
+                        None
                     }
+                    .unwrap_or_else(|| ProcessResidualData {
+                        pid: incoming_pid,
+                        allocations: HashMap::new(),
+                    });
 
-                    swap_out_mb = Some(swap_out.iter().map(|x| x.map_or(0, |x| x.get())).sum());
-                    handle
-                        .client()
-                        .schedule(tarpc::context::current(), SchedulingArgs::Disable)
+                    // make sure the current process is device-synchronized
+                    disable_current_fut
                         .await
+                        .unwrap()
                         .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
-                    // update statistics for old process
-                    if let Some(client) = self.sched_queue.get_client_mut(active_pid) {
-                        client.update_on_gpu_mem_est(old_remaining_est);
+
+                    let cur_residual = {
+                        let (para, fut) = CallParameter::new(ProcessResidualRequest {
+                            pid: active_pid,
+                            on_gpu: true,
+                            gpu_list: incoming_request.allocations.keys().cloned().collect(),
+                        });
+                        let _ = cur_handle
+                            .inst_tx()
+                            .send(ProcCtlReq::ListProcessResidual(para));
+                        fut.await
                     }
+                    .expect("Failed to get current process residual data");
+
+                    let task = two_processes_plan(&incoming_request, &cur_residual);
+                    swap_out_mb = task.get_src().get(0).map(|(_, spec, _, _)| {
+                        spec.device_map
+                            .values()
+                            .map(|entries| entries.iter().map(|entry| entry.size).sum::<u64>())
+                            .sum::<u64>()
+                            / (1024 * 1024) // convert to MB
+                    });
+                    task.run().await
                 } else {
                     // the previous active process has exited
                     self.active_client = ActiveClientState::None;
@@ -235,7 +244,7 @@ impl Scheduler {
             )
             .await
             .map_err(|e| ScheduleError::RpcError("schedule in", incoming_pid, e))?;
-        client.make_active(mem_usage_per_device.iter().map(|x| todo!()).sum());
+        client.make_active();
         let cooldown = ScheduleQueue::compute_cooldown(
             swap_out_mb.unwrap_or_default(),
             config.schedule_cooldown,
@@ -274,96 +283,10 @@ impl Scheduler {
         }
         tracing::error!("Process {} becomes idle but is not active client", pid);
     }
+}
 
-    // Devices in and out are not global indexed but per process
-    // We should perform corresponding mapping accordingly
-    fn compute_eviction(
-        memory_request: &MemoryRequest,
-        cur_proc_list: Option<ProcessMetadata>,
-        old_proc_mapping: &DeviceOrdinalMapping,
-        new_proc_mapping: &DeviceOrdinalMapping,
-    ) -> (Vec<Option<NonZeroU64>>, u64) {
-        let global_config = load_config();
-        // For new process
-        let mem_demanding = memory_request
-            .iter()
-            .enumerate()
-            .filter_map(|(i, dev)| {
-                new_proc_mapping
-                    .visible_to_real(i as i32)
-                    .map(|real_dev| (real_dev, dev))
-            })
-            .collect::<HashMap<_, _>>();
-        // For old process
-        let mem_occupied = cur_proc_list
-            .map(|list| {
-                let mut map = HashMap::new();
-                for alloc in list.allocations {
-                    if let Some(real_dev) = old_proc_mapping.visible_to_real(alloc.device) {
-                        use std::collections::hash_map::Entry;
-                        match map.entry(real_dev) {
-                            Entry::Occupied(mut e) => {
-                                let val: &mut MemoryUsage = e.get_mut();
-                                val.on_gpu_bytes += alloc.size;
-                                val.alloc_count += 1;
-                            }
-                            Entry::Vacant(e) => {
-                                e.insert(MemoryUsage {
-                                    mem_usage_bytes: alloc.size,
-                                    alloc_count: 1,
-                                });
-                            }
-                        }
-                    }
-                }
-                map
-            })
-            .unwrap_or_default();
-        // For old process
-        let dev_threshold = global_config.device_threshold;
-        let mem_evicted_mb = mem_occupied
-            .iter()
-            .filter_map(|(dev, occupied)| {
-                mem_demanding.get(dev).and_then(|demanding| {
-                    // now we assume only these two processes are using GPU memory
-                    let mem_evicted_mb = ((demanding.mem_usage_bytes + occupied.mem_usage_bytes)
-                        / (1024 * 1024))
-                        // estimated 5% of the total memory is reserved for drivers and other usages
-                        .saturating_sub(
-                            ((global_config.device_memory_mb[*dev as usize] as f64) * dev_threshold)
-                                as u64,
-                        );
-                    if mem_evicted_mb > 0 {
-                        Some((
-                            old_proc_mapping.real_to_visible(*dev).unwrap(),
-                            mem_evicted_mb,
-                        ))
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect::<HashMap<_, _>>();
-        // Construct the eviction list
-        let mut swap_out = Vec::new();
-        for (dev, mb) in mem_evicted_mb {
-            let dev = dev as usize;
-            if dev >= swap_out.len() {
-                swap_out.resize(dev + 1, None);
-            }
-            swap_out[dev] = NonZeroU64::new(mb);
-        }
-        let old_remaining_total = mem_occupied
-            .values()
-            .map(|mem| mem.mem_usage_bytes)
-            .sum::<u64>()
-            .saturating_sub(
-                swap_out
-                    .iter()
-                    .flatten()
-                    .map(|mb| mb.get() * 1024 * 1024)
-                    .sum::<u64>(),
-            );
-        (swap_out, old_remaining_total)
-    }
+fn two_processes_plan(
+    dst_data: &ProcessResidualData,
+    src_data: &ProcessResidualData,
+) -> DataMigrationTask {
 }
