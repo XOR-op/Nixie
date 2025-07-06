@@ -1,9 +1,6 @@
 use futures::StreamExt;
 use hashlink::LinkedHashMap;
-use nihil_common::{
-    shm_buffer::{self, ShmBuffer},
-    ActivityUpdate, MigrationArgs,
-};
+use nihil_common::ActivityUpdate;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -218,7 +215,7 @@ impl Controllable for ControllableDaemon {
         let Some(handle) = guard.get(&args.pid) else {
             return;
         };
-        let client = handle.client();
+        let _client = handle.client();
         drop(guard);
         todo!("Implement prefetch logic");
     }

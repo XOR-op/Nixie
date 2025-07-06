@@ -11,9 +11,9 @@ pub mod sync;
 pub use constant::*;
 
 // Device IDs for processes may be overridden by CUDA_VISIBLE_DEVICES.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProcessLocalDeviceId(pub i32);
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GlobalDeviceId(pub i32);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

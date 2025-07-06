@@ -273,7 +273,7 @@ impl nihil_common::rpc::Daemon for DaemonServer {
         let _ = state.rpc_data_tx.send((state.client_pid, params));
     }
 
-    async fn request_memory(self, _context: Context, params: nihil_common::MemoryRequest) {
+    async fn request_memory(self, _context: Context, _params: nihil_common::MemoryRequest) {
         todo!()
     }
 }

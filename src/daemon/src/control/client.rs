@@ -5,7 +5,7 @@ use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
 use crate::{control::AllocationData, error::DaemonError, ProcArgs, UpdateConfigArgs};
-use nihil_common::general::pretty_size;
+use nihil_common::{general::pretty_size, GlobalDeviceId};
 
 use super::{ControllableClient, PrefetchMsg};
 
@@ -78,10 +78,12 @@ impl ControlClient {
         // print info
         println!("Active processes: {}", processes.len());
         for process in processes {
-            let group_by_device = process.allocations.iter().fold(
-                std::collections::BTreeMap::<i32, Vec<AllocationData>>::new(),
-                |mut acc, a| {
-                    acc.entry(a.device).or_default().push(a.clone());
+            let group_by_device = process.allocations.iter().enumerate().fold(
+                std::collections::BTreeMap::<GlobalDeviceId, Vec<AllocationData>>::new(),
+                |mut acc, (dev, a)| {
+                    acc.entry(GlobalDeviceId(dev as i32))
+                        .or_default()
+                        .extend(a.clone());
                     acc
                 },
             );
@@ -103,7 +105,7 @@ impl ControlClient {
                     .sum::<u64>();
                 println!(
                     "{} #alloc = {}, size = {}",
-                    format!("<Device {}>", device).cyan(),
+                    format!("<Device {}>", device.0).cyan(),
                     format!("{}", allocations.len()).yellow(),
                     pretty_size(alloc_size).blue()
                 );

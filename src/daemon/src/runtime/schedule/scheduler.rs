@@ -8,7 +8,8 @@ use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
 use nihil_common::{
-    general::CallParameter, ActivityUpdate, GlobalDeviceId, SchedulingArgs, MAX_GPUS,
+    general::CallParameter, rpc::SidecarClient, ActivityUpdate, GlobalDeviceId, SchedulingArgs,
+    MAX_GPUS,
 };
 use tokio::sync::mpsc;
 
@@ -16,13 +17,19 @@ use crate::{
     config::load_config,
     control::{ProcessResidualData, ProcessResidualRequest},
     error::ScheduleError,
-    runtime::schedule::{statistics::PreemptionReason, PriorityLevel},
+    runtime::{
+        daemon_server::DeviceOrdinalMapping,
+        schedule::{statistics::PreemptionReason, PriorityLevel},
+    },
 };
 
 use crate::runtime::{daemon_server::DaemonServerHandle, ProcCtlReq};
 
 use super::{
-    migration::DataMigrationTask, policy::ScheduleQueue, statistics::StopReason, ShmBufferManager,
+    migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry},
+    policy::ScheduleQueue,
+    statistics::StopReason,
+    ShmBufferManager,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -37,7 +44,7 @@ pub struct Scheduler {
     rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
-    shmem_buffer: ShmBufferManager,
+    shmem_buffer: Arc<ShmBufferManager>,
 }
 
 impl Scheduler {
@@ -51,7 +58,7 @@ impl Scheduler {
             rpc_data_rx,
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
-            shmem_buffer,
+            shmem_buffer: Arc::new(shmem_buffer),
         }
     }
 
@@ -153,15 +160,20 @@ impl Scheduler {
                 // active pid can exit before scheduler knows in `else` branch
                 if let Some(cur_handle) = control.get(&active_pid) {
                     tracing::trace!("Scheduling out process {}", active_pid);
-                    let cur_client = cur_handle.client();
-                    let disable_current_fut = tokio::spawn(async move {
-                        cur_client
-                            .schedule(tarpc::context::current(), SchedulingArgs::Disable)
-                            .await
-                    });
+                    let disable_current_fut = {
+                        let cur_client = cur_handle.client();
+                        tokio::spawn(async move {
+                            cur_client
+                                .schedule(tarpc::context::current(), SchedulingArgs::Disable)
+                                .await
+                        })
+                    };
 
                     // get info about incoming process
-                    let incoming_request = if let Some(new_handle) = control.get(&incoming_pid) {
+                    let Some(new_handle) = control.get(&incoming_pid) else {
+                        return Err(ScheduleError::InvalidClient(incoming_pid));
+                    };
+                    let incoming_request = {
                         let (para, fut) = CallParameter::new(ProcessResidualRequest {
                             pid: incoming_pid,
                             on_gpu: false,
@@ -173,14 +185,10 @@ impl Scheduler {
                         let _ = new_handle
                             .inst_tx()
                             .send(ProcCtlReq::ListProcessResidual(para));
+
                         fut.await
-                    } else {
-                        None
-                    }
-                    .unwrap_or_else(|| ProcessResidualData {
-                        pid: incoming_pid,
-                        allocations: HashMap::new(),
-                    });
+                            .expect("Failed to get incoming process residual data")
+                    };
 
                     // make sure the current process is device-synchronized
                     disable_current_fut
@@ -201,7 +209,22 @@ impl Scheduler {
                     }
                     .expect("Failed to get current process residual data");
 
-                    let task = two_processes_plan(&incoming_request, &cur_residual);
+                    let task = two_processes_task(
+                        (
+                            incoming_pid,
+                            incoming_request,
+                            new_handle.client(),
+                            new_handle.dev_mapping(),
+                        ),
+                        &[(
+                            active_pid,
+                            cur_residual,
+                            cur_handle.client(),
+                            cur_handle.dev_mapping(),
+                        )],
+                        self.shmem_buffer.clone(),
+                    );
+                    // for statistics
                     swap_out_mb = task.get_src().get(0).map(|(_, spec, _, _)| {
                         spec.device_map
                             .values()
@@ -285,8 +308,90 @@ impl Scheduler {
     }
 }
 
-fn two_processes_plan(
-    dst_data: &ProcessResidualData,
-    src_data: &ProcessResidualData,
+fn two_processes_task(
+    dst: (
+        i32,
+        ProcessResidualData,
+        SidecarClient,
+        Arc<DeviceOrdinalMapping>,
+    ),
+    src: &[(
+        i32,
+        ProcessResidualData,
+        SidecarClient,
+        Arc<DeviceOrdinalMapping>,
+    )],
+    shm_buffer_mgr: Arc<ShmBufferManager>,
 ) -> DataMigrationTask {
+    let mut src_list = Vec::new();
+    // for every dst device
+    for (global_id, dst_entries) in dst.1.allocations.iter() {
+        let dst_required_size = dst_entries.iter().map(|entry| entry.size).sum::<u64>();
+
+        let mut accu_size = 0;
+        // for every src process
+        for (src_pid, src_entries, src_rpc_client, src_mapping) in src.iter() {
+            if let Some(entries) = src_entries.allocations.get(&global_id) {
+                let mut migration_entries = Vec::new();
+                // check per device per src process
+                for entry in entries {
+                    if accu_size >= dst_required_size {
+                        break;
+                    }
+                    migration_entries.push(MigrationSpecEntry {
+                        size: entry.size,
+                        handle_idx: entry.handle_idx,
+                    });
+                    accu_size += entry.size;
+                }
+                if !migration_entries.is_empty() {
+                    src_list.push((
+                        *src_pid,
+                        MigrationSpec {
+                            device_map: HashMap::from([(*global_id, migration_entries)]),
+                        },
+                        src_rpc_client.clone(),
+                        Arc::clone(src_mapping),
+                    ));
+                }
+            }
+        }
+        if accu_size < dst_required_size {
+            tracing::warn!(
+                "Not enough data to migrate for device {:?}: required {}, but only {}",
+                global_id,
+                dst_required_size,
+                accu_size
+            );
+        }
+    }
+    let dst_entries = dst
+        .1
+        .allocations
+        .into_iter()
+        .map(|(global_id, entries)| {
+            (
+                global_id,
+                entries
+                    .into_iter()
+                    .map(|data_entry| MigrationSpecEntry {
+                        size: data_entry.size,
+                        handle_idx: data_entry.handle_idx,
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    DataMigrationTask::new(
+        src_list,
+        (
+            dst.0,
+            MigrationSpec {
+                device_map: dst_entries,
+            },
+            dst.2,
+            Arc::clone(&dst.3),
+        ),
+        shm_buffer_mgr,
+    )
 }

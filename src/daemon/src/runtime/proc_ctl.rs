@@ -22,7 +22,7 @@ pub(crate) struct ProcessControl {
 }
 
 impl ProcessControl {
-    pub fn new(
+    pub(super) fn new(
         peer_pid: i32,
         pid_fd: AsyncFd<OwnedFd>,
         shm: ShmGuard,

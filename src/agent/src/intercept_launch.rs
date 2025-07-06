@@ -77,6 +77,7 @@ pub extern "C" fn cudaStreamEndCapture(stream: CUstream, pGraph: *mut c_void) ->
     stream_end_capture_func(stream, pGraph)
 }
 
+#[allow(unused)]
 pub(crate) fn is_during_capture() -> bool {
     IS_DURING_CAPTURE.load(std::sync::atomic::Ordering::Relaxed)
 }

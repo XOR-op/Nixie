@@ -81,7 +81,8 @@ impl DataMigrationTask {
                     src_list,
                     (self.dst.0, device_id, rpc_client, dst_entries),
                     shm_buffer_mgr,
-                );
+                )
+                .await;
             }));
         }
         // Wait for all tasks to complete
@@ -147,7 +148,7 @@ impl DataMigrationTask {
             }
         }
         drop(transfer_token_tx); // close the channel
-        h2d_handle.await;
+        let _ = h2d_handle.await;
     }
 
     async fn host_to_device_transfer(
