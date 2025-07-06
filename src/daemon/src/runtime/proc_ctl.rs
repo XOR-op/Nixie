@@ -1,7 +1,7 @@
 #![allow(non_upper_case_globals)]
 use std::os::fd::OwnedFd;
 
-use nihil_common::{rpc::SidecarClient, shm::ShmGuard, MAX_GPUS};
+use nihil_common::{rpc::SidecarClient, shm::ShmGuard, ProcessLocalDeviceId, MAX_GPUS};
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use crate::{
@@ -78,8 +78,8 @@ impl ProcessControl {
                         allocations.push(AllocationData {
                             device: self
                                 .dev_mapping
-                                .visible_to_real(device as i32)
-                                .unwrap_or_default(),
+                                .visible_to_real(ProcessLocalDeviceId(device as i32))
+                                .unwrap_or_else(|| todo!("Handle device mapping error")),
                             on_gpu_bytes: on_gpu as u64,
                             off_gpu_bytes: off_gpu as u64,
                         });

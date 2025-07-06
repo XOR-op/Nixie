@@ -3,9 +3,9 @@ use std::thread;
 
 use cudarc::driver::sys::CUevent;
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
+use nihil_common::general::{CallParameter, CallReturnChannel};
 use nihil_common::{MigrationArgs, MigrationResponse, MAX_GPUS};
 
-use crate::comm::migration_response_async;
 use crate::memory::{default_alloc_prop, map_mem_handle, unmap_and_release_mem_handle};
 use crate::{check_cu_err, set_device, warn_eprintln, CuStreamWrapper, GENERIC_DATA};
 use crate::{global_shm_buffer, init_generic_data};
@@ -30,16 +30,13 @@ impl MemoryMigrationControl {
         }
     }
 
-    pub fn migrate(&self, tasks: Vec<MigrationArgs>) {
+    pub fn migrate(&self, task: CallParameter<MigrationArgs, MigrationResponse>) {
         let mut migrators = self.migrators.lock().unwrap();
-        for task in tasks {
-            let device_id = task.device;
-            if device_id < 0 || device_id >= MAX_GPUS as i32 {
-                warn_eprintln!("Invalid device ID: {}", device_id);
-                continue;
-            }
-            migrators[device_id as usize].migrate(task);
+        let device_id = task.param.device.0;
+        if device_id < 0 || device_id >= MAX_GPUS as i32 {
+            warn_eprintln!("Invalid device ID: {}", device_id);
         }
+        migrators[device_id as usize].migrate(task);
     }
 }
 
@@ -50,8 +47,16 @@ struct StreamingMemoryMigrator {
     device_id: i32,
     d2h_stream: CuStreamWrapper,
     h2d_stream: CuStreamWrapper,
-    d2h_sender: flume::Sender<(CUeventWrapper, MigrationArgs)>,
-    h2d_sender: flume::Sender<(CUeventWrapper, MigrationArgs)>,
+    d2h_sender: flume::Sender<(
+        CUeventWrapper,
+        MigrationArgs,
+        CallReturnChannel<MigrationResponse>,
+    )>,
+    h2d_sender: flume::Sender<(
+        CUeventWrapper,
+        MigrationArgs,
+        CallReturnChannel<MigrationResponse>,
+    )>,
 }
 
 impl StreamingMemoryMigrator {
@@ -73,7 +78,8 @@ impl StreamingMemoryMigrator {
         }
     }
 
-    pub fn migrate(&mut self, args: MigrationArgs) {
+    pub fn migrate(&mut self, args: CallParameter<MigrationArgs, MigrationResponse>) {
+        let (args, ret_chan) = args.into_parts();
         set_device(self.device_id);
         let mut event = std::ptr::null_mut();
         let host_buffer_ptr = {
@@ -125,7 +131,7 @@ impl StreamingMemoryMigrator {
                 assert_eq!(phy_handle.size, args.size as usize);
                 assert!(!phy_handle.on_gpu);
                 phy_handle.cu_handle = Some(cu_handle);
-                map_mem_handle(&phy_handle, &default_access_desc(args.device));
+                map_mem_handle(&phy_handle, &default_access_desc(args.device.0));
                 phy_handle.on_gpu = true;
                 phy_handle.addr
             };
@@ -147,7 +153,10 @@ impl StreamingMemoryMigrator {
                 "Failed to record CUDA event for h2d copy"
             );
             // send request to worker thread
-            if let Err(e) = self.h2d_sender.send((CUeventWrapper(event), args)) {
+            if let Err(e) = self
+                .h2d_sender
+                .send((CUeventWrapper(event), args, ret_chan))
+            {
                 warn_eprintln!("Failed to send h2d migration request: {}", e);
             }
         } else {
@@ -180,15 +189,25 @@ impl StreamingMemoryMigrator {
                 "Failed to record CUDA event for d2h copy"
             );
             // send request to worker thread
-            if let Err(e) = self.d2h_sender.send((CUeventWrapper(event), args)) {
+            if let Err(e) = self
+                .d2h_sender
+                .send((CUeventWrapper(event), args, ret_chan))
+            {
                 warn_eprintln!("Failed to send d2h migration request: {}", e);
             }
         }
     }
 
-    fn worker_thread(device_id: i32, req_queue: flume::Receiver<(CUeventWrapper, MigrationArgs)>) {
+    fn worker_thread(
+        device_id: i32,
+        req_queue: flume::Receiver<(
+            CUeventWrapper,
+            MigrationArgs,
+            CallReturnChannel<MigrationResponse>,
+        )>,
+    ) {
         set_device(device_id);
-        while let Some((event, args)) = req_queue.recv().ok() {
+        while let Some((event, args, ret_chan)) = req_queue.recv().ok() {
             // wait for the event to complete
             check_cu_err!(
                 unsafe { cuda_lib().cuEventSynchronize(event.0) },
@@ -196,9 +215,9 @@ impl StreamingMemoryMigrator {
             );
             // send back response
             let response = MigrationResponse {
-                host_buffer_offset: args.host_buffer_offset,
-                size: args.size,
+                handle_idx: args.handle_idx,
                 device: args.device,
+                size: args.size,
             };
             // copy finished, do the post-processing
             if !args.host_to_device {
@@ -213,7 +232,7 @@ impl StreamingMemoryMigrator {
                 unmap_and_release_mem_handle(handle);
                 handle.on_gpu = false;
             }
-            migration_response_async(vec![response]);
+            ret_chan.ret(response);
         }
     }
 }

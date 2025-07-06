@@ -10,6 +10,12 @@ pub mod shm_buffer;
 pub mod sync;
 pub use constant::*;
 
+// Device IDs for processes may be overridden by CUDA_VISIBLE_DEVICES.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ProcessLocalDeviceId(pub i32);
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct GlobalDeviceId(pub i32);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Handshake {
     pub pid: i32,
@@ -42,16 +48,16 @@ pub struct MemoryUsage {
 pub struct MigrationArgs {
     pub host_buffer_offset: u64,
     pub size: u64,
-    pub device: i32,
+    pub device: ProcessLocalDeviceId,
     pub handle_idx: NonZeroU32,
     pub host_to_device: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MigrationResponse {
-    pub host_buffer_offset: u64,
+    pub handle_idx: NonZeroU32,
+    pub device: ProcessLocalDeviceId,
     pub size: u64,
-    pub device: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

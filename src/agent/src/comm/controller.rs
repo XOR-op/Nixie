@@ -65,11 +65,6 @@ impl Controller {
                             });
                             Ok(())
                         }
-                        A2SMessage::MigrationResponse(msg) => {
-                            self.daemon_client
-                                .migrate_response_async(tarpc::context::current(), msg)
-                                .await
-                        }
                     } {
                         warn_eprintln!(
                             "{} {}: {}",

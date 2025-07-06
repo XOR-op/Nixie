@@ -5,10 +5,9 @@ pub enum A2SMessage {
     Handshake(Handshake),
     NofityActivity(ActivityUpdate),
     MemoryRequest(CallParameter<MemoryRequest, ()>),
-    MigrationResponse(Vec<MigrationResponse>),
 }
 
 pub enum S2AMessage {
-    MigrationRequest(Vec<MigrationArgs>),
+    MigrationRequest(CallParameter<MigrationArgs, MigrationResponse>),
     Scheduling(CallParameter<SchedulingArgs, ()>),
 }

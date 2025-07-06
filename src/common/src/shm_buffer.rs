@@ -11,11 +11,7 @@ pub struct ShmBuffer {
 }
 
 impl ShmBuffer {
-    pub fn new(
-        shm_path: String,
-        shm_size: usize,
-        is_creator: bool,
-    ) -> Result<Self, std::io::Error> {
+    pub fn new(shm_path: &str, shm_size: usize, is_creator: bool) -> Result<Self, std::io::Error> {
         let oflag = if is_creator {
             libc::O_RDWR | libc::O_CREAT
         } else {
@@ -59,7 +55,7 @@ impl ShmBuffer {
         }
 
         Ok(Self {
-            shm_path,
+            shm_path: shm_path.to_string(),
             shm_fd,
             shm_size,
             shm_addr: shm_addr as u64,

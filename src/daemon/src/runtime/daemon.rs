@@ -1,6 +1,9 @@
 use futures::StreamExt;
 use hashlink::LinkedHashMap;
-use nihil_common::{ActivityUpdate, MigrationArgs};
+use nihil_common::{
+    shm_buffer::{self, ShmBuffer},
+    ActivityUpdate, MigrationArgs,
+};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -19,7 +22,7 @@ use crate::{
     config::{init_config, update_config, Config, ConfigurableArgs},
     control::{self, Controllable, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
-    runtime::{daemon_server::DaemonServer, ProcCtlReq},
+    runtime::{daemon_server::DaemonServer, schedule::ShmBufferManager, ProcCtlReq},
 };
 use nihil_common::general::{CallFuture, CallParameter};
 
@@ -43,6 +46,7 @@ impl DaemonData {
 pub struct Daemon {
     daemon_path: PathBuf,
     control_path: PathBuf,
+    shm_buffer_path: String,
     data: Arc<DaemonData>,
 }
 
@@ -51,6 +55,7 @@ impl Daemon {
         Self {
             daemon_path: PathBuf::from("/tmp/nihilphase.sock"),
             control_path: PathBuf::from(control::CONTROL_PATH),
+            shm_buffer_path: String::from("/nihilphase_shm_buffer"),
             data: Arc::new(DaemonData::new()),
         }
     }
@@ -86,15 +91,21 @@ impl Daemon {
     }
 
     async fn run_body(self) -> Result<(), NihilphaseError> {
+        const SHM_BUF_SIZE: usize = 32 * 1024 * 1024 * 1024;
+        let shm_buffer = ShmBufferManager::new(&self.shm_buffer_path, SHM_BUF_SIZE)
+            .map_err(|e| DaemonError::Io("create shared memory buffer", e))?;
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (exit_tx, mut exit_rx) = mpsc::unbounded_channel();
         let (rpc_data_tx, rpc_data_rx) = mpsc::unbounded_channel();
+        let shm_buffer_path = self.shm_buffer_path.clone();
         // accept app connections
         tokio::spawn(Self::handle_processes(
             self.daemon_path,
             tx,
             exit_tx,
             rpc_data_tx,
+            shm_buffer_path,
+            SHM_BUF_SIZE,
         ));
         let list_handle = self.data.processes.clone();
         tokio::spawn(async move {
@@ -113,7 +124,9 @@ impl Daemon {
 
         let list_handle = self.data.processes.clone();
         tokio::spawn(async move {
-            Scheduler::new(list_handle, rpc_data_rx).run().await;
+            Scheduler::new(list_handle, rpc_data_rx, shm_buffer)
+                .run()
+                .await;
         });
 
         let listener_guard = UnixListenerGuard::new(&self.control_path)?;
@@ -144,6 +157,8 @@ impl Daemon {
         ret_tx: mpsc::UnboundedSender<DaemonServerHandle>,
         exit_tx: mpsc::UnboundedSender<i32>,
         rpc_data_tx: mpsc::UnboundedSender<(i32, ActivityUpdate)>,
+        shm_buffer_path: String,
+        shm_buffer_size: usize,
     ) -> Result<(), DaemonError> {
         let controller = UnixListenerGuard::new(daemon_path.as_path())?;
         tracing::info!("Daemon started at {:?}", daemon_path);
@@ -153,7 +168,13 @@ impl Daemon {
                 .accept()
                 .await
                 .map_err(|e| DaemonError::Io("accept connection", e))?;
-            let future = DaemonServer::launch(stream, exit_tx.clone(), rpc_data_tx.clone());
+            let future = DaemonServer::launch(
+                stream,
+                exit_tx.clone(),
+                rpc_data_tx.clone(),
+                shm_buffer_path.clone(),
+                shm_buffer_size,
+            );
             let tx = ret_tx.clone();
             tokio::spawn(async move {
                 let val = future.await;
@@ -199,17 +220,7 @@ impl Controllable for ControllableDaemon {
         };
         let client = handle.client();
         drop(guard);
-        tracing::warn!("prefetch half implemented: %addr");
-        let _ = client
-            .migrate(
-                Context::current(),
-                MigrationArgs {
-                    addr: 0,
-                    len: args.size_low.unwrap_or(0),
-                    host_to_device: args.to_gpu,
-                },
-            )
-            .await;
+        todo!("Implement prefetch logic");
     }
 
     async fn update_config(self, _context: Context, config: ConfigurableArgs) {

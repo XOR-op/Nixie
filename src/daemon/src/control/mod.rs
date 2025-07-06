@@ -1,5 +1,6 @@
 pub mod client;
 
+use nihil_common::GlobalDeviceId;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, ConfigurableArgs};
@@ -37,5 +38,5 @@ pub(crate) struct ProcessMetadata {
 pub(crate) struct AllocationData {
     pub on_gpu_bytes: u64,
     pub off_gpu_bytes: u64,
-    pub device: i32,
+    pub device: GlobalDeviceId,
 }

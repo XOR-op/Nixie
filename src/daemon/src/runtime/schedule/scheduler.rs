@@ -8,7 +8,10 @@ use std::{
 use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
-use nihil_common::{general::CallParameter, ActivityUpdate, MemoryUsage, SchedulingArgs};
+use nihil_common::{
+    general::CallParameter, shm_buffer::ShmBuffer, ActivityUpdate, MemoryRequest, MemoryUsage,
+    SchedulingArgs,
+};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -22,7 +25,7 @@ use crate::runtime::{
     ProcCtlReq, ProcessMetadata,
 };
 
-use super::{policy::ScheduleQueue, statistics::StopReason};
+use super::{policy::ScheduleQueue, statistics::StopReason, ShmBufferManager};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ActiveClientState {
@@ -36,18 +39,21 @@ pub struct Scheduler {
     rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
+    shmem_buffer: ShmBufferManager,
 }
 
 impl Scheduler {
     pub fn new(
         list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
         rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+        shmem_buffer: ShmBufferManager,
     ) -> Self {
         Self {
             list,
             rpc_data_rx,
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
+            shmem_buffer,
         }
     }
 
@@ -100,9 +106,9 @@ impl Scheduler {
         data: ActivityUpdate,
     ) -> Result<(), ScheduleError> {
         match data {
-            ActivityUpdate::RequestScheduling {
-                mem_usage_per_device,
-            } => self.handle_sched_request(pid, mem_usage_per_device).await,
+            ActivityUpdate::RequestScheduling { memory_request } => {
+                self.handle_sched_request(pid, memory_request).await
+            }
             ActivityUpdate::Idle => {
                 self.handle_activity_idle(pid).await;
                 Ok(())
@@ -113,7 +119,7 @@ impl Scheduler {
     async fn handle_sched_request(
         &mut self,
         incoming_pid: i32,
-        mem_usage_per_device: Vec<MemoryUsage>,
+        memory_request: MemoryRequest,
     ) -> Result<(), ScheduleError> {
         let control = self.list.write().await;
         let config = load_config();
@@ -161,7 +167,7 @@ impl Scheduler {
                             let _ = handle.inst_tx().send(ProcCtlReq::List(para));
                             let cur_list = fut.await;
                             Self::compute_eviction(
-                                &mem_usage_per_device,
+                                &memory_request,
                                 cur_list,
                                 cur_proc_dev_mapping,
                                 new_handle.dev_mapping(),
@@ -272,14 +278,14 @@ impl Scheduler {
     // Devices in and out are not global indexed but per process
     // We should perform corresponding mapping accordingly
     fn compute_eviction(
-        mem_usage_per_device: &[MemoryUsage],
+        memory_request: &MemoryRequest,
         cur_proc_list: Option<ProcessMetadata>,
         old_proc_mapping: &DeviceOrdinalMapping,
         new_proc_mapping: &DeviceOrdinalMapping,
     ) -> (Vec<Option<NonZeroU64>>, u64) {
         let global_config = load_config();
         // For new process
-        let mem_demanding = mem_usage_per_device
+        let mem_demanding = memory_request
             .iter()
             .enumerate()
             .filter_map(|(i, dev)| {

@@ -1,6 +1,6 @@
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
 use nihil_common::shm::AllocationEntry;
-use nihil_common::MAX_GPUS;
+use nihil_common::{MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE};
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::sync::OnceLock;
@@ -32,9 +32,6 @@ macro_rules! generate_init_fn {
     };
 }
 
-const MIN_ALLOCATION_SIZE: usize = 2 * 1024 * 1024;
-const MAX_ALLOCATION_SIZE: usize = 128 * 1024 * 1024;
-
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_enum {
@@ -46,6 +43,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         return malloc_func(dev_ptr, size);
     }
 
+    // round up the size to the nearest multiple of MIN_ALLOCATION_SIZE
     let rounded_up_size = (size + MIN_ALLOCATION_SIZE - 1) & !(MIN_ALLOCATION_SIZE - 1);
     let res = unsafe {
         cuda_lib().cuMemAddressReserve(

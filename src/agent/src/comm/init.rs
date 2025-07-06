@@ -14,7 +14,7 @@ use tarpc::{
 };
 
 use crate::comm::msg::A2SMessage;
-use crate::{global_shm_buffer, init_shm_buffer, schedule, GENERIC_DATA};
+use crate::{init_shm_buffer, schedule, GENERIC_DATA};
 
 use crate::GenericData;
 
@@ -118,8 +118,7 @@ pub(crate) fn init_comm_entrypoint() {
 }
 
 pub(super) fn init_buffer_by_handshake_resp(resp: HandshakeResponse) {
-    init_shm_buffer(resp.buffer_shm_path, resp.buffer_length as usize);
-    let buf_ptr = unsafe { global_shm_buffer().at_offset(0, 1) }.unwrap();
+    init_shm_buffer(&resp.buffer_shm_path, resp.buffer_length as usize);
     // TODO: cudaHostRegister
-    todo!("Register buffer with CUDA");
+    // let buf_ptr = unsafe { global_shm_buffer().at_offset(0, 1) }.unwrap();
 }

@@ -12,7 +12,6 @@ mod error;
 mod logging;
 mod runtime;
 mod staticly;
-mod uvm;
 
 macro_rules! check_error {
     ($e:expr) => {

@@ -6,7 +6,7 @@ use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
 use nihil_common::{
     rpc::{rpc_multiplex_twoway, Daemon, SidecarClient},
-    HandshakeResponse, MigrationResponse,
+    GlobalDeviceId, HandshakeResponse, MigrationResponse, ProcessLocalDeviceId,
 };
 use nix::libc::c_int;
 use std::{
@@ -96,7 +96,7 @@ impl Future for DaemonServerHandleFuture {
 pub(crate) struct DaemonServerHandle {
     client: SidecarClient,
     pid: i32,
-    dev_mapping: DeviceOrdinalMapping,
+    dev_mapping: Arc<DeviceOrdinalMapping>,
     task: JoinHandle<()>,
     /// TX to ProcessControl
     inst_tx: mpsc::UnboundedSender<ProcCtlReq>,
@@ -119,8 +119,8 @@ impl DaemonServerHandle {
         self.inst_tx.clone()
     }
 
-    pub(super) fn dev_mapping(&self) -> &DeviceOrdinalMapping {
-        &self.dev_mapping
+    pub(super) fn dev_mapping(&self) -> Arc<DeviceOrdinalMapping> {
+        self.dev_mapping.clone()
     }
 }
 
@@ -274,10 +274,6 @@ impl nihil_common::rpc::Daemon for DaemonServer {
     async fn request_memory(self, _context: Context, params: nihil_common::MemoryRequest) {
         todo!()
     }
-
-    async fn migrate_response_async(self, _context: Context, params: Vec<MigrationResponse>) {
-        todo!()
-    }
 }
 
 // if `remote_fd` is Some, the `Ok` result must be a tuple of (pid_fd, ,Some(uvm_fd))
@@ -317,8 +313,8 @@ fn duplicate_peer_fd(
 // Mapping  between real GPU indices and indices exposed to processes
 #[derive(Debug, Clone)]
 pub(super) struct DeviceOrdinalMapping {
-    real_to_visible: HashMap<i32, i32>,
-    visible_to_real: HashMap<i32, i32>,
+    real_to_visible: HashMap<GlobalDeviceId, ProcessLocalDeviceId>,
+    visible_to_real: HashMap<ProcessLocalDeviceId, GlobalDeviceId>,
 }
 
 impl DeviceOrdinalMapping {
@@ -364,8 +360,10 @@ impl DeviceOrdinalMapping {
                         }
                     }
                 };
-                real_to_visible.insert(real_dev, visible_dev as i32);
-                visible_to_real.insert(visible_dev as i32, real_dev);
+                let real_dev = GlobalDeviceId(real_dev);
+                let visible_dev = ProcessLocalDeviceId(visible_dev as i32);
+                real_to_visible.insert(real_dev, visible_dev);
+                visible_to_real.insert(visible_dev, real_dev);
             }
         }
         Ok(Self {
@@ -374,7 +372,7 @@ impl DeviceOrdinalMapping {
         })
     }
 
-    pub fn real_to_visible(&self, real: i32) -> Option<i32> {
+    pub fn real_to_visible(&self, real: GlobalDeviceId) -> Option<ProcessLocalDeviceId> {
         if let Some(dev) = self.real_to_visible.get(&real) {
             Some(*dev)
         } else {
@@ -383,7 +381,7 @@ impl DeviceOrdinalMapping {
         }
     }
 
-    pub fn visible_to_real(&self, visible: i32) -> Option<i32> {
+    pub fn visible_to_real(&self, visible: ProcessLocalDeviceId) -> Option<GlobalDeviceId> {
         if let Some(dev) = self.visible_to_real.get(&visible) {
             Some(*dev)
         } else {

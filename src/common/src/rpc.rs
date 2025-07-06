@@ -18,15 +18,13 @@ pub trait Daemon {
     async fn notify_activity(params: ActivityUpdate);
 
     async fn request_memory(params: MemoryRequest);
-
-    async fn migrate_response_async(params: Vec<MigrationResponse>);
 }
 
 // Services exposed by attached sidecars for applications
 // Receive requests from the daemon
 #[tarpc::service]
 pub trait Sidecar {
-    async fn migrate_request_async(params: Vec<MigrationArgs>);
+    async fn migrate(params: MigrationArgs) -> MigrationResponse;
 
     async fn schedule(params: SchedulingArgs);
 }

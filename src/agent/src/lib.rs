@@ -96,7 +96,7 @@ mod shm_buf {
 }
 
 // should be called only once, before any other code that uses SHM_BUFFER
-pub(crate) fn init_shm_buffer(path: String, size: usize) {
+pub(crate) fn init_shm_buffer(path: &str, size: usize) {
     if shm_buf::SHM_BUFFER
         .set(ShmBuffer::new(path, size, false).expect("Failed to create SHM buffer"))
         .is_err()

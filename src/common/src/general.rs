@@ -45,6 +45,13 @@ impl<P, R> CallParameter<P, R> {
         let ret_channel = CallReturnChannel { tx: self.ret_tx };
         (self.param, ret_channel)
     }
+
+    pub fn from_parts(param: P, ret_channel: CallReturnChannel<R>) -> Self {
+        Self {
+            param,
+            ret_tx: ret_channel.tx,
+        }
+    }
 }
 
 pub struct CallReturnChannel<R> {
