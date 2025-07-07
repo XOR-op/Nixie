@@ -110,10 +110,6 @@ impl ProcArgs {
 fn main() {
     let args: Args = Args::parse();
     if let Args::Daemon(args) = args {
-        if !is_root::is_root() {
-            eprintln!("Error: nihilphase daemon must be run as root");
-            std::process::exit(1);
-        }
         let runtime = runtime::Daemon::new();
         runtime.run(args.config_path);
         std::process::exit(0);

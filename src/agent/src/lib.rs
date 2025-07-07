@@ -86,7 +86,7 @@ impl GenericData {
 }
 
 pub(crate) fn init_generic_data() -> GenericData {
-    unreachable!("GENERIC_DATA should already be initialized by init_comm");
+    panic!("GENERIC_DATA should already be initialized by init_comm");
 }
 
 mod shm_buf {

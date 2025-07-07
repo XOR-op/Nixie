@@ -150,9 +150,12 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
 pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
     type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
     static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
+    static FIRST_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     generate_init_fn!(OpenType, cr"open");
     let open_func = OPEN_FN.get_or_init(init_fn);
     let res = open_func(path, oflag, mode);
-    init_comm_entrypoint();
+    if FIRST_TIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+        init_comm_entrypoint();
+    }
     res
 }

@@ -5,9 +5,14 @@ use nix::libc;
 
 use crate::{sync::IpcMutex, HANDLE_NUM, MAX_GPUS};
 
+/// There should be no side effects of the drop.
+pub(crate) trait ReInitializable {
+    unsafe fn reinit_from_uninited(&mut self);
+}
+
 pub struct AllocationTable {
     // usize
-    pub entry: ShmVec<AllocationEntry, 40960>,
+    pub entry: ShmVec<AllocationEntry, 8192>,
     pub handle_list: HandleList,
 }
 
@@ -23,6 +28,13 @@ impl AllocationTable {
             entry: ShmVec::new(),
             handle_list: HandleList::new(),
         }
+    }
+}
+
+impl ReInitializable for AllocationTable {
+    unsafe fn reinit_from_uninited(&mut self) {
+        self.entry.reinit();
+        self.handle_list.reinit_from_uninited();
     }
 }
 impl HandleList {
@@ -101,6 +113,23 @@ impl HandleList {
     }
 }
 
+impl ReInitializable for HandleList {
+    unsafe fn reinit_from_uninited(&mut self) {
+        for handle in self.handles.iter_mut() {
+            handle.addr = 0;
+            handle.size = 0;
+            handle.cu_handle = None;
+            handle.next_handle_idx = None;
+            handle.on_gpu = false;
+            handle.valid = false;
+        }
+        for i in 1..HANDLE_NUM {
+            self.handles[i].next_handle_idx = NonZeroU32::new(i as u32 + 1);
+        }
+        self.freelist_head = NonZeroU32::new(1);
+    }
+}
+
 pub struct Shm {
     all_len: u32,
     pub alloc_tables: [IpcMutex<AllocationTable>; MAX_GPUS], // Process local device ID
@@ -150,12 +179,13 @@ impl Shm {
             if ptr == libc::MAP_FAILED {
                 return Err(nix::errno::Errno::last_raw());
             }
-            let val = Self {
-                all_len: len,
-                alloc_tables: std::array::from_fn(|_| IpcMutex::new(AllocationTable::new())),
-            };
-            core::ptr::write(ptr as *mut Self, val);
-            Ok(Pin::new(&mut *(ptr as *mut Self)))
+            let typed_ptr = ptr as *mut Self;
+            let mut_ref = &mut *typed_ptr;
+            mut_ref.all_len = len;
+            for table in mut_ref.alloc_tables.iter_mut() {
+                table.reinit_from_uninited();
+            }
+            Ok(Pin::new(mut_ref))
         }
     }
 
@@ -228,6 +258,11 @@ impl<T, const N: usize> ShmVec<T, N> {
             len: 0,
             data: unsafe { core::mem::zeroed() },
         }
+    }
+
+    pub unsafe fn reinit(&mut self) {
+        self.len = 0;
+        self.data = unsafe { core::mem::zeroed() };
     }
 
     #[allow(clippy::result_unit_err)]

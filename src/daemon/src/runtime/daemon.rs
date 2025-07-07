@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use hashlink::LinkedHashMap;
-use nihil_common::ActivityUpdate;
+use nihil_common::{general::pretty_size, ActivityUpdate};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -91,6 +91,11 @@ impl Daemon {
         const SHM_BUF_SIZE: usize = 32 * 1024 * 1024 * 1024;
         let shm_buffer = ShmBufferManager::new(&self.shm_buffer_path, SHM_BUF_SIZE)
             .map_err(|e| DaemonError::Io("create shared memory buffer", e))?;
+        tracing::info!(
+            "Shared memory buffer created at {}, size = {}",
+            self.shm_buffer_path,
+            pretty_size(SHM_BUF_SIZE as u64),
+        );
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (exit_tx, mut exit_rx) = mpsc::unbounded_channel();
         let (rpc_data_tx, rpc_data_rx) = mpsc::unbounded_channel();

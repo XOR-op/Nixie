@@ -14,7 +14,7 @@ use tarpc::{
 };
 
 use crate::comm::msg::A2SMessage;
-use crate::{init_shm_buffer, schedule, GENERIC_DATA};
+use crate::{info_eprintln, init_shm_buffer, schedule, GENERIC_DATA};
 
 use crate::GenericData;
 
@@ -99,6 +99,7 @@ pub(super) fn init_comm() -> Option<flume::Sender<A2SMessage>> {
             {
                 eprintln!("Error at {}:{}: failed to send", file!(), line!());
             }
+            info_eprintln!("Initialization finished");
             Some(chan)
         }
         Err(e) => {
