@@ -143,7 +143,7 @@ pub(crate) fn deallocate_list(start_idx: NonZeroU32, handle_list: &mut HandleLis
         if handle.on_gpu {
             // unmap first, where the access will be invalidated automatically
             check_cu_err!(
-                unsafe { cuda_lib().cuMemUnmap(handle.cu_handle.unwrap(), handle.size) },
+                unsafe { cuda_lib().cuMemUnmap(handle.addr, handle.size) },
                 "Failed to unmap memory"
             );
 

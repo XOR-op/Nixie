@@ -1,5 +1,5 @@
 use core::{ffi::c_int, pin::Pin};
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, u32};
 
 use nix::libc;
 
@@ -154,6 +154,16 @@ pub struct AllocationEntry {
     pub handle_idx: NonZeroU32,
 }
 
+impl Default for AllocationEntry {
+    fn default() -> Self {
+        Self {
+            addr: 0,
+            len: 0,
+            handle_idx: NonZeroU32::new(u32::MAX).unwrap(),
+        }
+    }
+}
+
 impl Shm {
     pub const SHM_STRUCT_SIZE: u32 = core::mem::size_of::<Self>() as u32;
 
@@ -247,12 +257,12 @@ impl Drop for ShmGuard {
     }
 }
 
-pub struct ShmVec<T, const N: usize> {
+pub struct ShmVec<T: Default, const N: usize> {
     len: u32,
     data: [T; N],
 }
 
-impl<T, const N: usize> ShmVec<T, N> {
+impl<T: Default, const N: usize> ShmVec<T, N> {
     pub fn new() -> Self {
         Self {
             len: 0,
@@ -283,7 +293,7 @@ impl<T, const N: usize> ShmVec<T, N> {
         self.len -= 1;
         Some(core::mem::replace(
             &mut self.data[self.len as usize],
-            unsafe { core::mem::zeroed() },
+            Default::default(),
         ))
     }
 
@@ -291,11 +301,10 @@ impl<T, const N: usize> ShmVec<T, N> {
         if idx >= self.len as usize {
             panic!("index out of bounds")
         }
-        let val = core::mem::replace(&mut self.data[idx], unsafe { core::mem::zeroed() });
+        let val = core::mem::replace(&mut self.data[idx], Default::default());
         self.len -= 1;
         for i in idx..self.len as usize {
-            self.data[i] =
-                core::mem::replace(&mut self.data[i + 1], unsafe { core::mem::zeroed() });
+            self.data[i] = core::mem::replace(&mut self.data[i + 1], Default::default());
         }
         val
     }
@@ -337,7 +346,7 @@ impl<T, const N: usize> ShmVec<T, N> {
     }
 }
 
-impl<T, const N: usize> Default for ShmVec<T, N> {
+impl<T: Default, const N: usize> Default for ShmVec<T, N> {
     fn default() -> Self {
         Self::new()
     }

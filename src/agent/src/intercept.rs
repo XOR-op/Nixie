@@ -3,7 +3,8 @@ use nihil_common::shm::AllocationEntry;
 use nihil_common::{MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE};
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
-use std::sync::OnceLock;
+use std::collections::BTreeSet;
+use std::sync::{Mutex, OnceLock};
 
 use crate::comm::init::init_comm_entrypoint;
 use crate::init_generic_data;
@@ -32,6 +33,8 @@ macro_rules! generate_init_fn {
     };
 }
 
+static SMALL_ALLOCATION: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
+
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_enum {
@@ -40,7 +43,14 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     generate_init_fn!(CudaMallocType, cr"cudaMalloc");
     let malloc_func = MALLOC_FN.get_or_init(init_fn);
     if size < MIN_ALLOCATION_SIZE {
-        return malloc_func(dev_ptr, size);
+        let res = malloc_func(dev_ptr, size);
+        if res == cudaError_enum::CUDA_SUCCESS {
+            SMALL_ALLOCATION
+                .lock()
+                .unwrap()
+                .insert(unsafe { *dev_ptr } as u64);
+        }
+        return res;
     }
 
     // round up the size to the nearest multiple of MIN_ALLOCATION_SIZE
@@ -74,8 +84,13 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         // Allocate bookkeeping structures
         while remaining_size > 0 {
             let alloc_size = remaining_size.min(MAX_ALLOCATION_SIZE);
-            if let Some(idx) = table.handle_list.allocate_handle(cur_addr, alloc_size) {
-                handle_idx = Some(idx);
+            if let Some(new_idx) = table.handle_list.allocate_handle(cur_addr, alloc_size) {
+                table
+                    .handle_list
+                    .get_handle_mut(new_idx)
+                    .unwrap()
+                    .next_handle_idx = handle_idx;
+                handle_idx = Some(new_idx);
                 cur_addr += alloc_size as u64;
                 remaining_size -= alloc_size;
             } else {
@@ -95,7 +110,21 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         };
 
         if !populate_entry(&alloc_entry, device_id, &mut table) {
+            // deallocate all handles
+            while let Some(idx) = handle_idx {
+                let handle = table.handle_list.get_handle(idx).unwrap();
+                handle_idx = handle.next_handle_idx;
+                table.handle_list.free_handle(idx);
+            }
             return cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY;
+        }
+
+        // add the entry to the table
+        if table.entry.push(alloc_entry).is_err() {
+            warn_eprintln!(
+                "Exceeded maximum number of allocations for device {}",
+                device_id
+            );
         }
     }
     res
@@ -110,8 +139,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     let free_func = FREE_FN.get_or_init(init_fn);
 
     // first check if is non-managed allocation
-    if dev_ptr as usize % MIN_ALLOCATION_SIZE != 0 {
-        // if not, just call the original function
+    if SMALL_ALLOCATION.lock().unwrap().remove(&(dev_ptr as u64)) {
         return free_func(dev_ptr);
     }
 
@@ -121,16 +149,16 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
             .lock(possible_dev);
         let table = &mut *table_guard;
         // find the allocation entry
-        let mut entry_idx = None;
-        for entry in table.entry.iter() {
+        let mut possible_entry_indx = None;
+        for (entry_idx, entry) in table.entry.iter().enumerate() {
             if entry.addr == dev_ptr as u64 {
-                entry_idx = Some(entry.handle_idx);
+                possible_entry_indx = Some(entry_idx);
                 break;
             }
         }
         // on this device, we found the entry
-        if let Some(idx) = entry_idx {
-            let entry = table.entry.at(idx.get() as usize).unwrap();
+        if let Some(entry_idx) = possible_entry_indx {
+            let entry = table.entry.at(entry_idx).unwrap();
             let handle_idx = entry.handle_idx;
             let mut cur_index = Some(entry.handle_idx);
             deallocate_list(handle_idx, &mut table.handle_list);
@@ -139,6 +167,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
                 cur_index = handle.next_handle_idx;
                 table.handle_list.free_handle(index);
             }
+            table.entry.remove(entry_idx);
             return cudaError_enum::CUDA_SUCCESS;
         }
     }
