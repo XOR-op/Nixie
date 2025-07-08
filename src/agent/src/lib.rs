@@ -10,6 +10,7 @@ use utils::set_device;
 
 mod comm;
 mod env_config;
+mod init;
 mod intercept;
 mod intercept_launch;
 mod memory;
@@ -85,24 +86,10 @@ impl GenericData {
     }
 }
 
-pub(crate) fn init_generic_data() -> GenericData {
-    panic!("GENERIC_DATA should already be initialized by init_comm");
-}
-
 mod shm_buf {
     use super::ShmBuffer;
     use std::sync::OnceLock;
     pub(crate) static SHM_BUFFER: OnceLock<ShmBuffer> = OnceLock::new();
-}
-
-// should be called only once, before any other code that uses SHM_BUFFER
-pub(crate) fn init_shm_buffer(path: &str, size: usize) {
-    if shm_buf::SHM_BUFFER
-        .set(ShmBuffer::new(path, size, false).expect("Failed to create SHM buffer"))
-        .is_err()
-    {
-        panic!("SHM_BUFFER is already initialized");
-    }
 }
 
 pub(crate) fn global_shm_buffer() -> &'static ShmBuffer {

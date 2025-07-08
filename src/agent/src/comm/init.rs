@@ -14,25 +14,13 @@ use tarpc::{
 };
 
 use crate::comm::msg::A2SMessage;
-use crate::{info_eprintln, init_shm_buffer, schedule, GENERIC_DATA};
+use crate::{info_eprintln, schedule, GENERIC_DATA};
 
-use crate::GenericData;
+use crate::init::{init_generic_data, init_shm_buffer};
 
 use super::communication::SidecarServer;
 
 pub(crate) static COMM: OnceLock<Option<flume::Sender<A2SMessage>>> = OnceLock::new();
-
-fn init_generic_data_inner() -> (GenericData, String) {
-    // create ptr mapping
-    let uuid = uuid::Uuid::new_v4();
-    let shm_path = format!(
-        "/nihilphase_ipc-{}-{}.shm",
-        std::process::id(),
-        uuid.to_string().split_at(8).0
-    );
-    let result = GenericData::new(&shm_path);
-    (result, shm_path)
-}
 
 fn init_comm_inner() -> std::io::Result<flume::Sender<A2SMessage>> {
     let (tx, rx) = flume::unbounded();
@@ -81,10 +69,10 @@ async fn create_comm(conn: UnixStream, p2s_rx: flume::Receiver<A2SMessage>) {
     sidecar.run().await
 }
 
-pub(super) fn init_comm() -> Option<flume::Sender<A2SMessage>> {
+pub(crate) fn init_comm() -> Option<flume::Sender<A2SMessage>> {
     match init_comm_inner() {
         Ok(chan) => {
-            let (data, shm_path) = init_generic_data_inner();
+            let (data, shm_path) = init_generic_data();
             if GENERIC_DATA.set(data).is_err() {
                 panic!("Failed to set GENERIC_DATA, it should only be set once");
             }
@@ -112,10 +100,6 @@ pub(super) fn init_comm() -> Option<flume::Sender<A2SMessage>> {
             None
         }
     }
-}
-
-pub(crate) fn init_comm_entrypoint() {
-    COMM.get_or_init(init_comm);
 }
 
 pub(super) fn init_buffer_by_handshake_resp(resp: HandshakeResponse) {

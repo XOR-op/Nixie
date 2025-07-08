@@ -8,7 +8,9 @@ use stats::LaunchStats;
 
 use cudarc::driver::sys::lib as cuda_lib;
 
-use crate::{check_cu_err, env_config::agent_config, init_generic_data, set_device, GENERIC_DATA};
+use crate::{
+    check_cu_err, env_config::agent_config, init::should_have_initialized, set_device, GENERIC_DATA,
+};
 
 mod stats;
 pub(crate) use stats::LaunchType;
@@ -76,7 +78,7 @@ impl Scheduler {
             // request to run
             let mut allocs = [const { Vec::new() }; MAX_GPUS];
             for i in 0..MAX_GPUS {
-                let table = GENERIC_DATA.get_or_init(init_generic_data).lock(i);
+                let table = GENERIC_DATA.get_or_init(should_have_initialized).lock(i);
                 for entry in table.entry.iter() {
                     let (_, off_gpu) = table.handle_list.memory_usage(entry.handle_idx);
                     allocs[i].push(off_gpu as u64)

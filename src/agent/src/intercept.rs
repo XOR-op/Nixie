@@ -6,8 +6,7 @@ use nix::sys::stat::mode_t;
 use std::collections::BTreeSet;
 use std::sync::{Mutex, OnceLock};
 
-use crate::comm::init::init_comm_entrypoint;
-use crate::init_generic_data;
+use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
 use crate::memory::{deallocate_list, populate_entry};
 use crate::{warn_eprintln, GENERIC_DATA};
 
@@ -42,6 +41,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     static MALLOC_FN: OnceLock<CudaMallocType> = OnceLock::new();
     generate_init_fn!(CudaMallocType, cr"cudaMalloc");
     let malloc_func = MALLOC_FN.get_or_init(init_fn);
+    init_cuda_env();
     if size < MIN_ALLOCATION_SIZE {
         let res = malloc_func(dev_ptr, size);
         if res == cudaError_enum::CUDA_SUCCESS {
@@ -75,7 +75,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         };
 
         let mut table = GENERIC_DATA
-            .get_or_init(init_generic_data)
+            .get_or_init(should_have_initialized)
             .lock(device_id as usize);
 
         let mut remaining_size = rounded_up_size;
@@ -145,7 +145,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
 
     for possible_dev in 0..MAX_GPUS {
         let mut table_guard = GENERIC_DATA
-            .get_or_init(init_generic_data)
+            .get_or_init(should_have_initialized)
             .lock(possible_dev);
         let table = &mut *table_guard;
         // find the allocation entry
@@ -179,12 +179,9 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
 pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
     type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
     static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
-    static FIRST_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     generate_init_fn!(OpenType, cr"open");
     let open_func = OPEN_FN.get_or_init(init_fn);
     let res = open_func(path, oflag, mode);
-    if FIRST_TIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
-        init_comm_entrypoint();
-    }
+    init_all_entrypoint();
     res
 }

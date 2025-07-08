@@ -6,9 +6,10 @@ use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
 use nihil_common::general::{CallParameter, CallReturnChannel};
 use nihil_common::{MigrationArgs, MigrationResponse, MAX_GPUS};
 
+use crate::global_shm_buffer;
+use crate::init::should_have_initialized;
 use crate::memory::{default_alloc_prop, map_mem_handle, unmap_and_release_mem_handle};
 use crate::{check_cu_err, set_device, warn_eprintln, CuStreamWrapper, GENERIC_DATA};
-use crate::{global_shm_buffer, init_generic_data};
 
 use super::default_access_desc;
 
@@ -122,7 +123,7 @@ impl StreamingMemoryMigrator {
             check_cu_err!(res, "Failed to allocate memory on device");
             let virtual_addr = {
                 let mut table = GENERIC_DATA
-                    .get_or_init(init_generic_data)
+                    .get_or_init(should_have_initialized)
                     .lock(self.device_id as usize);
                 let phy_handle = table
                     .handle_list
@@ -163,7 +164,7 @@ impl StreamingMemoryMigrator {
             // h2d
             let virtual_addr = {
                 let table = GENERIC_DATA
-                    .get_or_init(init_generic_data)
+                    .get_or_init(should_have_initialized)
                     .lock(self.device_id as usize);
                 let phy_handle = table
                     .handle_list
@@ -222,7 +223,7 @@ impl StreamingMemoryMigrator {
             // copy finished, do the post-processing
             if !args.host_to_device {
                 let mut table = GENERIC_DATA
-                    .get_or_init(init_generic_data)
+                    .get_or_init(should_have_initialized)
                     .lock(device_id as usize);
                 let handle = table
                     .handle_list
