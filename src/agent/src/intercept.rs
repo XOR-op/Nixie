@@ -8,7 +8,8 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
 use crate::memory::{deallocate_list, populate_entry};
-use crate::{warn_eprintln, GENERIC_DATA};
+use crate::schedule::{LaunchType, SCHED_CTL};
+use crate::{debug_eprintln, warn_eprintln, GENERIC_DATA};
 
 #[macro_export]
 macro_rules! generate_init_fn_as {
@@ -42,6 +43,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     generate_init_fn!(CudaMallocType, cr"cudaMalloc");
     let malloc_func = MALLOC_FN.get_or_init(init_fn);
     init_cuda_env();
+    SCHED_CTL.launch_allowed(LaunchType::Malloc);
     if size < MIN_ALLOCATION_SIZE {
         let res = malloc_func(dev_ptr, size);
         if res == cudaError_enum::CUDA_SUCCESS {
@@ -108,7 +110,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             len: rounded_up_size,
             handle_idx: handle_idx.expect("Failed to allocate handle"),
         };
-
+        debug_eprintln!("Populating memory...");
         if !populate_entry(&alloc_entry, device_id, &mut table) {
             // deallocate all handles
             while let Some(idx) = handle_idx {

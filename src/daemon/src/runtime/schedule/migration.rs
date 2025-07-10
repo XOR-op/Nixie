@@ -41,7 +41,7 @@ impl DataMigrationTask {
         &self.src
     }
 
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         // clustering by global device ID
         let mut src_per_device: HashMap<
             GlobalDeviceId,
@@ -64,20 +64,26 @@ impl DataMigrationTask {
                 ));
             }
         }
+        let device_junction = src_per_device
+            .keys()
+            .chain(self.dst.1.device_map.keys())
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
         let mut task_handles = Vec::new();
-        for (dst_device, dst_entries) in self.dst.1.device_map {
-            let src_list = src_per_device.remove(&dst_device).unwrap_or_default();
+        for device in device_junction {
+            let src_list = src_per_device.remove(&device).unwrap_or_default();
+            let dst_entries = self.dst.1.device_map.remove(&device).unwrap_or_default();
             // Run migration for each device
             let shm_buffer_mgr = Arc::clone(&self.shm_buffer_mgr);
             let rpc_client = self.dst.2.clone();
             let device_id = self
                 .dst
                 .3
-                .real_to_visible(dst_device)
+                .real_to_visible(device)
                 .unwrap_or_else(|| todo!("Handle missing device mapping"));
             task_handles.push(tokio::spawn(async move {
                 Self::run_for_device(
-                    dst_device,
+                    device,
                     src_list,
                     (self.dst.0, device_id, rpc_client, dst_entries),
                     shm_buffer_mgr,

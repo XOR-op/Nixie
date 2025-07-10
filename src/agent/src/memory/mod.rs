@@ -6,12 +6,14 @@ use cudarc::driver::sys::{
     CUmemAllocationProp, CUmemAllocationType, CUmemLocation, CUmemLocationType,
 };
 use nihil_common::{
-    general::CallParameter,
     shm::{AllocationEntry, AllocationTable, HandleList, PhysicalMemoryHandle},
-    MemoryRequest,
+    MAX_ALLOCATION_SIZE,
 };
 
-use crate::{check_cu_err, comm::request_memory};
+use crate::{
+    check_cu_err,
+    schedule::{LaunchType, SCHED_CTL},
+};
 pub use streaming::{init_memory_migration_ctl, MEMORY_MIGRATION_CTL};
 
 pub(super) fn default_alloc_prop(device: i32) -> CUmemAllocationProp {
@@ -53,15 +55,24 @@ pub(crate) fn populate_entry(
         if let Err(mut res) = res {
             if res == cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY && !has_requested_reservation {
                 has_requested_reservation = true;
-                reserve_memory_blocking(nihil_common::MemoryRequest {
-                    mem_req: std::array::from_fn(|idx| {
-                        if idx == device_id as usize {
-                            vec![handle.size as u64]
-                        } else {
-                            Vec::new()
-                        }
+                SCHED_CTL.disallow_running();
+                SCHED_CTL.launch_allowed_with(
+                    LaunchType::Malloc,
+                    Some(nihil_common::MemoryRequest {
+                        mem_req: std::array::from_fn(|idx| {
+                            if idx == device_id as usize {
+                                vec![
+                                    remaining_size as u64,
+                                    // avoid fragmentation
+                                    MAX_ALLOCATION_SIZE as u64,
+                                    MAX_ALLOCATION_SIZE as u64,
+                                ]
+                            } else {
+                                Vec::new()
+                            }
+                        }),
                     }),
-                });
+                );
                 if let Err(res2) = alloc_for_mem_handle(handle, &alloc_prop) {
                     res = res2;
                 }
@@ -72,6 +83,7 @@ pub(crate) fn populate_entry(
                 return false;
             }
         }
+        assert!(handle.on_gpu);
         remaining_size -= handle.size;
         cur_index = handle.next_handle_idx;
     }
@@ -125,7 +137,7 @@ pub(super) fn map_mem_handle(handle: &PhysicalMemoryHandle, access_desc: &CUmemA
 pub(super) fn unmap_and_release_mem_handle(handle: &PhysicalMemoryHandle) {
     // unmap first, where the access will be invalidated automatically
     check_cu_err!(
-        unsafe { cuda_lib().cuMemUnmap(handle.cu_handle.unwrap(), handle.size) },
+        unsafe { cuda_lib().cuMemUnmap(handle.addr, handle.size) },
         "Failed to unmap memory"
     );
 
@@ -157,10 +169,4 @@ pub(crate) fn deallocate_list(start_idx: NonZeroU32, handle_list: &mut HandleLis
         handle.on_gpu = false;
         cur_index = handle.next_handle_idx;
     }
-}
-
-pub(crate) fn reserve_memory_blocking(req: MemoryRequest) {
-    let (parameter, rx) = CallParameter::new(req);
-    request_memory(parameter);
-    rx.wait_blocking();
 }

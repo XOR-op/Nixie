@@ -67,7 +67,7 @@ pub fn init_config(config_path: Option<PathBuf>) -> Result<(), DaemonError> {
         device_memory_mb,
         device_threshold: 0.95,
         schedule_delay: None,
-        preempt_delay: Some(Duration::from_millis(50)),
+        preempt_delay: None,
         schedule_cooldown: None,
     };
 

@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
 use nihil_common::{
-    general::CallParameter, rpc::SidecarClient, ActivityUpdate, GlobalDeviceId, SchedulingArgs,
-    MAX_GPUS,
+    general::CallParameter, rpc::SidecarClient, ActivityUpdate, GlobalDeviceId, MemoryRequest,
+    SchedulingArgs, MAX_GPUS,
 };
 use tokio::sync::mpsc;
 
@@ -19,18 +19,17 @@ use crate::{
     error::ScheduleError,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        schedule::{statistics::PreemptionReason, PriorityLevel},
+        schedule::{
+            migration_plan::{two_processes_task, DstRequestArgs},
+            statistics::PreemptionReason,
+            PriorityLevel,
+        },
     },
 };
 
 use crate::runtime::{daemon_server::DaemonServerHandle, ProcCtlReq};
 
-use super::{
-    migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry},
-    policy::ScheduleQueue,
-    statistics::StopReason,
-    ShmBufferManager,
-};
+use super::{policy::ScheduleQueue, statistics::StopReason, ShmBufferManager};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ActiveClientState {
@@ -111,10 +110,9 @@ impl Scheduler {
         data: ActivityUpdate,
     ) -> Result<(), ScheduleError> {
         match data {
-            ActivityUpdate::RequestScheduling { memory_request } => {
-                // TODO: handle memory request
-                let _ = memory_request;
-                self.handle_sched_request(pid).await
+            ActivityUpdate::RequestScheduling => self.handle_sched_request(pid, None).await,
+            ActivityUpdate::RequestSchedulingAndMem { memory_request } => {
+                self.handle_sched_request(pid, Some(memory_request)).await
             }
             ActivityUpdate::Idle => {
                 self.handle_activity_idle(pid).await;
@@ -123,12 +121,17 @@ impl Scheduler {
         }
     }
 
-    async fn handle_sched_request(&mut self, incoming_pid: i32) -> Result<(), ScheduleError> {
+    async fn handle_sched_request(
+        &mut self,
+        incoming_pid: i32,
+        mem_req: Option<MemoryRequest>,
+    ) -> Result<(), ScheduleError> {
         let control = self.list.write().await;
         let config = load_config();
         let mut swap_out_mb = None;
+        tracing::debug!("mem_req: {:?}", mem_req);
 
-        if let Some((active_pid, _previous_running)) = match self.active_client {
+        if let Some((active_pid, previous_proc_is_running)) = match self.active_client {
             ActiveClientState::None => None,
             ActiveClientState::Active { pid, .. } => {
                 let incoming_level = self
@@ -156,88 +159,111 @@ impl Scheduler {
                 Some((pid, false))
             }
         } {
-            if incoming_pid != active_pid {
-                // active pid can exit before scheduler knows in `else` branch
-                if let Some(cur_handle) = control.get(&active_pid) {
-                    tracing::trace!("Scheduling out process {}", active_pid);
-                    let disable_current_fut = {
-                        let cur_client = cur_handle.client();
-                        tokio::spawn(async move {
-                            cur_client
-                                .schedule(tarpc::context::current(), SchedulingArgs::Disable)
-                                .await
+            // disable current process if needed; and migrate VRAM
+            if !previous_proc_is_running || incoming_pid != active_pid || mem_req.is_some() {
+                let disable_current_fut = if incoming_pid != active_pid {
+                    // active pid can exit before scheduler knows in `else` branch
+                    if let Some(cur_handle) = control.get(&active_pid) {
+                        tracing::trace!("Scheduling out process {}", active_pid);
+                        Some({
+                            let cur_client = cur_handle.client();
+                            tokio::spawn(async move {
+                                cur_client
+                                    .schedule(tarpc::context::current(), SchedulingArgs::Disable)
+                                    .await
+                            })
                         })
-                    };
-
-                    // get info about incoming process
-                    let Some(new_handle) = control.get(&incoming_pid) else {
-                        return Err(ScheduleError::InvalidClient(incoming_pid));
-                    };
-                    let incoming_request = {
-                        let (para, fut) = CallParameter::new(ProcessResidualRequest {
-                            pid: incoming_pid,
-                            on_gpu: false,
-                            gpu_list: (0..MAX_GPUS)
-                                .into_iter()
-                                .map(|i| GlobalDeviceId(i as i32))
-                                .collect(),
-                        });
-                        let _ = new_handle
-                            .inst_tx()
-                            .send(ProcCtlReq::ListProcessResidual(para));
-
-                        fut.await
-                            .expect("Failed to get incoming process residual data")
-                    };
-
-                    // make sure the current process is device-synchronized
-                    disable_current_fut
+                    } else {
+                        // the previous active process has exited
+                        self.active_client = ActiveClientState::None;
+                        self.sched_queue.remove_client(active_pid);
+                        None
+                    }
+                } else {
+                    None
+                };
+                // get info about incoming process
+                let Some(new_handle) = control.get(&incoming_pid) else {
+                    return Err(ScheduleError::InvalidClient(incoming_pid));
+                };
+                let (incoming_request, devs) = if let Some(mem_req) = mem_req {
+                    let requirement = mem_req
+                        .mem_req
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(global_id, entries)| {
+                            let size = entries.iter().sum::<u64>();
+                            if size > 0 {
+                                Some((GlobalDeviceId(global_id as i32), size))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<HashMap<_, _>>();
+                    let devs = requirement.keys().cloned().collect();
+                    (DstRequestArgs::Allocation(requirement), devs)
+                } else {
+                    let (para, fut) = CallParameter::new(ProcessResidualRequest {
+                        pid: incoming_pid,
+                        on_gpu: false,
+                        gpu_list: (0..MAX_GPUS)
+                            .into_iter()
+                            .map(|i| GlobalDeviceId(i as i32))
+                            .collect(),
+                    });
+                    let _ = new_handle
+                        .inst_tx()
+                        .send(ProcCtlReq::ListProcessResidual(para));
+                    let res = fut
                         .await
+                        .expect("Failed to get incoming process residual data");
+                    let devs = res.allocations.keys().cloned().collect();
+                    (DstRequestArgs::ResidualData(res), devs)
+                };
+
+                // make sure the current process is device-synchronized
+                if let Some(fut) = disable_current_fut {
+                    fut.await
                         .unwrap()
                         .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
-
-                    let cur_residual = {
-                        let (para, fut) = CallParameter::new(ProcessResidualRequest {
-                            pid: active_pid,
-                            on_gpu: true,
-                            gpu_list: incoming_request.allocations.keys().cloned().collect(),
-                        });
-                        let _ = cur_handle
-                            .inst_tx()
-                            .send(ProcCtlReq::ListProcessResidual(para));
-                        fut.await
-                    }
-                    .expect("Failed to get current process residual data");
-
-                    let task = two_processes_task(
-                        (
-                            incoming_pid,
-                            incoming_request,
-                            new_handle.client(),
-                            new_handle.dev_mapping(),
-                        ),
-                        &[(
-                            active_pid,
-                            cur_residual,
-                            cur_handle.client(),
-                            cur_handle.dev_mapping(),
-                        )],
-                        self.shmem_buffer.clone(),
-                    );
-                    // for statistics
-                    swap_out_mb = task.get_src().get(0).map(|(_, spec, _, _)| {
-                        spec.device_map
-                            .values()
-                            .map(|entries| entries.iter().map(|entry| entry.size).sum::<u64>())
-                            .sum::<u64>()
-                            / (1024 * 1024) // convert to MB
-                    });
-                    task.run().await
-                } else {
-                    // the previous active process has exited
-                    self.active_client = ActiveClientState::None;
-                    self.sched_queue.remove_client(active_pid);
                 }
+
+                let others = collect_all_residuals(
+                    control
+                        .iter()
+                        .filter_map(|(pid, handle)| {
+                            if *pid != incoming_pid {
+                                Some((*pid, handle))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    true,
+                    devs,
+                )
+                .await;
+
+                let task = two_processes_task(
+                    (
+                        incoming_pid,
+                        incoming_request,
+                        new_handle.client(),
+                        new_handle.dev_mapping(),
+                    ),
+                    &others,
+                    self.shmem_buffer.clone(),
+                );
+                // for statistics
+                swap_out_mb = task.get_src().get(0).map(|(_, spec, _, _)| {
+                    spec.device_map
+                        .values()
+                        .map(|entries| entries.iter().map(|entry| entry.size).sum::<u64>())
+                        .sum::<u64>()
+                        / (1024 * 1024) // convert to MB
+                });
+                task.run().await
             }
         }
 
@@ -308,90 +334,39 @@ impl Scheduler {
     }
 }
 
-fn two_processes_task(
-    dst: (
-        i32,
-        ProcessResidualData,
-        SidecarClient,
-        Arc<DeviceOrdinalMapping>,
-    ),
-    src: &[(
-        i32,
-        ProcessResidualData,
-        SidecarClient,
-        Arc<DeviceOrdinalMapping>,
-    )],
-    shm_buffer_mgr: Arc<ShmBufferManager>,
-) -> DataMigrationTask {
-    let mut src_list = Vec::new();
-    // for every dst device
-    for (global_id, dst_entries) in dst.1.allocations.iter() {
-        let dst_required_size = dst_entries.iter().map(|entry| entry.size).sum::<u64>();
-
-        let mut accu_size = 0;
-        // for every src process
-        for (src_pid, src_entries, src_rpc_client, src_mapping) in src.iter() {
-            if let Some(entries) = src_entries.allocations.get(&global_id) {
-                let mut migration_entries = Vec::new();
-                // check per device per src process
-                for entry in entries {
-                    if accu_size >= dst_required_size {
-                        break;
-                    }
-                    migration_entries.push(MigrationSpecEntry {
-                        size: entry.size,
-                        handle_idx: entry.handle_idx,
-                    });
-                    accu_size += entry.size;
-                }
-                if !migration_entries.is_empty() {
-                    src_list.push((
-                        *src_pid,
-                        MigrationSpec {
-                            device_map: HashMap::from([(*global_id, migration_entries)]),
-                        },
-                        src_rpc_client.clone(),
-                        Arc::clone(src_mapping),
-                    ));
-                }
-            }
-        }
-        if accu_size < dst_required_size {
-            tracing::warn!(
-                "Not enough data to migrate for device {:?}: required {}, but only {}",
-                global_id,
-                dst_required_size,
-                accu_size
-            );
-        }
-    }
-    let dst_entries = dst
-        .1
-        .allocations
-        .into_iter()
-        .map(|(global_id, entries)| {
-            (
-                global_id,
-                entries
-                    .into_iter()
-                    .map(|data_entry| MigrationSpecEntry {
-                        size: data_entry.size,
-                        handle_idx: data_entry.handle_idx,
+async fn collect_all_residuals(
+    list: &[(i32, &DaemonServerHandle)],
+    on_gpu: bool,
+    gpu_list: Vec<GlobalDeviceId>,
+) -> Vec<(
+    i32,
+    ProcessResidualData,
+    SidecarClient,
+    Arc<DeviceOrdinalMapping>,
+)> {
+    let fut_list = list
+        .iter()
+        .map(|(pid, handle)| {
+            let (para, fut) = CallParameter::new(ProcessResidualRequest {
+                pid: *pid,
+                on_gpu,
+                gpu_list: gpu_list.clone(),
+            });
+            let _ = handle.inst_tx().send(ProcCtlReq::ListProcessResidual(para));
+            tokio::time::timeout(
+                Duration::from_millis(1000),
+                futures::FutureExt::map(fut, move |res| {
+                    res.map(|data| {
+                        let mapping = handle.dev_mapping().clone();
+                        (*pid, data, handle.client().clone(), mapping)
                     })
-                    .collect(),
+                }),
             )
         })
-        .collect();
-    DataMigrationTask::new(
-        src_list,
-        (
-            dst.0,
-            MigrationSpec {
-                device_map: dst_entries,
-            },
-            dst.2,
-            Arc::clone(&dst.3),
-        ),
-        shm_buffer_mgr,
-    )
+        .collect::<Vec<_>>();
+    let results = futures::future::join_all(fut_list).await;
+    results
+        .into_iter()
+        .filter_map(|x| x.ok().flatten())
+        .collect::<Vec<_>>()
 }

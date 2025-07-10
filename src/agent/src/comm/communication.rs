@@ -1,6 +1,5 @@
 use nihil_common::{
-    general::CallParameter, ActivityUpdate, MemoryRequest, MigrationArgs, MigrationResponse,
-    SchedulingArgs,
+    general::CallParameter, ActivityUpdate, MigrationArgs, MigrationResponse, SchedulingArgs,
 };
 use tarpc::context::Context;
 
@@ -20,13 +19,6 @@ pub(crate) fn update_activity(activity: ActivityUpdate) {
         return;
     };
     chan_send!(chan.send(A2SMessage::NofityActivity(activity)));
-}
-
-pub(crate) fn request_memory(req: CallParameter<MemoryRequest, ()>) {
-    let Some(chan) = COMM.get_or_init(init_comm) else {
-        return;
-    };
-    chan_send!(chan.send(A2SMessage::MemoryRequest(req)));
 }
 
 #[derive(Clone)]

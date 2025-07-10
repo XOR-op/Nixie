@@ -378,7 +378,6 @@ impl DeviceOrdinalMapping {
         if let Some(dev) = self.real_to_visible.get(&real) {
             Some(*dev)
         } else {
-            tracing::error!("Invalid real device ordinal: {}", real.0);
             None
         }
     }
@@ -387,7 +386,6 @@ impl DeviceOrdinalMapping {
         if let Some(dev) = self.visible_to_real.get(&visible) {
             Some(*dev)
         } else {
-            tracing::error!("Invalid visible device ordinal: {}", visible.0);
             None
         }
     }

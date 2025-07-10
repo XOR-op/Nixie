@@ -1,5 +1,6 @@
 mod buffer_manager;
 mod migration;
+mod migration_plan;
 mod policy;
 mod scheduler;
 mod statistics;

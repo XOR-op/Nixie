@@ -20,12 +20,22 @@ pub fn init_memory_migration_ctl() -> MemoryMigrationControl {
 }
 
 pub struct MemoryMigrationControl {
-    migrators: Mutex<[StreamingMemoryMigrator; MAX_GPUS]>,
+    migrators: Mutex<Vec<StreamingMemoryMigrator>>,
 }
 
 impl MemoryMigrationControl {
     pub fn new() -> Self {
-        let migrators = std::array::from_fn(|i| StreamingMemoryMigrator::new(i as i32));
+        let device_cnt = unsafe {
+            let mut count = 0;
+            check_cu_err!(
+                cuda_lib().cuDeviceGetCount(&mut count),
+                "Failed to get device count"
+            );
+            count
+        };
+        let migrators = (0..device_cnt)
+            .map(|i| StreamingMemoryMigrator::new(i as i32))
+            .collect();
         Self {
             migrators: Mutex::new(migrators),
         }
@@ -105,6 +115,12 @@ impl StreamingMemoryMigrator {
                 )
             },
             "Failed to create CUDA event"
+        );
+        crate::debug_eprintln!(
+            "Start migration: device={}, handle_idx={}, h2d={}",
+            args.device.0,
+            args.handle_idx,
+            args.host_to_device
         );
         if args.host_to_device {
             // allocate physical memory
@@ -233,6 +249,12 @@ impl StreamingMemoryMigrator {
                 unmap_and_release_mem_handle(handle);
                 handle.on_gpu = false;
             }
+            crate::debug_eprintln!(
+                "Memory migration completed: device={}, handle_idx={}, size={}",
+                args.device.0,
+                args.handle_idx,
+                args.size
+            );
             ret_chan.ret(response);
         }
     }

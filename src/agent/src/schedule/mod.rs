@@ -3,14 +3,12 @@ use std::{
     time::Duration,
 };
 
-use nihil_common::{general::CallParameter, ActivityUpdate, SchedulingArgs, MAX_GPUS};
+use nihil_common::{general::CallParameter, ActivityUpdate, MemoryRequest, SchedulingArgs};
 use stats::LaunchStats;
 
 use cudarc::driver::sys::lib as cuda_lib;
 
-use crate::{
-    check_cu_err, env_config::agent_config, init::should_have_initialized, set_device, GENERIC_DATA,
-};
+use crate::{check_cu_err, env_config::agent_config, set_device};
 
 mod stats;
 pub(crate) use stats::LaunchType;
@@ -72,20 +70,24 @@ impl Scheduler {
         self.cond_var.notify_all();
     }
 
-    pub fn launch_allowed(&'static self, launch_type: LaunchType) {
+    pub fn disallow_running(&'static self) {
+        let mut sched_ctx = self.allow_running.lock().unwrap();
+        sched_ctx.allow_running = false;
+        crate::comm::update_activity(ActivityUpdate::Idle);
+    }
+
+    pub fn launch_allowed_with(
+        &'static self,
+        launch_type: LaunchType,
+        mem_req: Option<MemoryRequest>,
+    ) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         if !sched_ctx.allow_running {
-            // request to run
-            let mut allocs = [const { Vec::new() }; MAX_GPUS];
-            for i in 0..MAX_GPUS {
-                let table = GENERIC_DATA.get_or_init(should_have_initialized).lock(i);
-                for entry in table.entry.iter() {
-                    let (_, off_gpu) = table.handle_list.memory_usage(entry.handle_idx);
-                    allocs[i].push(off_gpu as u64)
-                }
-            }
-            crate::comm::update_activity(ActivityUpdate::RequestScheduling {
-                memory_request: nihil_common::MemoryRequest { mem_req: allocs },
+            crate::comm::update_activity(match mem_req {
+                Some(req) => ActivityUpdate::RequestSchedulingAndMem {
+                    memory_request: req,
+                },
+                None => ActivityUpdate::RequestScheduling,
             });
         }
         while !sched_ctx.allow_running {
@@ -94,7 +96,15 @@ impl Scheduler {
         match launch_type {
             LaunchType::Kernel => sched_ctx.stats.record_launch_kernel(),
             LaunchType::Graph => sched_ctx.stats.record_launch_graph(),
+            LaunchType::Malloc => sched_ctx.stats.record_launch_malloc(),
+            LaunchType::Transfer => {
+                todo!()
+            }
         }
+    }
+
+    pub fn launch_allowed(&'static self, launch_type: LaunchType) {
+        self.launch_allowed_with(launch_type, None);
     }
 
     fn spawn_idle_monitor_once(&'static self) {
@@ -108,6 +118,7 @@ impl Scheduler {
             )
             .is_ok()
         {
+            const MALLOC_INTERVAL: Duration = Duration::from_millis(200);
             const KERNEL_INTERVAL: Duration = Duration::from_millis(500);
             const GRAPH_INTERVAL: Duration = Duration::from_millis(1000);
             assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
@@ -121,6 +132,7 @@ impl Scheduler {
                                 // check idle
                                 if context.stats.graph_elapsed() > GRAPH_INTERVAL
                                     && context.stats.kernel_elapsed() > KERNEL_INTERVAL
+                                    && context.stats.malloc_elapsed() > MALLOC_INTERVAL
                                 {
                                     // should not use disable() here since we don't need prefetch
                                     context.allow_running = false;
