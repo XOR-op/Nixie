@@ -1,3 +1,4 @@
+use cudarc::driver::sys::lib as cuda_lib;
 use std::sync::OnceLock;
 use tokio::net::UnixStream;
 
@@ -14,9 +15,9 @@ use tarpc::{
 };
 
 use crate::comm::msg::A2SMessage;
-use crate::{info_eprintln, schedule, GENERIC_DATA};
+use crate::{check_cu_err, global_shm_buffer, info_eprintln, schedule, set_device, GENERIC_DATA};
 
-use crate::init::{init_generic_data, init_shm_buffer};
+use crate::init::{init_cuda_env, init_generic_data, init_shm_buffer};
 
 use super::communication::SidecarServer;
 
@@ -104,6 +105,19 @@ pub(crate) fn init_comm() -> Option<flume::Sender<A2SMessage>> {
 
 pub(super) fn init_buffer_by_handshake_resp(resp: HandshakeResponse) {
     init_shm_buffer(&resp.buffer_shm_path, resp.buffer_length as usize);
-    // TODO: cudaHostRegister
-    // let buf_ptr = unsafe { global_shm_buffer().at_offset(0, 1) }.unwrap();
+    init_cuda_env();
+    set_device(0);
+    unsafe {
+        let global_buf = global_shm_buffer();
+        let shm_buf_ptr = global_buf.at_offset(0, 1).unwrap();
+        let size = global_buf.size();
+        check_cu_err!(
+            cuda_lib().cuMemHostRegister_v2(
+                shm_buf_ptr as *mut nix::libc::c_void,
+                size,
+                cudarc::driver::sys::CU_MEMHOSTALLOC_PORTABLE,
+            ),
+            "Failed to register SHM buffer with CUDA"
+        );
+    }
 }

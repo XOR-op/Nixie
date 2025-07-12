@@ -69,6 +69,10 @@ impl ShmBuffer {
         }
         Some((self.shm_addr + offset) as *mut u8)
     }
+
+    pub fn size(&self) -> usize {
+        self.shm_size
+    }
 }
 
 impl Drop for ShmBuffer {

@@ -19,15 +19,16 @@ pub(crate) fn init_shm_buffer(path: &str, size: usize) {
 }
 
 pub(crate) fn init_cuda_env() {
-    static FIRST_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    if FIRST_TIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
-        let lib = unsafe { cuda_lib() };
-        let mut dev_cnt = 0;
-        let res = unsafe { lib.cuDeviceGetCount(&mut dev_cnt) };
-        if res == cudarc::driver::sys::cudaError_enum::CUDA_ERROR_NOT_INITIALIZED {
-            check_cu_err!(unsafe { lib.cuInit(0) }, "initialize CUDA");
-            set_device(0);
-        }
+    static FIRST_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = FIRST_TIME.lock().unwrap();
+    let lib = unsafe { cuda_lib() };
+    let mut dev_cnt = 0;
+    let res = unsafe { lib.cuDeviceGetCount(&mut dev_cnt) };
+    if res == cudarc::driver::sys::cudaError_enum::CUDA_ERROR_NOT_INITIALIZED {
+        check_cu_err!(unsafe { lib.cuInit(0) }, "initialize CUDA");
+        set_device(0);
+    } else {
+        check_cu_err!(res, "CUDA initialization test failed");
     }
 }
 

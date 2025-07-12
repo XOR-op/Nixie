@@ -9,7 +9,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
 use crate::memory::{deallocate_list, populate_entry};
 use crate::schedule::{LaunchType, SCHED_CTL};
-use crate::{debug_eprintln, warn_eprintln, GENERIC_DATA};
+use crate::{warn_eprintln, GENERIC_DATA};
 
 #[macro_export]
 macro_rules! generate_init_fn_as {
