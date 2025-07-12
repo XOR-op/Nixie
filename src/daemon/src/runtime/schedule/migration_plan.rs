@@ -98,14 +98,6 @@ pub(super) fn two_processes_task(
             .collect::<HashMap<_, _>>(),
         DstRequestArgs::Allocation(_) => HashMap::new(),
     };
-    tracing::debug!(
-        "Migration plan: dst={:?}, src={:?};",
-        dst_entries,
-        src_list
-            .iter()
-            .map(|(pid, spec, _, _)| (pid, &spec.device_map))
-            .collect::<Vec<_>>(),
-    );
     DataMigrationTask::new(
         src_list,
         (

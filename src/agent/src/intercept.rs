@@ -110,7 +110,6 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             len: rounded_up_size,
             handle_idx: handle_idx.expect("Failed to allocate handle"),
         };
-        debug_eprintln!("Populating memory...");
         if !populate_entry(&alloc_entry, device_id, &mut table) {
             // deallocate all handles
             while let Some(idx) = handle_idx {

@@ -1,7 +1,8 @@
 use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
 use nihil_common::{
-    rpc::SidecarClient, GlobalDeviceId, MigrationArgs, MigrationResponse, ProcessLocalDeviceId,
+    general::pretty_size, rpc::SidecarClient, GlobalDeviceId, MigrationArgs, MigrationResponse,
+    ProcessLocalDeviceId,
 };
 
 use crate::runtime::daemon_server::DeviceOrdinalMapping;
@@ -42,6 +43,7 @@ impl DataMigrationTask {
     }
 
     pub async fn run(mut self) {
+        let mut largest_transfer_size = 0;
         // clustering by global device ID
         let mut src_per_device: HashMap<
             GlobalDeviceId,
@@ -54,6 +56,8 @@ impl DataMigrationTask {
         > = HashMap::new();
         for (pid, spec, rpc_client, mapping) in self.src {
             for (device_id, entries) in spec.device_map {
+                largest_transfer_size =
+                    largest_transfer_size.max(entries.iter().map(|e| e.size).sum::<u64>());
                 src_per_device.entry(device_id).or_insert(Vec::new()).push((
                     pid,
                     mapping
@@ -81,6 +85,8 @@ impl DataMigrationTask {
                 .3
                 .real_to_visible(device)
                 .unwrap_or_else(|| todo!("Handle missing device mapping"));
+            largest_transfer_size =
+                largest_transfer_size.max(dst_entries.iter().map(|e| e.size).sum::<u64>());
             task_handles.push(tokio::spawn(async move {
                 Self::run_for_device(
                     device,
@@ -91,8 +97,16 @@ impl DataMigrationTask {
                 .await;
             }));
         }
+        let ts_start = std::time::Instant::now();
         // Wait for all tasks to complete
         let _ = futures::future::join_all(task_handles).await;
+        let elapsed = ts_start.elapsed();
+        tracing::debug!(
+            "Data migration completed in {:.3}s, largest transfer size = {}, speed = {:.3} GB/s",
+            elapsed.as_secs_f64(),
+            pretty_size(largest_transfer_size),
+            (largest_transfer_size as f64 / elapsed.as_secs_f64() / 1e9)
+        );
     }
 
     async fn run_for_device(

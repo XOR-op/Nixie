@@ -116,12 +116,6 @@ impl StreamingMemoryMigrator {
             },
             "Failed to create CUDA event"
         );
-        crate::debug_eprintln!(
-            "Start migration: device={}, handle_idx={}, h2d={}",
-            args.device.0,
-            args.handle_idx,
-            args.host_to_device
-        );
         if args.host_to_device {
             // allocate physical memory
             let mut cu_handle = 0u64;
@@ -249,12 +243,6 @@ impl StreamingMemoryMigrator {
                 unmap_and_release_mem_handle(handle);
                 handle.on_gpu = false;
             }
-            crate::debug_eprintln!(
-                "Memory migration completed: device={}, handle_idx={}, size={}",
-                args.device.0,
-                args.handle_idx,
-                args.size
-            );
             ret_chan.ret(response);
         }
     }

@@ -129,7 +129,6 @@ impl Scheduler {
         let control = self.list.write().await;
         let config = load_config();
         let mut swap_out_mb = None;
-        tracing::debug!("mem_req: {:?}", mem_req);
 
         if let Some((active_pid, previous_proc_is_running)) = match self.active_client {
             ActiveClientState::None => None,
