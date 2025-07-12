@@ -1,6 +1,10 @@
-use cudarc::driver::sys::lib as cuda_lib;
+use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
+use nihil_common::{MemoryRequest, CUDA_PROCESS_RESERVATION_SIZE};
 
-use crate::env_config::agent_config;
+use crate::{
+    env_config::agent_config,
+    schedule::{LaunchType, SCHED_CTL},
+};
 
 #[inline(always)]
 pub(crate) fn should_log(level: u8) -> bool {
@@ -46,6 +50,20 @@ macro_rules! check_cu_err {
 pub(crate) fn set_device(dev: i32) {
     let mut cu_ctx = std::ptr::null_mut();
     let res = unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
+    if res == cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY {
+        SCHED_CTL.pause_then_require_memory(
+            LaunchType::Malloc,
+            MemoryRequest {
+                mem_req: std::array::from_fn(|ith_dev| {
+                    if ith_dev == dev as usize {
+                        vec![CUDA_PROCESS_RESERVATION_SIZE as u64]
+                    } else {
+                        Vec::new()
+                    }
+                }),
+            },
+        );
+    }
     check_cu_err!(res, "cuCtxGetCurrent");
     assert!(!cu_ctx.is_null());
     let res = unsafe { cuda_lib().cuCtxSetCurrent(cu_ctx) };
@@ -53,28 +71,30 @@ pub(crate) fn set_device(dev: i32) {
 }
 
 // restore the context when dropped
-// pub(crate) struct CudaContextGuard {
-//     ctx_ptr: cudarc::driver::sys::CUcontext,
-//     // mark as !Send
-//     _marker: std::marker::PhantomData<std::cell::Cell<()>>,
-// }
+#[allow(unused)]
+pub(crate) struct CudaContextGuard {
+    ctx_ptr: cudarc::driver::sys::CUcontext,
+    // mark as !Send
+    _marker: std::marker::PhantomData<std::cell::Cell<()>>,
+}
 
-// impl CudaContextGuard {
-//     pub fn new() -> Self {
-//         let mut cu_ctx = std::ptr::null_mut();
-//         let res = unsafe { cuda_lib().cuCtxGetCurrent(&mut cu_ctx) };
-//         check_cu_err!(res, "cuCtxGetCurrent");
-//         assert!(!cu_ctx.is_null());
-//         Self {
-//             ctx_ptr: cu_ctx,
-//             _marker: std::marker::PhantomData,
-//         }
-//     }
-// }
+impl CudaContextGuard {
+    #[allow(unused)]
+    pub fn new() -> Self {
+        let mut cu_ctx = std::ptr::null_mut();
+        let res = unsafe { cuda_lib().cuCtxGetCurrent(&mut cu_ctx) };
+        check_cu_err!(res, "cuCtxGetCurrent");
+        assert!(!cu_ctx.is_null());
+        Self {
+            ctx_ptr: cu_ctx,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
 
-// impl Drop for CudaContextGuard {
-//     fn drop(&mut self) {
-//         let res = unsafe { cuda_lib().cuCtxSetCurrent(self.ctx_ptr) };
-//         check_cu_err!(res, "cuCtxSetCurrent");
-//     }
-// }
+impl Drop for CudaContextGuard {
+    fn drop(&mut self) {
+        let res = unsafe { cuda_lib().cuCtxSetCurrent(self.ctx_ptr) };
+        check_cu_err!(res, "cuCtxSetCurrent");
+    }
+}

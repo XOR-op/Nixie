@@ -70,10 +70,19 @@ impl Scheduler {
         self.cond_var.notify_all();
     }
 
-    pub fn disallow_running(&'static self) {
+    fn disallow_running(&'static self) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         sched_ctx.allow_running = false;
         crate::comm::update_activity(ActivityUpdate::Idle);
+    }
+
+    pub fn pause_then_require_memory(
+        &'static self,
+        launch_type: LaunchType,
+        mem_req: MemoryRequest,
+    ) {
+        self.disallow_running();
+        self.launch_allowed_with(launch_type, Some(mem_req));
     }
 
     pub fn launch_allowed_with(
@@ -120,7 +129,7 @@ impl Scheduler {
         {
             const MALLOC_INTERVAL: Duration = Duration::from_millis(200);
             const KERNEL_INTERVAL: Duration = Duration::from_millis(500);
-            const GRAPH_INTERVAL: Duration = Duration::from_millis(1000);
+            const GRAPH_INTERVAL: Duration = Duration::from_millis(500);
             assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
             if agent_config().auto_idle {
                 tokio::spawn(async {

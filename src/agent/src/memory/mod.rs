@@ -55,10 +55,9 @@ pub(crate) fn populate_entry(
         if let Err(mut res) = res {
             if res == cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY && !has_requested_reservation {
                 has_requested_reservation = true;
-                SCHED_CTL.disallow_running();
-                SCHED_CTL.launch_allowed_with(
+                SCHED_CTL.pause_then_require_memory(
                     LaunchType::Malloc,
-                    Some(nihil_common::MemoryRequest {
+                    nihil_common::MemoryRequest {
                         mem_req: std::array::from_fn(|idx| {
                             if idx == device_id as usize {
                                 vec![
@@ -71,7 +70,7 @@ pub(crate) fn populate_entry(
                                 Vec::new()
                             }
                         }),
-                    }),
+                    },
                 );
                 res = alloc_for_mem_handle(handle, &alloc_prop)
                     .err()
