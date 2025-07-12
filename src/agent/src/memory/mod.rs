@@ -73,9 +73,9 @@ pub(crate) fn populate_entry(
                         }),
                     }),
                 );
-                if let Err(res2) = alloc_for_mem_handle(handle, &alloc_prop) {
-                    res = res2;
-                }
+                res = alloc_for_mem_handle(handle, &alloc_prop)
+                    .err()
+                    .unwrap_or(cudaError_enum::CUDA_SUCCESS);
             }
             if res != cudaError_enum::CUDA_SUCCESS {
                 // deallocate all previously allocated handles
