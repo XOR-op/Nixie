@@ -34,9 +34,6 @@ enum DeviceArgs {
 
 #[derive(Debug, Parser)]
 struct PrefetchArgs {
-    /// only prefetch memory regions with size larger than filter
-    #[arg(short, long, default_value = "0")]
-    pub low_filter: Option<u64>,
     #[arg(short, long)]
     pub dest: DeviceArgs,
     #[command(flatten)]
@@ -124,7 +121,7 @@ fn main() {
                 let client =
                     check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
                 client
-                    .prefetch(matches!(args.dest, DeviceArgs::Gpu), args.low_filter)
+                    .prefetch(matches!(args.dest, DeviceArgs::Gpu))
                     .await
                     .unwrap();
             }

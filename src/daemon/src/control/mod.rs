@@ -2,7 +2,7 @@ pub mod client;
 
 use std::{collections::HashMap, num::NonZeroU32};
 
-use nihil_common::{GlobalDeviceId, MAX_GPUS};
+use nihil_common::GlobalDeviceId;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, ConfigurableArgs};
@@ -25,15 +25,13 @@ pub(crate) trait Controllable {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PrefetchMsg {
     pub pid: i32,
-    pub size_low: Option<u64>,
-    pub size_high: Option<u64>,
     pub to_gpu: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProcessMetadata {
     pub pid: i32,
-    pub allocations: [Vec<AllocationData>; MAX_GPUS], // Global device ID
+    pub allocations: Vec<(GlobalDeviceId, Vec<AllocationData>)>, // Global device ID
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

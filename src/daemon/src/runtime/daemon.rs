@@ -101,6 +101,7 @@ impl Daemon {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (exit_tx, mut exit_rx) = mpsc::unbounded_channel();
         let (rpc_data_tx, rpc_data_rx) = mpsc::unbounded_channel();
+        let (prefetch_tx, prefetch_rx) = mpsc::unbounded_channel();
         let shm_buffer_path = self.shm_buffer_path.clone();
         // accept app connections
         tokio::spawn(Self::handle_processes(
@@ -133,7 +134,7 @@ impl Daemon {
 
         let list_handle = self.data.processes.clone();
         tokio::spawn(async move {
-            Scheduler::new(list_handle, rpc_data_rx, shm_buffer)
+            Scheduler::new(list_handle, rpc_data_rx, prefetch_rx, shm_buffer)
                 .run()
                 .await;
         });
@@ -148,6 +149,7 @@ impl Daemon {
             );
             let server = ControllableDaemon {
                 data: self.data.clone(),
+                prefetch_tx: prefetch_tx.clone(),
             };
             tokio::spawn(
                 BaseChannel::with_defaults(conn)
@@ -198,6 +200,7 @@ impl Daemon {
 #[derive(Clone)]
 struct ControllableDaemon {
     data: Arc<DaemonData>,
+    prefetch_tx: mpsc::UnboundedSender<(i32, ActivityUpdate)>,
 }
 
 impl Controllable for ControllableDaemon {
@@ -224,12 +227,17 @@ impl Controllable for ControllableDaemon {
 
     async fn prefetch(self, _context: Context, args: PrefetchMsg) {
         let guard = self.data.processes.read().await;
-        let Some(handle) = guard.get(&args.pid) else {
+        if !guard.contains_key(&args.pid) {
+            tracing::warn!("Process with pid {} not found", args.pid);
             return;
-        };
-        let _client = handle.client();
-        drop(guard);
-        todo!("Implement prefetch logic");
+        }
+        if !args.to_gpu {
+            tracing::warn!("Prefetching to CPU is not supported yet");
+            return;
+        }
+        let _ = self
+            .prefetch_tx
+            .send((args.pid, ActivityUpdate::RequestScheduling));
     }
 
     async fn update_config(self, _context: Context, config: ConfigurableArgs) {

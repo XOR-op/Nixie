@@ -99,6 +99,29 @@ impl ScheduleQueue {
         }
     }
 
+    pub fn prioritized_push(&mut self, pid: i32, args: ActivityUpdate) {
+        match &args {
+            ActivityUpdate::Idle => {
+                // higher priority for idle
+                self.notify_req.push_front(SchedRequest {
+                    pid,
+                    args,
+                    time: Instant::now(),
+                });
+            }
+            _ => {
+                // remove all IDLE requests for this pid
+                self.notify_req
+                    .retain(|req| req.pid != pid || !matches!(req.args, ActivityUpdate::Idle));
+                self.sched_req.push_front(SchedRequest {
+                    pid,
+                    args,
+                    time: Instant::now(),
+                });
+            }
+        }
+    }
+
     pub fn pop(&mut self, active_client: ActiveClientState) -> Option<SchedRequest> {
         self.update_priority();
         self.compute_prioritization();

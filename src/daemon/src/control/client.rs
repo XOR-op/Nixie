@@ -4,8 +4,8 @@ use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::{control::AllocationData, error::DaemonError, ProcArgs, UpdateConfigArgs};
-use nihil_common::{general::pretty_size, GlobalDeviceId};
+use crate::{error::DaemonError, ProcArgs, UpdateConfigArgs};
+use nihil_common::general::pretty_size;
 
 use super::{ControllableClient, PrefetchMsg};
 
@@ -53,14 +53,12 @@ impl ControlClient {
         }
     }
 
-    pub async fn prefetch(&self, to_gpu: bool, size_low: Option<u64>) -> Result<(), DaemonError> {
+    pub async fn prefetch(&self, to_gpu: bool) -> Result<(), DaemonError> {
         self.client
             .prefetch(
                 tarpc::context::current(),
                 PrefetchMsg {
                     pid: self.pid,
-                    size_low,
-                    size_high: None,
                     to_gpu,
                 },
             )
@@ -78,15 +76,6 @@ impl ControlClient {
         // print info
         println!("Active processes: {}", processes.len());
         for process in processes {
-            let group_by_device = process.allocations.iter().enumerate().fold(
-                std::collections::BTreeMap::<GlobalDeviceId, Vec<AllocationData>>::new(),
-                |mut acc, (dev, a)| {
-                    acc.entry(GlobalDeviceId(dev as i32))
-                        .or_default()
-                        .extend(a.clone());
-                    acc
-                },
-            );
             let process_name = std::fs::read_to_string(format!("/proc/{}/comm", process.pid))
                 .map(|s| s.trim().to_string())
                 .ok();
@@ -97,7 +86,7 @@ impl ControlClient {
                     .map_or("".to_string(), |s| format!(" {}", s))
                     .green(),
             );
-            for (device, allocations) in group_by_device {
+            for (device, allocations) in process.allocations {
                 // print aggregated per device info
                 let alloc_size = allocations
                     .iter()

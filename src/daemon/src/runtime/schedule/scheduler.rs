@@ -41,6 +41,7 @@ pub(super) enum ActiveClientState {
 pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
     rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+    prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
     shmem_buffer: Arc<ShmBufferManager>,
@@ -50,11 +51,13 @@ impl Scheduler {
     pub fn new(
         list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
         rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+        prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
         shmem_buffer: Arc<ShmBufferManager>,
     ) -> Self {
         Self {
             list,
             rpc_data_rx,
+            prefetch_rx,
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
             shmem_buffer,
@@ -70,11 +73,24 @@ impl Scheduler {
                 Some((pid, data)) = self.rpc_data_rx.recv() => {
                     self.received_data(pid, data, &mut last_polled).await;
                 }
+                Some((pid, data)) = self.prefetch_rx.recv() => {
+                    self.received_prioritized_data(pid, data, &mut last_polled).await;
+                }
                 _ = tokio::time::sleep(sleep_duration) => {
                     self.poll_queue(&mut last_polled).await;
                 }
             }
         }
+    }
+
+    async fn received_prioritized_data(
+        &mut self,
+        pid: i32,
+        data: ActivityUpdate,
+        last_polled: &mut Instant,
+    ) {
+        self.sched_queue.prioritized_push(pid, data);
+        self.poll_queue(last_polled).await;
     }
 
     async fn received_data(&mut self, pid: i32, data: ActivityUpdate, last_polled: &mut Instant) {
