@@ -1,5 +1,5 @@
 use std::{
-    sync::{atomic::AtomicBool, Condvar, Mutex},
+    sync::{atomic::AtomicBool, Condvar, Mutex, MutexGuard},
     time::Duration,
 };
 
@@ -70,27 +70,23 @@ impl Scheduler {
         self.cond_var.notify_all();
     }
 
-    fn disallow_running(&'static self) {
-        let mut sched_ctx = self.allow_running.lock().unwrap();
-        sched_ctx.allow_running = false;
-        crate::comm::update_activity(ActivityUpdate::Idle);
-    }
-
     pub fn pause_then_require_memory(
         &'static self,
         launch_type: LaunchType,
         mem_req: MemoryRequest,
     ) {
-        self.disallow_running();
-        self.launch_allowed_with(launch_type, Some(mem_req));
+        let mut sched_ctx = self.allow_running.lock().unwrap();
+        sched_ctx.allow_running = false;
+        crate::comm::update_activity(ActivityUpdate::Idle);
+        Self::launch_allowed_with(sched_ctx, &self.cond_var, launch_type, Some(mem_req));
     }
 
-    pub fn launch_allowed_with(
-        &'static self,
+    fn launch_allowed_with(
+        mut sched_ctx: MutexGuard<Context>,
+        cond_var: &Condvar,
         launch_type: LaunchType,
         mem_req: Option<MemoryRequest>,
     ) {
-        let mut sched_ctx = self.allow_running.lock().unwrap();
         if !sched_ctx.allow_running {
             crate::comm::update_activity(match mem_req {
                 Some(req) => ActivityUpdate::RequestSchedulingAndMem {
@@ -100,20 +96,23 @@ impl Scheduler {
             });
         }
         while !sched_ctx.allow_running {
-            sched_ctx = self.cond_var.wait(sched_ctx).unwrap();
+            sched_ctx = cond_var.wait(sched_ctx).unwrap();
         }
         match launch_type {
             LaunchType::Kernel => sched_ctx.stats.record_launch_kernel(),
             LaunchType::Graph => sched_ctx.stats.record_launch_graph(),
             LaunchType::Malloc => sched_ctx.stats.record_launch_malloc(),
-            LaunchType::Transfer => {
-                todo!()
-            }
+            LaunchType::Transfer => sched_ctx.stats.record_launch_transfer(),
         }
     }
 
     pub fn launch_allowed(&'static self, launch_type: LaunchType) {
-        self.launch_allowed_with(launch_type, None);
+        Self::launch_allowed_with(
+            self.allow_running.lock().unwrap(),
+            &self.cond_var,
+            launch_type,
+            None,
+        );
     }
 
     fn spawn_idle_monitor_once(&'static self) {
@@ -130,6 +129,7 @@ impl Scheduler {
             const MALLOC_INTERVAL: Duration = Duration::from_millis(200);
             const KERNEL_INTERVAL: Duration = Duration::from_millis(500);
             const GRAPH_INTERVAL: Duration = Duration::from_millis(500);
+            const TRANSFER_INTERVAL: Duration = Duration::from_millis(500);
             assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
             if agent_config().auto_idle {
                 tokio::spawn(async {
@@ -142,6 +142,7 @@ impl Scheduler {
                                 if context.stats.graph_elapsed() > GRAPH_INTERVAL
                                     && context.stats.kernel_elapsed() > KERNEL_INTERVAL
                                     && context.stats.malloc_elapsed() > MALLOC_INTERVAL
+                                    && context.stats.kernel_elapsed() > TRANSFER_INTERVAL
                                 {
                                     // should not use disable() here since we don't need prefetch
                                     context.allow_running = false;

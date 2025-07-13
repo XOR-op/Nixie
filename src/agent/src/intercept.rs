@@ -1,4 +1,4 @@
-use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice};
+use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice, CUstream};
 use nihil_common::shm::AllocationEntry;
 use nihil_common::{MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE};
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
@@ -173,6 +173,76 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         }
     }
     cudaError_enum::CUDA_ERROR_INVALID_VALUE
+}
+
+#[allow(unused)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CudaMemcpyKind {
+    HostToHost = 0,
+    HostToDevice = 1,
+    DeviceToHost = 2,
+    DeviceToDevice = 3,
+    Default = 4,
+}
+
+#[allow(non_snake_case)]
+#[no_mangle]
+pub extern "C" fn cudaMemcpy(
+    dst: *mut libc::c_void,
+    src: *const libc::c_void,
+    size: usize,
+    kind: CudaMemcpyKind,
+) -> cudaError_enum {
+    type CudaMemcpyType = extern "C" fn(
+        *mut libc::c_void,
+        *const libc::c_void,
+        usize,
+        CudaMemcpyKind,
+    ) -> cudaError_enum;
+    static MEMCPY_FN: OnceLock<CudaMemcpyType> = OnceLock::new();
+    generate_init_fn!(CudaMemcpyType, cr"cudaMemcpy");
+    let memcpy_func = MEMCPY_FN.get_or_init(init_fn);
+    SCHED_CTL.launch_allowed(LaunchType::Transfer);
+    memcpy_func(dst, src, size, kind)
+}
+
+#[allow(non_snake_case)]
+#[no_mangle]
+pub extern "C" fn cudaMemcpyAsync(
+    dst: *mut libc::c_void,
+    src: *const libc::c_void,
+    size: usize,
+    kind: CudaMemcpyKind,
+    stream: CUstream,
+) -> cudaError_enum {
+    type CudaMemcpyAsyncType = extern "C" fn(
+        *mut libc::c_void,
+        *const libc::c_void,
+        usize,
+        CudaMemcpyKind,
+        CUstream,
+    ) -> cudaError_enum;
+    static MEMCPY_ASYNC_FN: OnceLock<CudaMemcpyAsyncType> = OnceLock::new();
+    generate_init_fn!(CudaMemcpyAsyncType, cr"cudaMemcpyAsync");
+    let memcpy_async_func = MEMCPY_ASYNC_FN.get_or_init(init_fn);
+    SCHED_CTL.launch_allowed(LaunchType::Transfer);
+    memcpy_async_func(dst, src, size, kind, stream)
+}
+
+#[allow(non_snake_case)]
+#[no_mangle]
+pub extern "C" fn cudaMemset(
+    dev_ptr: *mut libc::c_void,
+    value: i32,
+    size: usize,
+) -> cudaError_enum {
+    type CudaMemsetType = extern "C" fn(*mut libc::c_void, i32, usize) -> cudaError_enum;
+    static MEMSET_FN: OnceLock<CudaMemsetType> = OnceLock::new();
+    generate_init_fn!(CudaMemsetType, cr"cudaMemset");
+    let memset_func = MEMSET_FN.get_or_init(init_fn);
+    SCHED_CTL.launch_allowed(LaunchType::Transfer);
+    memset_func(dev_ptr, value, size)
 }
 
 #[allow(non_snake_case)]

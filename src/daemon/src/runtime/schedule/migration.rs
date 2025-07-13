@@ -163,7 +163,10 @@ impl DataMigrationTask {
                         tracing::warn!("Failed to complete D2H migration RPC to source process");
                     }
                 } else {
-                    tracing::warn!("Failed to reserve shared memory for migration");
+                    tracing::warn!(
+                        "Failed to reserve shared memory for migration: {:?}",
+                        src_buffer_id
+                    );
                 }
             }
         }

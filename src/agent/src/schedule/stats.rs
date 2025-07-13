@@ -4,6 +4,7 @@ pub(super) struct LaunchStats {
     last_kernel: SystemTime,
     last_graph: SystemTime,
     last_malloc: SystemTime,
+    last_transfer: SystemTime,
 }
 
 impl LaunchStats {
@@ -12,6 +13,7 @@ impl LaunchStats {
             last_kernel: UNIX_EPOCH,
             last_graph: UNIX_EPOCH,
             last_malloc: UNIX_EPOCH,
+            last_transfer: UNIX_EPOCH,
         }
     }
 
@@ -25,6 +27,10 @@ impl LaunchStats {
 
     pub fn record_launch_malloc(&mut self) {
         self.last_malloc = SystemTime::now();
+    }
+
+    pub fn record_launch_transfer(&mut self) {
+        self.last_transfer = SystemTime::now();
     }
 
     pub fn kernel_elapsed(&self) -> Duration {
