@@ -19,8 +19,14 @@ pub struct ShmBufferManager {
     inner: Mutex<ShmBufferInner>,
 }
 
+#[derive(Debug, Clone)]
+struct AllocationInfo {
+    addr: u64,
+    block_size: u64,
+}
+
 struct ShmBufferInner {
-    bookkeeping: HashMap<BufferId, u64>,
+    bookkeeping: HashMap<BufferId, AllocationInfo>,
     avail_addrs: BTreeMap<u64, u64>,
 }
 
@@ -49,21 +55,23 @@ impl ShmBufferManager {
 
     pub fn reserve(&self, buf_id: &BufferId) -> Option<u64> {
         let mut inner = self.inner.lock().unwrap();
-        let addr = *(inner
+        let r = inner
             .avail_addrs
             .iter()
-            .find(|(_, size)| **size as u64 >= buf_id.size)?
-            .0);
+            .find(|(_, size)| **size as u64 >= buf_id.size)?;
+        let (addr, block_size) = (*r.0, *r.1);
         let len = inner.avail_addrs.remove(&addr);
         debug_assert!(len.is_some());
-        inner.bookkeeping.insert(buf_id.clone(), addr);
+        inner
+            .bookkeeping
+            .insert(buf_id.clone(), AllocationInfo { addr, block_size });
         Some(addr)
     }
 
     pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(addr) = inner.bookkeeping.remove(buf_id) {
-            inner.avail_addrs.insert(addr, MAX_ALLOCATION_SIZE as u64);
+        if let Some(info) = inner.bookkeeping.remove(buf_id) {
+            inner.avail_addrs.insert(info.addr, info.block_size);
             Ok(())
         } else {
             Err(())
@@ -71,15 +79,20 @@ impl ShmBufferManager {
     }
 
     pub fn get_buffer(&self, buf_id: &BufferId) -> Option<u64> {
-        self.inner.lock().unwrap().bookkeeping.get(buf_id).copied()
+        self.inner
+            .lock()
+            .unwrap()
+            .bookkeeping
+            .get(buf_id)
+            .map(|info| info.addr)
     }
 
     pub fn release_process_residual(&self, pid: i32) {
         let inner = &mut *self.inner.lock().unwrap();
-        inner.bookkeeping.retain(|buf_id, _| {
+        inner.bookkeeping.retain(|buf_id, info| {
             let will_keep = buf_id.pid != pid;
             if !will_keep {
-                inner.avail_addrs.insert(buf_id.size, buf_id.size);
+                inner.avail_addrs.insert(info.addr, info.block_size);
             }
             will_keep
         });

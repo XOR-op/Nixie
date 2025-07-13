@@ -54,17 +54,6 @@ impl Controller {
                                 .notify_activity(tarpc::context::current(), msg)
                                 .await
                         }
-                        A2SMessage::MemoryRequest(msg) => {
-                            let client = self.daemon_client.clone();
-                            tokio::spawn(async move {
-                                let (param, ret) = msg.into_parts();
-                                let _ = client
-                                    .request_memory(tarpc::context::current(), param)
-                                    .await;
-                                ret.ret(());
-                            });
-                            Ok(())
-                        }
                     } {
                         warn_eprintln!(
                             "{} {}: {}",

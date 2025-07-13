@@ -4,7 +4,6 @@ use nihil_common::{general::CallParameter, MigrationArgs, SchedulingArgs};
 pub enum A2SMessage {
     Handshake(Handshake),
     NofityActivity(ActivityUpdate),
-    MemoryRequest(CallParameter<MemoryRequest, ()>),
 }
 
 pub enum S2AMessage {
