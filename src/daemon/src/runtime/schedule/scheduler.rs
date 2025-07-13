@@ -50,14 +50,14 @@ impl Scheduler {
     pub fn new(
         list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
         rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
-        shmem_buffer: ShmBufferManager,
+        shmem_buffer: Arc<ShmBufferManager>,
     ) -> Self {
         Self {
             list,
             rpc_data_rx,
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
-            shmem_buffer: Arc::new(shmem_buffer),
+            shmem_buffer,
         }
     }
 

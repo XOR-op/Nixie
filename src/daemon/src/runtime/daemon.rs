@@ -88,9 +88,11 @@ impl Daemon {
     }
 
     async fn run_body(self) -> Result<(), NihilphaseError> {
-        const SHM_BUF_SIZE: usize = 32 * 1024 * 1024 * 1024;
-        let shm_buffer = ShmBufferManager::new(&self.shm_buffer_path, SHM_BUF_SIZE)
-            .map_err(|e| DaemonError::Io("create shared memory buffer", e))?;
+        const SHM_BUF_SIZE: usize = 36 * 1024 * 1024 * 1024;
+        let shm_buffer = Arc::new(
+            ShmBufferManager::new(&self.shm_buffer_path, SHM_BUF_SIZE)
+                .map_err(|e| DaemonError::Io("create shared memory buffer", e))?,
+        );
         tracing::info!(
             "Shared memory buffer created at {}, size = {}",
             self.shm_buffer_path,
@@ -110,19 +112,24 @@ impl Daemon {
             SHM_BUF_SIZE,
         ));
         let list_handle = self.data.processes.clone();
-        tokio::spawn(async move {
-            // maintain app list
-            loop {
-                tokio::select! {
-                    Some(handle) = rx.recv() => {
-                        list_handle.write().await.insert(handle.pid(), handle);
-                    }
-                    Some(pid) = exit_rx.recv() => {
-                        list_handle.write().await.remove(&pid);
+        {
+            let shm_buffer = shm_buffer.clone();
+            tokio::spawn(async move {
+                // maintain app list
+                loop {
+                    tokio::select! {
+                        Some(handle) = rx.recv() => {
+                            list_handle.write().await.insert(handle.pid(), handle);
+                        }
+                        Some(pid) = exit_rx.recv() => {
+                            list_handle.write().await.remove(&pid);
+                            // release used buffer by the exited process
+                            shm_buffer.release_process_residual(pid);
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
         let list_handle = self.data.processes.clone();
         tokio::spawn(async move {
