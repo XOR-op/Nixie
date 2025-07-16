@@ -8,8 +8,8 @@ use super::msg::{A2SMessage, S2AMessage};
 
 macro_rules! chan_send {
     ($result:expr) => {
-        if let Err(e) = $result {
-            eprintln!("Error at {}:{}: {:?}", file!(), line!(), e);
+        if $result.is_err() {
+            eprintln!("Send error at {}:{}", file!(), line!());
         }
     };
 }

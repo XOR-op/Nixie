@@ -43,7 +43,11 @@ impl Controller {
                                 .handshake(tarpc::context::current(), msg)
                                 .await
                             {
-                                super::init::init_buffer_by_handshake_resp(resp);
+                                // the initialization may call controller again for memory allocation
+                                // use a separate thread to avoid deadlock
+                                std::thread::spawn(|| {
+                                    super::init::init_buffer_by_handshake_resp(resp)
+                                });
                             } else {
                                 panic!("Handshake failed, daemon did not respond with handshake response");
                             }

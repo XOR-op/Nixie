@@ -19,14 +19,21 @@ pub(crate) fn init_shm_buffer(path: &str, size: usize) {
 }
 
 pub(crate) fn init_cuda_env() {
-    static FIRST_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = FIRST_TIME.lock().unwrap();
+    static FIRST_TIME: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    let mut guard = FIRST_TIME.lock().unwrap();
+    if *guard {
+        return; // already initialized
+    }
+    *guard = true;
     let lib = unsafe { cuda_lib() };
     let mut dev_cnt = 0;
     let res = unsafe { lib.cuDeviceGetCount(&mut dev_cnt) };
     if res == cudarc::driver::sys::cudaError_enum::CUDA_ERROR_NOT_INITIALIZED {
         check_cu_err!(unsafe { lib.cuInit(0) }, "initialize CUDA");
         set_device(0);
+        crate::debug_eprintln!("CUDA initialized successfully");
+    } else if res == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
+        crate::debug_eprintln!("CUDA already initialized");
     } else {
         check_cu_err!(res, "CUDA initialization test failed");
     }

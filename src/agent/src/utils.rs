@@ -49,8 +49,9 @@ macro_rules! check_cu_err {
 
 pub(crate) fn set_device(dev: i32) {
     let mut cu_ctx = std::ptr::null_mut();
-    let res = unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
+    let mut res = unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
     if res == cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY {
+        crate::debug_eprintln!("Allocating memory for CUDA context");
         SCHED_CTL.pause_then_require_memory(
             LaunchType::Malloc,
             MemoryRequest {
@@ -63,6 +64,7 @@ pub(crate) fn set_device(dev: i32) {
                 }),
             },
         );
+        res = unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
     }
     check_cu_err!(res, "cuCtxGetCurrent");
     assert!(!cu_ctx.is_null());

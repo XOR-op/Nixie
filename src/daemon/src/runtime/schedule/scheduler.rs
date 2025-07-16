@@ -149,27 +149,31 @@ impl Scheduler {
         if let Some((active_pid, previous_proc_is_running)) = match self.active_client {
             ActiveClientState::None => None,
             ActiveClientState::Active { pid, .. } => {
-                let incoming_level = self
-                    .sched_queue
-                    .get_client(incoming_pid)
-                    // incoming client not exists, by default with the highest
-                    .map_or_else(|| PriorityLevel::max(), |c| c.priority.level());
+                if pid != incoming_pid {
+                    let incoming_level = self
+                        .sched_queue
+                        .get_client(incoming_pid)
+                        // incoming client not exists, by default with the highest
+                        .map_or_else(|| PriorityLevel::max(), |c| c.priority.level());
 
-                if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                    let preemption_reason = {
-                        if incoming_level > client.priority.level() {
-                            PreemptionReason::HigherPriority
-                        } else {
-                            PreemptionReason::RoundRobin
-                        }
-                    };
-                    client.make_idle(StopReason::PreemptedBy(incoming_pid, preemption_reason));
+                    if let Some(client) = self.sched_queue.get_client_mut(pid) {
+                        let preemption_reason = {
+                            if incoming_level > client.priority.level() {
+                                PreemptionReason::HigherPriority
+                            } else {
+                                PreemptionReason::RoundRobin
+                            }
+                        };
+                        client.make_idle(StopReason::PreemptedBy(incoming_pid, preemption_reason));
+                    }
                 }
                 Some((pid, true))
             }
             ActiveClientState::LastActive { pid, .. } => {
-                if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                    client.make_idle(StopReason::LazyIdle);
+                if pid != incoming_pid {
+                    if let Some(client) = self.sched_queue.get_client_mut(pid) {
+                        client.make_idle(StopReason::LazyIdle);
+                    }
                 }
                 Some((pid, false))
             }
@@ -314,12 +318,12 @@ impl Scheduler {
             config.schedule_cooldown,
             client.priority,
         );
-        tracing::debug!(
-            "Process {}: {:?}, cooldown={:.2}s",
-            incoming_pid,
-            client,
-            cooldown.as_secs_f64()
-        );
+        // tracing::debug!(
+        //     "Process {}: {:?}, cooldown={:.2}s",
+        //     incoming_pid,
+        //     client,
+        //     cooldown.as_secs_f64()
+        // );
 
         // prevent thrashing
         self.sched_queue.cooldown(Some(cooldown));

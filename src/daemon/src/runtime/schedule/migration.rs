@@ -101,12 +101,16 @@ impl DataMigrationTask {
         // Wait for all tasks to complete
         let _ = futures::future::join_all(task_handles).await;
         let elapsed = ts_start.elapsed();
-        tracing::debug!(
-            "Data migration completed in {:.3}s, largest transfer size = {}, speed = {:.3} GB/s",
-            elapsed.as_secs_f64(),
-            pretty_size(largest_transfer_size),
-            (largest_transfer_size as f64 / elapsed.as_secs_f64() / 1e9)
-        );
+        if largest_transfer_size > 0 {
+            tracing::debug!(
+                "Data migration completed in {:.3}s, largest transfer size = {}, speed = {:.3} GB/s",
+                elapsed.as_secs_f64(),
+                pretty_size(largest_transfer_size),
+                (largest_transfer_size as f64 / elapsed.as_secs_f64() / 1e9)
+            );
+        } else {
+            tracing::debug!("No migration needed");
+        }
     }
 
     async fn run_for_device(

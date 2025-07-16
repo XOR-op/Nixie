@@ -245,6 +245,18 @@ pub extern "C" fn cudaMemset(
     memset_func(dev_ptr, value, size)
 }
 
+// cudaMemGetInfo
+#[allow(non_snake_case)]
+#[no_mangle]
+pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_enum {
+    type CudaMemGetInfoType = extern "C" fn(*mut usize, *mut usize) -> cudaError_enum;
+    static MEM_GET_INFO_FN: OnceLock<CudaMemGetInfoType> = OnceLock::new();
+    generate_init_fn!(CudaMemGetInfoType, cr"cudaMemGetInfo");
+    let mem_get_info_func = MEM_GET_INFO_FN.get_or_init(init_fn);
+    init_cuda_env();
+    mem_get_info_func(free, total)
+}
+
 #[allow(non_snake_case)]
 #[no_mangle]
 pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
