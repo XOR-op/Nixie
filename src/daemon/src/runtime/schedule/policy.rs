@@ -18,7 +18,7 @@ pub struct SchedRequest {
 
 pub struct ScheduleQueue {
     sched_req: VecDeque<SchedRequest>,
-    notify_req: VecDeque<SchedRequest>,
+    prio_sched_req: VecDeque<SchedRequest>,
     clients: HashMap<i32, ClientStatistics>,
     cooldown_until: Instant,
     active_client: ActiveClientState,
@@ -29,7 +29,7 @@ impl ScheduleQueue {
     pub fn new() -> Self {
         Self {
             sched_req: VecDeque::new(),
-            notify_req: VecDeque::new(),
+            prio_sched_req: VecDeque::new(),
             clients: HashMap::new(),
             cooldown_until: Instant::now(),
             active_client: ActiveClientState::None,
@@ -83,7 +83,7 @@ impl ScheduleQueue {
         match &args {
             ActivityUpdate::Idle => {
                 // higher priority for idle
-                self.notify_req.push_front(SchedRequest {
+                self.prio_sched_req.push_front(SchedRequest {
                     pid,
                     args,
                     time: Instant::now(),
@@ -103,7 +103,7 @@ impl ScheduleQueue {
         match &args {
             ActivityUpdate::Idle => {
                 // higher priority for idle
-                self.notify_req.push_front(SchedRequest {
+                self.prio_sched_req.push_front(SchedRequest {
                     pid,
                     args,
                     time: Instant::now(),
@@ -111,7 +111,7 @@ impl ScheduleQueue {
             }
             _ => {
                 // remove all IDLE requests for this pid
-                self.notify_req
+                self.prio_sched_req
                     .retain(|req| req.pid != pid || !matches!(req.args, ActivityUpdate::Idle));
                 self.sched_req.push_front(SchedRequest {
                     pid,
@@ -122,10 +122,10 @@ impl ScheduleQueue {
         }
     }
 
-    pub fn pop(&mut self, active_client: ActiveClientState) -> Option<SchedRequest> {
+    pub fn schedule_pop(&mut self, active_client: ActiveClientState) -> Option<SchedRequest> {
         self.update_priority();
         self.compute_prioritization();
-        if let Some(front) = self.notify_req.pop_front() {
+        if let Some(front) = self.prio_sched_req.pop_front() {
             return Some(front);
         }
         let will_preempt = self.compute_preemption(active_client);
@@ -205,15 +205,18 @@ impl ScheduleQueue {
     // determine if preemption event needs to be generated
     fn compute_preemption(&mut self, active_client: ActiveClientState) -> bool {
         if let ActiveClientState::Active { pid, .. } = active_client {
-            if let Some(active_stat) = self.clients.get(&pid) {
-                if let Some(front) = self.sched_req.front() {
+            if let Some(front) = self.sched_req.front() {
+                if front.pid == pid {
+                    return true;
+                }
+                if let Some(active_stat) = self.clients.get(&pid) {
                     if let Some(front_stats) = self.clients.get(&front.pid) {
                         // only preempt if the most front process has higher or equal priority
                         return front_stats.priority.level() > active_stat.priority.level();
                     }
                 }
+                return false;
             }
-            return false;
         }
         true
     }

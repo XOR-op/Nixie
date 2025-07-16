@@ -137,7 +137,7 @@ impl ClientStatistics {
 
     pub fn make_active(&mut self) {
         if self.state.is_active() {
-            tracing::error!("make_active: Client {} is already active", self.pid);
+            tracing::warn!("make_active: Client {} is already active", self.pid);
         }
         self.state = ClientState::Active {
             since: Instant::now(),

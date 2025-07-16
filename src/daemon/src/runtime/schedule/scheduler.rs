@@ -109,7 +109,7 @@ impl Scheduler {
             }
         }
         self.sched_queue.update_active(self.active_client);
-        if let Some(req) = self.sched_queue.pop(self.active_client) {
+        if let Some(req) = self.sched_queue.schedule_pop(self.active_client) {
             if let Err(e) = self.handle_activity_update(req.pid, req.args).await {
                 tracing::error!(
                     "Scheduler handling activity update from {}: {:?}",
@@ -145,6 +145,13 @@ impl Scheduler {
         let control = self.list.write().await;
         let config = load_config();
         let mut swap_out_mb = None;
+        if mem_req.is_some() {
+            tracing::debug!(
+                "Process {} requests scheduling with memory requirement: {:?}",
+                incoming_pid,
+                mem_req
+            );
+        }
 
         if let Some((active_pid, previous_proc_is_running)) = match self.active_client {
             ActiveClientState::None => None,
@@ -318,13 +325,12 @@ impl Scheduler {
             config.schedule_cooldown,
             client.priority,
         );
-        // tracing::debug!(
-        //     "Process {}: {:?}, cooldown={:.2}s",
-        //     incoming_pid,
-        //     client,
-        //     cooldown.as_secs_f64()
-        // );
-
+        tracing::debug!(
+            "Process {}: {:?}, cooldown={:.2}s",
+            incoming_pid,
+            client,
+            cooldown.as_secs_f64()
+        );
         // prevent thrashing
         self.sched_queue.cooldown(Some(cooldown));
         Ok(())

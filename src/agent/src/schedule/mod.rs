@@ -15,15 +15,21 @@ pub(crate) use stats::LaunchType;
 
 pub(crate) static SCHED_CTL: Scheduler = Scheduler::new();
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgramState {
+    Running,
+    Paused,
+}
+
 struct Context {
-    allow_running: bool,
+    program_state: ProgramState,
     stats: LaunchStats,
 }
 
 impl Context {
     pub const fn new() -> Self {
         Self {
-            allow_running: false,
+            program_state: ProgramState::Paused,
             stats: LaunchStats::new(),
         }
     }
@@ -47,10 +53,10 @@ impl Scheduler {
         let mut allow_running = self.allow_running.lock().unwrap();
         match params.param {
             SchedulingArgs::Enable => {
-                allow_running.allow_running = true;
+                allow_running.program_state = ProgramState::Running;
             }
             SchedulingArgs::Disable => {
-                allow_running.allow_running = false;
+                allow_running.program_state = ProgramState::Paused;
                 let mut dev_count = 0;
                 unsafe {
                     check_cu_err!(
@@ -76,8 +82,7 @@ impl Scheduler {
         mem_req: MemoryRequest,
     ) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
-        sched_ctx.allow_running = false;
-        crate::comm::update_activity(ActivityUpdate::Idle);
+        sched_ctx.program_state = ProgramState::Paused;
         Self::launch_allowed_with(sched_ctx, &self.cond_var, launch_type, Some(mem_req));
     }
 
@@ -87,7 +92,7 @@ impl Scheduler {
         launch_type: LaunchType,
         mem_req: Option<MemoryRequest>,
     ) {
-        if !sched_ctx.allow_running {
+        if sched_ctx.program_state == ProgramState::Paused {
             crate::comm::update_activity(match mem_req {
                 Some(req) => ActivityUpdate::RequestSchedulingAndMem {
                     memory_request: req,
@@ -95,7 +100,7 @@ impl Scheduler {
                 None => ActivityUpdate::RequestScheduling,
             });
         }
-        while !sched_ctx.allow_running {
+        while sched_ctx.program_state == ProgramState::Paused {
             sched_ctx = cond_var.wait(sched_ctx).unwrap();
         }
         match launch_type {
@@ -137,7 +142,7 @@ impl Scheduler {
                     loop {
                         {
                             let mut context = self.allow_running.lock().unwrap();
-                            if context.allow_running {
+                            if context.program_state == ProgramState::Running {
                                 // check idle
                                 if context.stats.graph_elapsed() > GRAPH_INTERVAL
                                     && context.stats.kernel_elapsed() > KERNEL_INTERVAL
@@ -145,7 +150,7 @@ impl Scheduler {
                                     && context.stats.kernel_elapsed() > TRANSFER_INTERVAL
                                 {
                                     // should not use disable() here since we don't need prefetch
-                                    context.allow_running = false;
+                                    context.program_state = ProgramState::Paused;
                                     crate::comm::update_activity(ActivityUpdate::Idle);
                                 }
                             }
