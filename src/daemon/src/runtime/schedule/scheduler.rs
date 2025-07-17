@@ -21,6 +21,7 @@ use crate::{
         daemon_server::DeviceOrdinalMapping,
         schedule::{
             migration_plan::{two_processes_task, DstRequestArgs},
+            policy::IdleRequestType,
             statistics::PreemptionReason,
             PriorityLevel,
         },
@@ -29,7 +30,11 @@ use crate::{
 
 use crate::runtime::{daemon_server::DaemonServerHandle, ProcCtlReq};
 
-use super::{policy::ScheduleQueue, statistics::StopReason, ShmBufferManager};
+use super::{
+    policy::{GenericRequest, ScheduleQueue},
+    statistics::StopReason,
+    ShmBufferManager,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ActiveClientState {
@@ -94,6 +99,7 @@ impl Scheduler {
     }
 
     async fn received_data(&mut self, pid: i32, data: ActivityUpdate, last_polled: &mut Instant) {
+        tracing::trace!("Received data from process {}: {:?}", pid, data);
         self.sched_queue.schedule_push(pid, data);
         self.poll_queue(last_polled).await;
     }
@@ -110,12 +116,31 @@ impl Scheduler {
         }
         self.sched_queue.update_active(self.active_client);
         if let Some(req) = self.sched_queue.schedule_pop(self.active_client) {
-            if let Err(e) = self.handle_activity_update(req.pid, req.args).await {
-                tracing::error!(
-                    "Scheduler handling activity update from {}: {:?}",
-                    req.pid,
-                    e
-                );
+            tracing::trace!("Handling request from process {}: {:?}", req.pid(), req);
+            match req {
+                GenericRequest::Idle(req) => match req.request_type {
+                    IdleRequestType::Idle => self.handle_activity_idle(req.pid),
+                    IdleRequestType::Yield => self.handle_activity_yield(req.pid),
+                },
+                GenericRequest::Schedule(req) => {
+                    let res = match req.args {
+                        ActivityUpdate::RequestScheduling => {
+                            self.handle_sched_request(req.pid, None).await
+                        }
+                        ActivityUpdate::YieldThenRequestSchedulingAndMem { memory_request } => {
+                            self.handle_sched_request(req.pid, Some(memory_request))
+                                .await
+                        }
+                        ActivityUpdate::Idle => unreachable!(),
+                    };
+                    if let Err(e) = res {
+                        tracing::error!(
+                            "Scheduler handling activity update from {}: {:?}",
+                            req.pid,
+                            e
+                        );
+                    }
+                }
             }
         }
         *last_polled = Instant::now();
@@ -374,7 +399,6 @@ impl Scheduler {
     }
 
     fn handle_activity_yield(&mut self, pid: i32) {
-        // TODO: LastActive
         if let ActiveClientState::Active {
             pid: active_pid, ..
         } = self.active_client

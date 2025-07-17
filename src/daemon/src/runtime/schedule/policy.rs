@@ -16,18 +16,30 @@ pub struct SchedRequest {
     pub time: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdleRequestType {
+    Idle,
+    Yield,
+}
+
 #[derive(Debug, Clone)]
 pub struct IdleRequest {
     pub pid: i32,
     pub time: Instant,
+    pub request_type: IdleRequestType,
 }
 
-impl IdleRequest {
-    pub fn to_sched_request(self) -> SchedRequest {
-        SchedRequest {
-            pid: self.pid,
-            args: ActivityUpdate::Idle,
-            time: self.time,
+#[derive(Debug, Clone)]
+pub enum GenericRequest {
+    Idle(IdleRequest),
+    Schedule(SchedRequest),
+}
+
+impl GenericRequest {
+    pub fn pid(&self) -> i32 {
+        match self {
+            GenericRequest::Idle(req) => req.pid,
+            GenericRequest::Schedule(req) => req.pid,
         }
     }
 }
@@ -104,9 +116,21 @@ impl ScheduleQueue {
                 self.idle_req_queue.push_front(IdleRequest {
                     pid,
                     time: Instant::now(),
+                    request_type: IdleRequestType::Idle,
                 });
             }
-            ActivityUpdate::YieldThenRequestSchedulingAndMem { .. } => {}
+            ActivityUpdate::YieldThenRequestSchedulingAndMem { .. } => {
+                self.idle_req_queue.push_front(IdleRequest {
+                    pid,
+                    time: Instant::now(),
+                    request_type: IdleRequestType::Yield,
+                });
+                self.sched_req.push_back(SchedRequest {
+                    pid,
+                    args,
+                    time: Instant::now(),
+                });
+            }
             ActivityUpdate::RequestScheduling => {
                 self.sched_req.push_back(SchedRequest {
                     pid,
@@ -124,29 +148,35 @@ impl ScheduleQueue {
                 self.idle_req_queue.push_front(IdleRequest {
                     pid,
                     time: Instant::now(),
+                    request_type: IdleRequestType::Idle,
                 });
             }
-            _ => {
+            ActivityUpdate::RequestScheduling => {
                 self.sched_req.push_front(SchedRequest {
                     pid,
                     args,
                     time: Instant::now(),
                 });
             }
+            ActivityUpdate::YieldThenRequestSchedulingAndMem { .. } => {
+                tracing::error!(
+                    "Prioritized push with YieldThenRequestSchedulingAndMem is not supported"
+                );
+            }
         }
     }
 
-    pub fn schedule_pop(&mut self, active_client: ActiveClientState) -> Option<SchedRequest> {
+    pub fn schedule_pop(&mut self, active_client: ActiveClientState) -> Option<GenericRequest> {
         self.update_priority();
         self.compute_prioritization();
         if let Some(front) = self.idle_req_queue.pop_front() {
-            return Some(front.to_sched_request());
+            return Some(GenericRequest::Idle(front));
         }
         let will_preempt = self.compute_preemption(active_client);
         if Instant::now() < self.cooldown_until || !will_preempt {
             None
         } else {
-            self.sched_req.pop_front()
+            self.sched_req.pop_front().map(GenericRequest::Schedule)
         }
     }
 
