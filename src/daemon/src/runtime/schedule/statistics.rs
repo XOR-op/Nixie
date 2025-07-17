@@ -16,6 +16,7 @@ pub enum StopReason {
     Idle,
     /// The process is in fact idle, but the states have not been evicted yet.
     LazyIdle,
+    YieldAndPending,
     PreemptedBy(i32, PreemptionReason),
 }
 

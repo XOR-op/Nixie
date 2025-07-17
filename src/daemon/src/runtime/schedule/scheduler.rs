@@ -94,7 +94,7 @@ impl Scheduler {
     }
 
     async fn received_data(&mut self, pid: i32, data: ActivityUpdate, last_polled: &mut Instant) {
-        self.sched_queue.push(pid, data);
+        self.sched_queue.schedule_push(pid, data);
         self.poll_queue(last_polled).await;
     }
 
@@ -127,11 +127,12 @@ impl Scheduler {
     ) -> Result<(), ScheduleError> {
         match data {
             ActivityUpdate::RequestScheduling => self.handle_sched_request(pid, None).await,
-            ActivityUpdate::RequestSchedulingAndMem { memory_request } => {
+            ActivityUpdate::YieldThenRequestSchedulingAndMem { memory_request } => {
+                self.handle_activity_yield(pid);
                 self.handle_sched_request(pid, Some(memory_request)).await
             }
             ActivityUpdate::Idle => {
-                self.handle_activity_idle(pid).await;
+                self.handle_activity_idle(pid);
                 Ok(())
             }
         }
@@ -144,7 +145,7 @@ impl Scheduler {
     ) -> Result<(), ScheduleError> {
         let control = self.list.write().await;
         let config = load_config();
-        let mut swap_out_mb = None;
+        let mut swap_out = None;
         if mem_req.is_some() {
             tracing::debug!(
                 "Process {} requests scheduling with memory requirement: {:?}",
@@ -190,24 +191,33 @@ impl Scheduler {
                 self.active_client = ActiveClientState::None;
                 self.sched_queue.remove_client(active_pid);
             }
-            Self::perform_migration(
+            let disable_current_fut = if incoming_pid != active_pid && previous_proc_is_running {
+                // active pid can exit before scheduler knows in `else` branch
+                if let Some(cur_handle) = control.get(&active_pid) {
+                    tracing::trace!("Scheduling out process {}", active_pid);
+                    Some({
+                        let cur_client = cur_handle.client();
+                        tokio::spawn(async move {
+                            cur_client
+                                .schedule(tarpc::context::current(), SchedulingArgs::Disable)
+                                .await
+                        })
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            swap_out = Self::perform_migration(
                 incoming_pid,
                 active_pid,
-                previous_proc_is_running,
+                disable_current_fut,
                 mem_req,
                 &control,
-                &mut swap_out_mb,
                 &self.shmem_buffer,
             )
             .await?;
-        }
-
-        // use the larger one between preempt_delay and schedule_delay
-        if let Some(delay) = config
-            .schedule_delay
-            .map(|d| config.preempt_delay.unwrap_or_default().max(d))
-        {
-            tokio::time::sleep(delay).await;
         }
 
         let client = self.sched_queue.get_client_mut_or_insert(incoming_pid);
@@ -230,7 +240,7 @@ impl Scheduler {
             .map_err(|e| ScheduleError::RpcError("schedule in", incoming_pid, e))?;
         client.make_active();
         let cooldown = ScheduleQueue::compute_cooldown(
-            swap_out_mb.unwrap_or_default(),
+            swap_out.map(|x| x / (1024 * 1024)).unwrap_or_default(),
             config.schedule_cooldown,
             client.priority,
         );
@@ -248,32 +258,14 @@ impl Scheduler {
     async fn perform_migration(
         incoming_pid: i32,
         active_pid: i32,
-        previous_proc_is_running: bool,
+        disable_fut: Option<tokio::task::JoinHandle<Result<(), tarpc::client::RpcError>>>,
         mem_req: Option<MemoryRequest>,
         control: &LinkedHashMap<i32, DaemonServerHandle>,
-        swap_out_mb: &mut Option<u64>,
         shmem_buffer: &Arc<ShmBufferManager>,
-    ) -> Result<(), ScheduleError> {
+    ) -> Result<Option<u64>, ScheduleError> {
+        let mut swap_out = None;
         // disable current process if needed; and migrate VRAM
-        if !previous_proc_is_running || incoming_pid != active_pid || mem_req.is_some() {
-            let disable_current_fut = if incoming_pid != active_pid {
-                // active pid can exit before scheduler knows in `else` branch
-                if let Some(cur_handle) = control.get(&active_pid) {
-                    tracing::trace!("Scheduling out process {}", active_pid);
-                    Some({
-                        let cur_client = cur_handle.client();
-                        tokio::spawn(async move {
-                            cur_client
-                                .schedule(tarpc::context::current(), SchedulingArgs::Disable)
-                                .await
-                        })
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+        if incoming_pid != active_pid || mem_req.is_some() {
             // get info about incoming process
             let Some(new_handle) = control.get(&incoming_pid) else {
                 return Err(ScheduleError::InvalidClient(incoming_pid));
@@ -314,7 +306,7 @@ impl Scheduler {
             };
 
             // make sure the current process is device-synchronized
-            if let Some(fut) = disable_current_fut {
+            if let Some(fut) = disable_fut {
                 fut.await
                     .unwrap()
                     .map_err(|e| ScheduleError::RpcError("schedule out", active_pid, e))?;
@@ -348,19 +340,18 @@ impl Scheduler {
                 shmem_buffer.clone(),
             );
             // for statistics
-            *swap_out_mb = task.get_src().get(0).map(|(_, spec, _, _)| {
+            swap_out = task.get_src().get(0).map(|(_, spec, _, _)| {
                 spec.device_map
                     .values()
                     .map(|entries| entries.iter().map(|entry| entry.size).sum::<u64>())
                     .sum::<u64>()
-                    / (1024 * 1024) // convert to MB
             });
             task.run().await
         }
-        Ok(())
+        Ok(swap_out)
     }
 
-    async fn handle_activity_idle(&mut self, pid: i32) {
+    fn handle_activity_idle(&mut self, pid: i32) {
         // TODO: LastActive
         if let ActiveClientState::Active {
             pid: active_pid, ..
@@ -380,6 +371,27 @@ impl Scheduler {
             }
         }
         tracing::error!("Process {} becomes idle but is not active client", pid);
+    }
+
+    fn handle_activity_yield(&mut self, pid: i32) {
+        // TODO: LastActive
+        if let ActiveClientState::Active {
+            pid: active_pid, ..
+        } = self.active_client
+        {
+            if let Some(client) = self.sched_queue.get_client_mut(pid) {
+                if active_pid == pid {
+                    client.make_resident_idle(StopReason::YieldAndPending);
+                    self.active_client = ActiveClientState::LastActive {
+                        pid,
+                        last_active: Instant::now(),
+                    };
+                    self.sched_queue.cooldown(None);
+                    return;
+                }
+            }
+        }
+        // it's ok that the incoming pid is not active, we just ignore it
     }
 }
 

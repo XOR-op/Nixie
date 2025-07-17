@@ -94,7 +94,7 @@ impl Scheduler {
     ) {
         if sched_ctx.program_state == ProgramState::Paused {
             crate::comm::update_activity(match mem_req {
-                Some(req) => ActivityUpdate::RequestSchedulingAndMem {
+                Some(req) => ActivityUpdate::YieldThenRequestSchedulingAndMem {
                     memory_request: req,
                 },
                 None => ActivityUpdate::RequestScheduling,

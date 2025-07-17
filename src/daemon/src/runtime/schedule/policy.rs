@@ -16,9 +16,25 @@ pub struct SchedRequest {
     pub time: Instant,
 }
 
+#[derive(Debug, Clone)]
+pub struct IdleRequest {
+    pub pid: i32,
+    pub time: Instant,
+}
+
+impl IdleRequest {
+    pub fn to_sched_request(self) -> SchedRequest {
+        SchedRequest {
+            pid: self.pid,
+            args: ActivityUpdate::Idle,
+            time: self.time,
+        }
+    }
+}
+
 pub struct ScheduleQueue {
     sched_req: VecDeque<SchedRequest>,
-    prio_sched_req: VecDeque<SchedRequest>,
+    idle_req_queue: VecDeque<IdleRequest>,
     clients: HashMap<i32, ClientStatistics>,
     cooldown_until: Instant,
     active_client: ActiveClientState,
@@ -29,7 +45,7 @@ impl ScheduleQueue {
     pub fn new() -> Self {
         Self {
             sched_req: VecDeque::new(),
-            prio_sched_req: VecDeque::new(),
+            idle_req_queue: VecDeque::new(),
             clients: HashMap::new(),
             cooldown_until: Instant::now(),
             active_client: ActiveClientState::None,
@@ -52,6 +68,8 @@ impl ScheduleQueue {
 
     pub fn remove_client(&mut self, pid: i32) {
         self.clients.remove(&pid);
+        self.sched_req.retain(|req| req.pid != pid);
+        self.idle_req_queue.retain(|req| req.pid != pid);
     }
 
     pub fn cooldown(&mut self, duration: Option<Duration>) {
@@ -79,17 +97,17 @@ impl ScheduleQueue {
 
 // scheduling logic
 impl ScheduleQueue {
-    pub fn push(&mut self, pid: i32, args: ActivityUpdate) {
+    pub fn schedule_push(&mut self, pid: i32, args: ActivityUpdate) {
         match &args {
             ActivityUpdate::Idle => {
                 // higher priority for idle
-                self.prio_sched_req.push_front(SchedRequest {
+                self.idle_req_queue.push_front(IdleRequest {
                     pid,
-                    args,
                     time: Instant::now(),
                 });
             }
-            _ => {
+            ActivityUpdate::YieldThenRequestSchedulingAndMem { .. } => {}
+            ActivityUpdate::RequestScheduling => {
                 self.sched_req.push_back(SchedRequest {
                     pid,
                     args,
@@ -103,16 +121,12 @@ impl ScheduleQueue {
         match &args {
             ActivityUpdate::Idle => {
                 // higher priority for idle
-                self.prio_sched_req.push_front(SchedRequest {
+                self.idle_req_queue.push_front(IdleRequest {
                     pid,
-                    args,
                     time: Instant::now(),
                 });
             }
             _ => {
-                // remove all IDLE requests for this pid
-                self.prio_sched_req
-                    .retain(|req| req.pid != pid || !matches!(req.args, ActivityUpdate::Idle));
                 self.sched_req.push_front(SchedRequest {
                     pid,
                     args,
@@ -125,8 +139,8 @@ impl ScheduleQueue {
     pub fn schedule_pop(&mut self, active_client: ActiveClientState) -> Option<SchedRequest> {
         self.update_priority();
         self.compute_prioritization();
-        if let Some(front) = self.prio_sched_req.pop_front() {
-            return Some(front);
+        if let Some(front) = self.idle_req_queue.pop_front() {
+            return Some(front.to_sched_request());
         }
         let will_preempt = self.compute_preemption(active_client);
         if Instant::now() < self.cooldown_until || !will_preempt {
