@@ -238,14 +238,15 @@ impl nihil_common::rpc::Daemon for DaemonServer {
         let shmem = checked!(open_shm(params.shm_path).map_err(|e| (e, peer_pid)));
 
         // parse CUDA_VISIBLE_DEVICES
-        let device_mapping =
-            checked!(DeviceOrdinalMapping::new(&params.visible_devices).map_err(|e| (e, peer_pid)));
+        let device_mapping = Arc::new(checked!(
+            DeviceOrdinalMapping::new(&params.visible_devices).map_err(|e| (e, peer_pid))
+        ));
 
         let ctl = ProcessControl::new(
             peer_pid,
             pid_fd,
             shmem,
-            device_mapping.clone(),
+            (*device_mapping).clone(),
             rpc_client.clone(),
             state.inst_rx,
             state.exit_tx,
@@ -254,14 +255,24 @@ impl nihil_common::rpc::Daemon for DaemonServer {
             ctl.run().await;
         });
         // should no have problem since state transition only happens once
-        let _ = state
-            .ret
-            .try_send((task, peer_pid, Arc::new(device_mapping)));
+        let _ = state.ret.try_send((task, peer_pid, device_mapping.clone()));
         *state_guard = ServerState::Launched(DaemonServerState {
             client_pid: peer_pid,
             rpc_data_tx: state.rpc_data_tx,
         });
+        let mapped_mem_sizes = {
+            let mem_size = crate::runtime::get_allowed_devices_mem().ok()?;
+            mem_size
+                .into_iter()
+                .filter_map(|(dev_id, size)| {
+                    device_mapping
+                        .real_to_visible(dev_id)
+                        .map(|visible_dev| (visible_dev, size))
+                })
+                .collect::<Vec<_>>()
+        };
         Some(HandshakeResponse {
+            available_vram_sizes: mapped_mem_sizes,
             buffer_shm_path: state.buffer_shmem_path,
             buffer_length: state.buffer_len as u64,
         })

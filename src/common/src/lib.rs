@@ -25,6 +25,7 @@ pub struct Handshake {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandshakeResponse {
+    pub available_vram_sizes: Vec<(ProcessLocalDeviceId, u64)>,
     pub buffer_shm_path: String,
     pub buffer_length: u64,
 }

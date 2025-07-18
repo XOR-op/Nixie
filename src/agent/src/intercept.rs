@@ -3,13 +3,14 @@ use nihil_common::shm::AllocationEntry;
 use nihil_common::{MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE};
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Mutex, OnceLock};
 
 use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
-use crate::memory::{deallocate_list, populate_entry};
+use crate::memory::{deallocate_list, get_max_allocation_size, populate_entry};
 use crate::schedule::{LaunchType, SCHED_CTL};
-use crate::{warn_eprintln, GENERIC_DATA};
+use crate::{check_cu_err, warn_eprintln, GENERIC_DATA};
 
 #[macro_export]
 macro_rules! generate_init_fn_as {
@@ -33,7 +34,8 @@ macro_rules! generate_init_fn {
     };
 }
 
-static SMALL_ALLOCATION: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
+static SMALL_ALLOCATION: Mutex<BTreeMap<u64, u64>> = Mutex::new(BTreeMap::new());
+static CURRENT_ALLOCATION_SIZE: AtomicU64 = AtomicU64::new(0);
 
 #[allow(non_snake_case)]
 #[no_mangle]
@@ -43,14 +45,32 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     generate_init_fn!(CudaMallocType, cr"cudaMalloc");
     let malloc_func = MALLOC_FN.get_or_init(init_fn);
     init_cuda_env();
+
+    // check against size limit
+    let device_id = {
+        let mut device_id = CUdevice::default();
+        let res = unsafe { cuda_lib().cuCtxGetDevice(&mut device_id as *mut _) };
+        if res != cudaError_enum::CUDA_SUCCESS {
+            panic!("Failed to get device id: {:?}", res);
+        }
+        device_id
+    };
+    if CURRENT_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Relaxed) + size as u64
+        > get_max_allocation_size(device_id)
+    {
+        return cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY;
+    }
+
     SCHED_CTL.launch_allowed(LaunchType::Malloc);
+    // small allocation
     if size < MIN_ALLOCATION_SIZE {
         let res = malloc_func(dev_ptr, size);
         if res == cudaError_enum::CUDA_SUCCESS {
             SMALL_ALLOCATION
                 .lock()
                 .unwrap()
-                .insert(unsafe { *dev_ptr } as u64);
+                .insert(unsafe { *dev_ptr } as u64, size as u64);
+            CURRENT_ALLOCATION_SIZE.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
         }
         return res;
     }
@@ -67,19 +87,9 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         )
     };
     if res == cudaError_enum::CUDA_SUCCESS {
-        let device_id = {
-            let mut device_id = CUdevice::default();
-            let res = unsafe { cuda_lib().cuCtxGetDevice(&mut device_id as *mut _) };
-            if res != cudaError_enum::CUDA_SUCCESS {
-                panic!("Failed to get device id: {:?}", res);
-            }
-            device_id
-        };
-
         let mut table = GENERIC_DATA
             .get_or_init(should_have_initialized)
             .lock(device_id as usize);
-
         let mut remaining_size = rounded_up_size;
         let mut cur_addr = unsafe { *dev_ptr } as u64;
         let mut handle_idx = None;
@@ -127,6 +137,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                 device_id
             );
         }
+        CURRENT_ALLOCATION_SIZE.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
     }
     res
 }
@@ -140,7 +151,8 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     let free_func = FREE_FN.get_or_init(init_fn);
 
     // first check if is non-managed allocation
-    if SMALL_ALLOCATION.lock().unwrap().remove(&(dev_ptr as u64)) {
+    if let Some(size) = SMALL_ALLOCATION.lock().unwrap().remove(&(dev_ptr as u64)) {
+        CURRENT_ALLOCATION_SIZE.fetch_sub(size, std::sync::atomic::Ordering::Relaxed);
         return free_func(dev_ptr);
     }
 
@@ -168,6 +180,8 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
                 cur_index = handle.next_handle_idx;
                 table.handle_list.free_handle(index);
             }
+            CURRENT_ALLOCATION_SIZE
+                .fetch_sub(entry.len as u64, std::sync::atomic::Ordering::Relaxed);
             table.entry.remove(entry_idx);
             return cudaError_enum::CUDA_SUCCESS;
         }
@@ -254,6 +268,16 @@ pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaErr
     generate_init_fn!(CudaMemGetInfoType, cr"cudaMemGetInfo");
     let mem_get_info_func = MEM_GET_INFO_FN.get_or_init(init_fn);
     init_cuda_env();
+    let mut device_id = 0;
+    check_cu_err!(
+        unsafe { cuda_lib().cuCtxGetDevice(&mut device_id as *mut _) },
+        "get device"
+    );
+    let available_size = get_max_allocation_size(device_id)
+        .saturating_sub(CURRENT_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Relaxed));
+    unsafe {
+        *free = available_size as usize;
+    }
     mem_get_info_func(free, total)
 }
 

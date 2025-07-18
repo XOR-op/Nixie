@@ -4,14 +4,15 @@ pub mod proc_ctl;
 mod schedule;
 pub mod shm;
 
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use crate::{
     control::{ProcessMetadata, ProcessResidualData, ProcessResidualRequest},
     error::DaemonError,
 };
+use cudarc::driver::result::device;
 pub use daemon::Daemon;
-use nihil_common::general::CallParameter;
+use nihil_common::{general::CallParameter, GlobalDeviceId};
 
 fn get_user() -> Option<nix::unistd::User> {
     if let Ok(n) = std::env::var("SUDO_USER") {
@@ -35,6 +36,20 @@ fn socket_chown<P: AsRef<Path>>(path: P) -> Result<(), DaemonError> {
             .map_err(|e| DaemonError::Errno("chown", e))?;
     }
     Ok(())
+}
+
+pub(super) fn get_allowed_devices_mem() -> Result<HashMap<GlobalDeviceId, u64>, DaemonError> {
+    let dev_count = device::get_count().map_err(|e| DaemonError::Cuda("get dev count", e.0))?;
+    let mut mem_info = HashMap::with_capacity(dev_count as usize);
+    for dev_id in 0..dev_count {
+        let device_handle =
+            device::get(dev_id as i32).map_err(|e| DaemonError::Cuda("get device", e.0))?;
+        let mem = unsafe { device::total_mem(device_handle) }
+            .map_err(|e| DaemonError::Cuda("get total memory", e.0))?;
+        let mem = mem * 95 / 100; // reserve 5% for system use
+        mem_info.insert(GlobalDeviceId(dev_id), mem as u64);
+    }
+    Ok(mem_info)
 }
 
 pub(crate) enum ProcCtlReq {

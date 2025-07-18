@@ -1,5 +1,6 @@
 use cudarc::driver::sys::lib as cuda_lib;
 use nihil_common::shm_buffer::ShmBuffer;
+use nihil_common::ProcessLocalDeviceId;
 
 use crate::comm::init::{init_comm, COMM};
 use crate::{check_cu_err, set_device, shm_buf, GenericData};
@@ -57,4 +58,13 @@ pub(crate) fn init_generic_data() -> (GenericData, String) {
     );
     let result = GenericData::new(&shm_path);
     (result, shm_path)
+}
+
+pub(crate) fn init_max_available_vram_size(sizes: &[(ProcessLocalDeviceId, u64)]) {
+    crate::memory::set_max_allocation_size(
+        sizes
+            .iter()
+            .map(|(dev_id, size)| (dev_id.0, *size))
+            .collect(),
+    );
 }

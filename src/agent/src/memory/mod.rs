@@ -1,5 +1,5 @@
 mod streaming;
-use std::num::NonZeroU32;
+use std::{collections::HashMap, num::NonZeroU32};
 
 use cudarc::driver::sys::{
     cudaError_enum, lib as cuda_lib, CUmemAccessDesc, CUmemAllocationHandleType,
@@ -167,5 +167,16 @@ pub(crate) fn deallocate_list(start_idx: NonZeroU32, handle_list: &mut HandleLis
         }
         handle.on_gpu = false;
         cur_index = handle.next_handle_idx;
+    }
+}
+
+static MAX_ALLOC_SIZE: std::sync::OnceLock<HashMap<i32, u64>> = std::sync::OnceLock::new();
+pub(crate) fn get_max_allocation_size(dev: i32) -> u64 {
+    MAX_ALLOC_SIZE.get().unwrap().get(&dev).cloned().unwrap()
+}
+
+pub(crate) fn set_max_allocation_size(sizes: HashMap<i32, u64>) {
+    if MAX_ALLOC_SIZE.set(sizes).is_err() {
+        panic!("Maximum allocation size is already initialized");
     }
 }

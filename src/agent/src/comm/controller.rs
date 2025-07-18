@@ -43,6 +43,9 @@ impl Controller {
                                 .handshake(tarpc::context::current(), msg)
                                 .await
                             {
+                                crate::init::init_max_available_vram_size(
+                                    &resp.available_vram_sizes,
+                                );
                                 // the initialization may call controller again for memory allocation
                                 // use a separate thread to avoid deadlock
                                 std::thread::spawn(|| {
