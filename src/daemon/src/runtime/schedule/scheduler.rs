@@ -19,11 +19,10 @@ use crate::{
     error::ScheduleError,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        schedule::{
+        schedule::{policy::IdleRequestType, statistics::PreemptionReason, PriorityLevel},
+        swap::{
             migration_plan::{two_processes_task, DstRequestArgs},
-            policy::IdleRequestType,
-            statistics::PreemptionReason,
-            PriorityLevel,
+            ShmBufferManager,
         },
     },
 };
@@ -33,7 +32,6 @@ use crate::runtime::{daemon_server::DaemonServerHandle, ProcCtlReq};
 use super::{
     policy::{GenericRequest, ScheduleQueue},
     statistics::StopReason,
-    ShmBufferManager,
 };
 
 #[derive(Debug, Clone, Copy)]

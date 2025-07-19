@@ -1,11 +1,7 @@
-mod buffer_manager;
-mod migration;
-mod migration_plan;
 mod policy;
 mod scheduler;
 mod statistics;
 
-pub use buffer_manager::ShmBufferManager;
 pub use scheduler::Scheduler;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

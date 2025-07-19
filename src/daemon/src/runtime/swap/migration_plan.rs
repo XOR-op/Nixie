@@ -10,12 +10,12 @@ use super::{
 };
 
 #[derive(Debug, Clone)]
-pub(super) enum DstRequestArgs {
+pub(crate) enum DstRequestArgs {
     ResidualData(ProcessResidualData),
     Allocation(HashMap<GlobalDeviceId, u64>),
 }
 
-pub(super) fn two_processes_task(
+pub(crate) fn two_processes_task(
     dst: (
         i32,
         DstRequestArgs,

@@ -19,7 +19,7 @@ use crate::{
     config::{init_config, update_config, Config, ConfigurableArgs},
     control::{self, Controllable, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
-    runtime::{daemon_server::DaemonServer, schedule::ShmBufferManager, ProcCtlReq},
+    runtime::{daemon_server::DaemonServer, swap::ShmBufferManager, ProcCtlReq},
 };
 use nihil_common::general::{CallFuture, CallParameter};
 

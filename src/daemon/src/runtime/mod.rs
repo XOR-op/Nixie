@@ -3,6 +3,7 @@ mod daemon_server;
 pub mod proc_ctl;
 mod schedule;
 pub mod shm;
+mod swap;
 
 use std::{collections::HashMap, path::Path};
 
