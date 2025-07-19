@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src/daemon", "src/common", "src/agent"]
+members = ["src/daemon", "src/common", "src/sidecar"]
 
 [workspace.dependencies]
 nihil_common = { path = "src/common" }

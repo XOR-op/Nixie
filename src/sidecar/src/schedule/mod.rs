@@ -8,7 +8,7 @@ use stats::LaunchStats;
 
 use cudarc::driver::sys::lib as cuda_lib;
 
-use crate::{check_cu_err, env_config::agent_config, set_device};
+use crate::{check_cu_err, env_config::sidecar_config, set_device};
 
 mod stats;
 pub(crate) use stats::LaunchType;
@@ -136,7 +136,7 @@ impl Scheduler {
             const GRAPH_INTERVAL: Duration = Duration::from_millis(500);
             const TRANSFER_INTERVAL: Duration = Duration::from_millis(500);
             assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
-            if agent_config().auto_idle {
+            if sidecar_config().auto_idle {
                 tokio::spawn(async {
                     tokio::time::sleep(GRAPH_INTERVAL).await;
                     loop {

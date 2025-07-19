@@ -9,7 +9,7 @@ use crate::{
     warn_eprintln,
 };
 
-/// handler for agent<->daemon communication
+/// handler for sidecar<->daemon communication
 pub(crate) struct Controller {
     process_recv: flume::Receiver<A2SMessage>,
     daemon_recv: flume::Receiver<S2AMessage>,

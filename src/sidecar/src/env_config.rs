@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
-pub(crate) struct AgentConfig {
+pub(crate) struct SidecarConfig {
     pub log_level: u8, // 0=none, 1=warn, 2=info, 3=debug
     pub auto_dup: bool,
     pub auto_dup_delay: u64,
@@ -13,7 +13,7 @@ const DEFAULT_AUTO_DUP: bool = false;
 const DEFAULT_AUTO_DUP_DELAY: u64 = 5;
 const DEFAULT_AUTO_IDLE: bool = true;
 
-impl Default for AgentConfig {
+impl Default for SidecarConfig {
     fn default() -> Self {
         Self {
             log_level: DEFAULT_LOG_LEVEL,
@@ -24,11 +24,11 @@ impl Default for AgentConfig {
     }
 }
 
-static AGENT_CFG: OnceLock<AgentConfig> = OnceLock::new();
+static SIDECAR_CFG: OnceLock<SidecarConfig> = OnceLock::new();
 
-pub(crate) fn agent_config() -> &'static AgentConfig {
-    AGENT_CFG.get_or_init(|| {
-        let mut cfg = AgentConfig::default();
+pub(crate) fn sidecar_config() -> &'static SidecarConfig {
+    SIDECAR_CFG.get_or_init(|| {
+        let mut cfg = SidecarConfig::default();
         if let Ok(content) = std::env::var("NIHIL_CFG") {
             for pair in content.split("/") {
                 let mut iter = pair.split(":");
@@ -72,7 +72,7 @@ pub(crate) fn agent_config() -> &'static AgentConfig {
             }
             if cfg.log_level >= 2 {
                 eprintln!(
-                    "{} Agent inited with {:?}",
+                    "{} Sidecar inited with {:?}",
                     colored::Colorize::green("NIHIL-INFO"),
                     cfg
                 );

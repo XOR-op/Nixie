@@ -696,24 +696,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nihilagent"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "chrono",
- "colored",
- "cudarc",
- "flume",
- "futures",
- "nihil_common",
- "nix",
- "tarpc",
- "tokio",
- "tokio-serde",
- "uuid",
-]
-
-[[package]]
 name = "nihilphase"
 version = "0.1.0"
 dependencies = [
@@ -739,6 +721,24 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "nihilsidecar"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "chrono",
+ "colored",
+ "cudarc",
+ "flume",
+ "futures",
+ "nihil_common",
+ "nix",
+ "tarpc",
+ "tokio",
+ "tokio-serde",
+ "uuid",
 ]
 
 [[package]]

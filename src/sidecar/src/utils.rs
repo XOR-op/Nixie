@@ -2,13 +2,13 @@ use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
 use nihil_common::{MemoryRequest, CUDA_PROCESS_RESERVATION_SIZE};
 
 use crate::{
-    env_config::agent_config,
+    env_config::sidecar_config,
     schedule::{LaunchType, SCHED_CTL},
 };
 
 #[inline(always)]
 pub(crate) fn should_log(level: u8) -> bool {
-    agent_config().log_level >= level
+    sidecar_config().log_level >= level
 }
 
 #[macro_export]
