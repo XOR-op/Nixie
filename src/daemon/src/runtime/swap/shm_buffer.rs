@@ -1,28 +1,15 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    num::NonZeroU32,
     sync::Mutex,
 };
 
-use nihil_common::{shm_buffer::ShmBuffer, GlobalDeviceId, MAX_ALLOCATION_SIZE};
+use nihil_common::{shm_buffer::ShmBuffer, MAX_ALLOCATION_SIZE};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BufferId {
-    pub pid: i32,
-    pub device_id: GlobalDeviceId,
-    pub block_id: NonZeroU32,
-    pub size: u64,
-}
+use super::{AllocationInfo, BufferId};
 
 pub struct ShmBufferManager {
     shm_buffer: ShmBuffer,
     inner: Mutex<ShmBufferInner>,
-}
-
-#[derive(Debug, Clone)]
-struct AllocationInfo {
-    addr: u64,
-    block_size: u64,
 }
 
 struct ShmBufferInner {

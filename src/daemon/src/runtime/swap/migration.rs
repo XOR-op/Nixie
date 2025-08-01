@@ -7,7 +7,7 @@ use nihil_common::{
 
 use crate::runtime::daemon_server::DeviceOrdinalMapping;
 
-use super::{buffer_manager::BufferId, ShmBufferManager};
+use super::{BufferId, ShmBufferManager};
 
 #[derive(Debug, Clone)]
 pub struct MigrationSpecEntry {

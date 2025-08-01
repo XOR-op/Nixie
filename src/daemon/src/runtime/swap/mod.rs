@@ -1,5 +1,23 @@
-mod buffer_manager;
+mod hybrid_buffer;
 mod migration;
 pub(super) mod migration_plan;
+mod shm_buffer;
 
-pub use buffer_manager::ShmBufferManager;
+use std::num::NonZeroU32;
+
+use nihil_common::GlobalDeviceId;
+pub use shm_buffer::ShmBufferManager;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BufferId {
+    pub pid: i32,
+    pub device_id: GlobalDeviceId,
+    pub block_id: NonZeroU32,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone)]
+struct AllocationInfo {
+    addr: u64,
+    block_size: u64,
+}
