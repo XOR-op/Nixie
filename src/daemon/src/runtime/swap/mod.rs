@@ -5,6 +5,7 @@ mod shm_buffer;
 
 use std::num::NonZeroU32;
 
+pub use hybrid_buffer::HybridBufferManager;
 use nihil_common::GlobalDeviceId;
 pub use shm_buffer::ShmBufferManager;
 

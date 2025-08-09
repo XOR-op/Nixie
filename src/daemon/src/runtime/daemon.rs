@@ -19,7 +19,11 @@ use crate::{
     config::{init_config, update_config, Config, ConfigurableArgs},
     control::{self, Controllable, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
-    runtime::{daemon_server::DaemonServer, swap::ShmBufferManager, ProcCtlReq},
+    runtime::{
+        daemon_server::DaemonServer,
+        swap::{HybridBufferManager, ShmBufferManager},
+        ProcCtlReq,
+    },
 };
 use nihil_common::general::{CallFuture, CallParameter};
 
@@ -43,6 +47,9 @@ impl DaemonData {
 pub struct Daemon {
     daemon_path: PathBuf,
     control_path: PathBuf,
+    buffer_path: PathBuf,
+    shm_buffer_size: usize,
+    ram_buffer_size: usize,
     shm_buffer_path: String,
     data: Arc<DaemonData>,
 }
@@ -52,6 +59,9 @@ impl Daemon {
         Self {
             daemon_path: PathBuf::from("/tmp/nihilphase.sock"),
             control_path: PathBuf::from(control::CONTROL_PATH),
+            buffer_path: PathBuf::from("/tmp/nihilphase.pagebuffer"),
+            shm_buffer_size: 36 * 1024 * 1024 * 1024,
+            ram_buffer_size: 32 * 1024 * 1024 * 1024,
             shm_buffer_path: String::from("/nihilphase_shm_buffer"),
             data: Arc::new(DaemonData::new()),
         }
@@ -88,15 +98,18 @@ impl Daemon {
     }
 
     async fn run_body(self) -> Result<(), NihilphaseError> {
-        const SHM_BUF_SIZE: usize = 36 * 1024 * 1024 * 1024;
         let shm_buffer = Arc::new(
-            ShmBufferManager::new(&self.shm_buffer_path, SHM_BUF_SIZE)
+            ShmBufferManager::new(&self.shm_buffer_path, self.shm_buffer_size)
                 .map_err(|e| DaemonError::Io("create shared memory buffer", e))?,
+        );
+        let hybrid_buffer = Arc::new(
+            HybridBufferManager::new(self.ram_buffer_size, &self.buffer_path)
+                .map_err(DaemonError::HybridBuffer)?,
         );
         tracing::info!(
             "Shared memory buffer created at {}, size = {}",
             self.shm_buffer_path,
-            pretty_size(SHM_BUF_SIZE as u64),
+            pretty_size(self.shm_buffer_size as u64),
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (exit_tx, mut exit_rx) = mpsc::unbounded_channel();
@@ -110,11 +123,12 @@ impl Daemon {
             exit_tx,
             rpc_data_tx,
             shm_buffer_path,
-            SHM_BUF_SIZE,
+            self.shm_buffer_size,
         ));
         let list_handle = self.data.processes.clone();
         {
             let shm_buffer = shm_buffer.clone();
+            let hybrid_buffer = hybrid_buffer.clone();
             tokio::spawn(async move {
                 // maintain app list
                 loop {
@@ -126,6 +140,7 @@ impl Daemon {
                             list_handle.write().await.remove(&pid);
                             // release used buffer by the exited process
                             shm_buffer.release_process_residual(pid);
+                            hybrid_buffer.release_process_residual(pid);
                         }
                     }
                 }
@@ -134,9 +149,15 @@ impl Daemon {
 
         let list_handle = self.data.processes.clone();
         tokio::spawn(async move {
-            Scheduler::new(list_handle, rpc_data_rx, prefetch_rx, shm_buffer)
-                .run()
-                .await;
+            Scheduler::new(
+                list_handle,
+                rpc_data_rx,
+                prefetch_rx,
+                shm_buffer,
+                hybrid_buffer,
+            )
+            .run()
+            .await;
         });
 
         let listener_guard = UnixListenerGuard::new(&self.control_path)?;

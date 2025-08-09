@@ -5,6 +5,7 @@ use nihil_common::{rpc::SidecarClient, GlobalDeviceId};
 use crate::{control::ProcessResidualData, runtime::daemon_server::DeviceOrdinalMapping};
 
 use super::{
+    hybrid_buffer::HybridBufferManager,
     migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry},
     ShmBufferManager,
 };
@@ -29,6 +30,7 @@ pub(crate) fn two_processes_task(
         Arc<DeviceOrdinalMapping>,
     )],
     shm_buffer_mgr: Arc<ShmBufferManager>,
+    hybrid_buffer_mgr: Arc<HybridBufferManager>,
 ) -> DataMigrationTask {
     let mut src_list = Vec::new();
     let dst_requirement = match &dst.1 {
@@ -109,5 +111,6 @@ pub(crate) fn two_processes_task(
             Arc::clone(&dst.3),
         ),
         shm_buffer_mgr,
+        hybrid_buffer_mgr,
     )
 }

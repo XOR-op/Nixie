@@ -7,7 +7,7 @@ use nihil_common::{
 
 use crate::runtime::daemon_server::DeviceOrdinalMapping;
 
-use super::{BufferId, ShmBufferManager};
+use super::{hybrid_buffer::HybridBufferManager, BufferId, ShmBufferManager};
 
 #[derive(Debug, Clone)]
 pub struct MigrationSpecEntry {
@@ -23,6 +23,7 @@ pub struct DataMigrationTask {
     src: Vec<(i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>)>,
     dst: (i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>),
     shm_buffer_mgr: Arc<ShmBufferManager>,
+    hybrid_buffer_mgr: Arc<HybridBufferManager>,
 }
 
 impl DataMigrationTask {
@@ -30,11 +31,13 @@ impl DataMigrationTask {
         src: Vec<(i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>)>,
         dst: (i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>),
         shm_buffer_mgr: Arc<ShmBufferManager>,
+        hybrid_buffer_mgr: Arc<HybridBufferManager>,
     ) -> Self {
         Self {
             src,
             dst,
             shm_buffer_mgr,
+            hybrid_buffer_mgr,
         }
     }
 

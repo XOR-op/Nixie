@@ -22,7 +22,7 @@ use crate::{
         schedule::{policy::IdleRequestType, statistics::PreemptionReason, PriorityLevel},
         swap::{
             migration_plan::{two_processes_task, DstRequestArgs},
-            ShmBufferManager,
+            HybridBufferManager, ShmBufferManager,
         },
     },
 };
@@ -48,6 +48,7 @@ pub struct Scheduler {
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
     shmem_buffer: Arc<ShmBufferManager>,
+    hybrid_buffer: Arc<HybridBufferManager>,
 }
 
 impl Scheduler {
@@ -56,6 +57,7 @@ impl Scheduler {
         rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
         prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
         shmem_buffer: Arc<ShmBufferManager>,
+        hybrid_buffer: Arc<HybridBufferManager>,
     ) -> Self {
         Self {
             list,
@@ -64,6 +66,7 @@ impl Scheduler {
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
             shmem_buffer,
+            hybrid_buffer,
         }
     }
 
@@ -239,6 +242,7 @@ impl Scheduler {
                 mem_req,
                 &control,
                 &self.shmem_buffer,
+                &self.hybrid_buffer,
             )
             .await?;
         }
@@ -285,6 +289,7 @@ impl Scheduler {
         mem_req: Option<MemoryRequest>,
         control: &LinkedHashMap<i32, DaemonServerHandle>,
         shmem_buffer: &Arc<ShmBufferManager>,
+        hybrid_buffer: &Arc<HybridBufferManager>,
     ) -> Result<Option<u64>, ScheduleError> {
         let mut swap_out = None;
         // disable current process if needed; and migrate VRAM
@@ -361,6 +366,7 @@ impl Scheduler {
                 ),
                 &others,
                 shmem_buffer.clone(),
+                hybrid_buffer.clone(),
             );
             // for statistics
             swap_out = task.get_src().get(0).map(|(_, spec, _, _)| {

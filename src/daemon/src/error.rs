@@ -23,6 +23,20 @@ pub enum DaemonError {
     Nvml(&'static str, nvml_wrapper::error::NvmlError),
     #[error("{0}: Config error {1}")]
     Config(&'static str, toml::de::Error),
+    #[error("HybridBuffer: {0}")]
+    HybridBuffer(#[from] HybridBufferError),
+}
+
+#[derive(Debug, Error)]
+pub enum HybridBufferError {
+    #[error("Failed to allocate hybrid buffer")]
+    MemoryExhausted,
+    #[error("Invalid hybrid buffer")]
+    InvalidInputBuffer,
+    #[error("Invalid BufferId")]
+    NoBufferId,
+    #[error("{1} failed with error: {0}")]
+    IoError(std::io::Error, String),
 }
 
 #[derive(Debug, Error)]

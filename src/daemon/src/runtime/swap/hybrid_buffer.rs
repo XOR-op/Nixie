@@ -1,7 +1,13 @@
-use std::io::{Read, Seek, Write};
+use std::{
+    collections::HashMap,
+    io::{Read, Seek, Write},
+    path::Path,
+};
 
 use bytes::BytesMut;
 use nihil_common::MAX_ALLOCATION_SIZE;
+
+use crate::error::HybridBufferError;
 
 use super::{AllocationInfo, BufferId};
 
@@ -17,15 +23,29 @@ impl BlockMemBuffer {
     }
 }
 
-#[derive(Debug)]
-pub enum HybridBufferError {
-    MemoryExhausted,
-    InvalidInputBuffer,
-    NoBufferId,
-    IoError(std::io::Error, String),
-}
-
 impl HybridBufferManager {
+    pub fn new(in_mem_size: usize, disk_path: &Path) -> Result<Self, HybridBufferError> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(disk_path)
+            .map_err(|e| HybridBufferError::IoError(e, "Failed to open disk file".to_string()))?;
+        let inner = HybridBufferInner {
+            mem_bookkeeping: HashMap::new(),
+            free_mem_buffers: Vec::new(),
+            max_mem_buffer_count: in_mem_size / MAX_ALLOCATION_SIZE,
+
+            file,
+            disk_bookkeeping: HashMap::new(),
+            free_disk_buffers: Vec::new(),
+            file_size: 0,
+        };
+        Ok(Self {
+            inner: std::sync::Mutex::new(inner),
+        })
+    }
+
     pub fn store(&self, buffer_id: &BufferId, data: &[u8]) -> Result<(), HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
         if data.len() > MAX_ALLOCATION_SIZE as usize {
@@ -60,6 +80,24 @@ impl HybridBufferManager {
             inner.load_from_disk(info.addr, buffer_id.size, data)
         } else {
             Err(HybridBufferError::NoBufferId)
+        }
+    }
+
+    pub fn release_process_residual(&self, pid: i32) {
+        let inner = &mut *self.inner.lock().unwrap();
+        for (id, mem) in std::mem::take(&mut inner.mem_bookkeeping) {
+            if id.pid == pid {
+                inner.put_back(mem);
+            } else {
+                inner.mem_bookkeeping.insert(id, mem);
+            }
+        }
+        for (id, alloc_info) in std::mem::take(&mut inner.disk_bookkeeping) {
+            if id.pid == pid {
+                inner.free_disk_buffers.push(alloc_info);
+            } else {
+                inner.disk_bookkeeping.insert(id, alloc_info);
+            }
         }
     }
 }
