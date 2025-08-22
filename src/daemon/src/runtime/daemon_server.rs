@@ -226,7 +226,14 @@ impl nihil_common::rpc::Daemon for DaemonServer {
             return None;
         };
         let rpc_client = state.rpc_client.clone();
-        tracing::info!("Client[pid={}] connected", params.pid);
+        let process_name = std::fs::read_to_string(format!("/proc/{}/comm", params.pid))
+            .map(|s| s.trim().to_string())
+            .ok();
+        tracing::info!(
+            "Client[pid={}, comm={:?}] connected",
+            params.pid,
+            process_name.unwrap_or_else(|| "Unknown".to_string())
+        );
 
         let peer_pid = params.pid;
         let (pid_fd, _) = checked!(duplicate_peer_fd(peer_pid, None).map_err(|e| (e, peer_pid)));
