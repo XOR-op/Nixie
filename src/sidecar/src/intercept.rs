@@ -1,6 +1,9 @@
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice, CUstream};
 use nihil_common::shm::AllocationEntry;
-use nihil_common::{MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE};
+use nihil_common::{
+    MemoryRequest, CUDA_CONTROL_PLANE_RESERVATION_SIZE, MAX_ALLOCATION_SIZE, MAX_GPUS,
+    MIN_ALLOCATION_SIZE,
+};
 use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
 use nix::sys::stat::mode_t;
 use std::collections::BTreeMap;
@@ -32,6 +35,23 @@ macro_rules! generate_init_fn {
     ($func_type:ty, $func_name:expr) => {
         generate_init_fn_as!($func_type, $func_name, init_fn);
     };
+}
+
+type CudaMemGetInfoType = extern "C" fn(*mut usize, *mut usize) -> cudaError_enum;
+fn get_func_ptr_cuda_mem_get_info() -> &'static CudaMemGetInfoType {
+    static MEM_GET_INFO_FN: OnceLock<CudaMemGetInfoType> = OnceLock::new();
+    generate_init_fn!(CudaMemGetInfoType, cr"cudaMemGetInfo");
+    MEM_GET_INFO_FN.get_or_init(init_fn)
+}
+
+fn cuda_mem_get_info_impl() -> (usize, usize) {
+    let mut avail = 0;
+    let mut total = 0;
+    check_cu_err!(
+        get_func_ptr_cuda_mem_get_info()(&mut avail, &mut total),
+        "GET_MEM_INFO"
+    );
+    (avail, total)
 }
 
 static SMALL_ALLOCATION: Mutex<BTreeMap<u64, u64>> = Mutex::new(BTreeMap::new());
@@ -138,6 +158,20 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             );
         }
         CURRENT_ALLOCATION_SIZE.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
+        if cuda_mem_get_info_impl().0 < CUDA_CONTROL_PLANE_RESERVATION_SIZE {
+            SCHED_CTL.pause_then_require_memory(
+                LaunchType::Malloc,
+                MemoryRequest {
+                    mem_req: std::array::from_fn(|ith_dev| {
+                        if ith_dev == device_id as usize {
+                            vec![CUDA_CONTROL_PLANE_RESERVATION_SIZE as u64]
+                        } else {
+                            Vec::new()
+                        }
+                    }),
+                },
+            );
+        }
     }
     res
 }
@@ -263,10 +297,7 @@ pub extern "C" fn cudaMemset(
 #[allow(non_snake_case)]
 #[no_mangle]
 pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_enum {
-    type CudaMemGetInfoType = extern "C" fn(*mut usize, *mut usize) -> cudaError_enum;
-    static MEM_GET_INFO_FN: OnceLock<CudaMemGetInfoType> = OnceLock::new();
-    generate_init_fn!(CudaMemGetInfoType, cr"cudaMemGetInfo");
-    let mem_get_info_func = MEM_GET_INFO_FN.get_or_init(init_fn);
+    let mem_get_info_func = get_func_ptr_cuda_mem_get_info();
     init_cuda_env();
     let mut device_id = 0;
     check_cu_err!(
