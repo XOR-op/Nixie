@@ -1,12 +1,15 @@
 #![allow(non_upper_case_globals)]
 use std::{collections::HashMap, os::fd::OwnedFd};
 
-use nihil_common::{rpc::SidecarClient, shm::ShmGuard, ProcessLocalDeviceId, MAX_GPUS};
+use nihil_common::{
+    general::CallParameter, rpc::SidecarClient, shm::ShmGuard, ProcessLocalDeviceId, MAX_GPUS,
+};
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use crate::{
     control::{AllocationData, PhysicalMemoryData, ProcessMetadata, ProcessResidualData},
     error::NihilphaseError,
+    runtime::schedule::control::ScheduleControlReq,
 };
 
 use super::{daemon_server::DeviceOrdinalMapping, ProcCtlReq};
@@ -18,6 +21,7 @@ pub(crate) struct ProcessControl {
     dev_mapping: DeviceOrdinalMapping,
     rpc_sender: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
+    sched_req_tx: mpsc::UnboundedSender<ScheduleControlReq>,
     exit_tx: mpsc::UnboundedSender<i32>,
 }
 
@@ -29,6 +33,7 @@ impl ProcessControl {
         dev_mapping: DeviceOrdinalMapping,
         rpc_sender: SidecarClient,
         inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
+        sched_req_tx: mpsc::UnboundedSender<ScheduleControlReq>,
         exit_tx: mpsc::UnboundedSender<i32>,
     ) -> Self {
         Self {
@@ -38,6 +43,7 @@ impl ProcessControl {
             dev_mapping,
             rpc_sender,
             inst_rx,
+            sched_req_tx,
             exit_tx,
         }
     }
@@ -54,7 +60,7 @@ impl ProcessControl {
         loop {
             tokio::select! {
                 Some(inst) = self.inst_rx.recv() => {
-                    self.handle_inst(inst);
+                    self.handle_inst(inst).await;
                 }
                 _ = self.pid_fd.readable() => {
                     break;
@@ -67,7 +73,7 @@ impl ProcessControl {
         Ok(())
     }
 
-    fn handle_inst(&mut self, inst: ProcCtlReq) {
+    async fn handle_inst(&mut self, inst: ProcCtlReq) {
         match inst {
             ProcCtlReq::List(param) => {
                 let mut allocations = Vec::new();
@@ -109,8 +115,18 @@ impl ProcessControl {
                     }
                 }
                 allocations.sort_by_key(|(device_id, _)| *device_id);
+                let (state_para, call_fut) = CallParameter::new(self.peer_pid);
+                self.sched_req_tx
+                    .send(ScheduleControlReq::GetState(state_para))
+                    .unwrap();
+                let (state, priority) = match call_fut.await {
+                    Some(x) => (x.state, x.priority),
+                    None => (None, None),
+                };
                 param.ret(ProcessMetadata {
                     pid: self.peer_pid,
+                    state,
+                    priority,
                     allocations,
                 });
             }

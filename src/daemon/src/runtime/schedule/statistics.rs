@@ -3,6 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde::{Deserialize, Serialize};
+
 use super::{Priority, PriorityLevel};
 
 #[derive(Clone, Copy, Debug)]
@@ -44,27 +46,34 @@ impl std::fmt::Debug for RunningChunk {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ClientState {
+    Active,
+    Idle,
+    ScheduleWaiting,
+}
+
 #[derive(Clone)]
-pub(super) enum ClientState {
+pub(super) enum InternalClientState {
     Active { since: Instant },
     Idle,
     ResidentIdle,
     ScheduleWaiting { since: Instant },
 }
 
-impl std::fmt::Debug for ClientState {
+impl std::fmt::Debug for InternalClientState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ClientState::Active { since } => {
+            InternalClientState::Active { since } => {
                 write!(f, "Active since {:.2}s ago", since.elapsed().as_secs_f64())
             }
-            ClientState::Idle => {
+            InternalClientState::Idle => {
                 write!(f, "Idle")
             }
-            ClientState::ResidentIdle => {
+            InternalClientState::ResidentIdle => {
                 write!(f, "ResidentIdle")
             }
-            ClientState::ScheduleWaiting { since } => {
+            InternalClientState::ScheduleWaiting { since } => {
                 write!(
                     f,
                     "ScheduleWaiting since {:.2}s ago",
@@ -75,9 +84,17 @@ impl std::fmt::Debug for ClientState {
     }
 }
 
-impl ClientState {
+impl InternalClientState {
     pub fn is_active(&self) -> bool {
-        matches!(self, ClientState::Active { .. })
+        matches!(self, InternalClientState::Active { .. })
+    }
+
+    pub fn as_client_state(&self) -> ClientState {
+        match self {
+            InternalClientState::Active { .. } => ClientState::Active,
+            InternalClientState::Idle | InternalClientState::ResidentIdle => ClientState::Idle,
+            InternalClientState::ScheduleWaiting { .. } => ClientState::ScheduleWaiting,
+        }
     }
 }
 
@@ -109,7 +126,7 @@ impl History {
 pub struct ClientStatistics {
     pub pid: i32,
     pub active_time_history: History,
-    pub state: ClientState,
+    pub state: InternalClientState,
     pub priority: Priority,
     pub last_priority_update: Instant,
 }
@@ -129,7 +146,7 @@ impl ClientStatistics {
     pub fn new(pid: i32) -> Self {
         Self {
             pid,
-            state: ClientState::Idle,
+            state: InternalClientState::Idle,
             active_time_history: History::new(32),
             priority: Priority::default_dynamic(),
             last_priority_update: Instant::now(),
@@ -140,7 +157,7 @@ impl ClientStatistics {
         if self.state.is_active() {
             tracing::warn!("make_active: Client {} is already active", self.pid);
         }
-        self.state = ClientState::Active {
+        self.state = InternalClientState::Active {
             since: Instant::now(),
         };
         self.last_priority_update = Instant::now();
@@ -148,7 +165,7 @@ impl ClientStatistics {
 
     pub fn make_resident_idle(&mut self, reason: StopReason) {
         match &self.state {
-            ClientState::Active { since } => {
+            InternalClientState::Active { since } => {
                 self.active_time_history.push(RunningChunk {
                     start: *since,
                     end: Instant::now(),
@@ -163,20 +180,20 @@ impl ClientStatistics {
                 )
             }
         }
-        self.state = ClientState::ResidentIdle;
+        self.state = InternalClientState::ResidentIdle;
         self.last_priority_update = Instant::now();
     }
 
     pub fn make_idle(&mut self, reason: StopReason) {
         match &self.state {
-            ClientState::Active { since } => {
+            InternalClientState::Active { since } => {
                 self.active_time_history.push(RunningChunk {
                     start: *since,
                     end: Instant::now(),
                     reason,
                 });
             }
-            ClientState::ResidentIdle => {
+            InternalClientState::ResidentIdle => {
                 assert!(matches!(reason, StopReason::LazyIdle));
             }
             state => {
@@ -187,7 +204,7 @@ impl ClientStatistics {
                 )
             }
         }
-        self.state = ClientState::Idle;
+        self.state = InternalClientState::Idle;
         self.last_priority_update = Instant::now();
     }
 

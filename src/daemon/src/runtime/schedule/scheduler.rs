@@ -19,7 +19,12 @@ use crate::{
     error::ScheduleError,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        schedule::{policy::IdleRequestType, statistics::PreemptionReason, PriorityLevel},
+        schedule::{
+            control::{GetStateResponse, ScheduleControlReq},
+            policy::IdleRequestType,
+            statistics::PreemptionReason,
+            PriorityLevel,
+        },
         swap::{
             migration_plan::{two_processes_task, DstRequestArgs},
             HybridBufferManager, ShmBufferManager,
@@ -45,6 +50,7 @@ pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
     rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
     prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+    control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
     shmem_buffer: Arc<ShmBufferManager>,
@@ -56,6 +62,7 @@ impl Scheduler {
         list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
         rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
         prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+        control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
         shmem_buffer: Arc<ShmBufferManager>,
         hybrid_buffer: Arc<HybridBufferManager>,
     ) -> Self {
@@ -63,6 +70,7 @@ impl Scheduler {
             list,
             rpc_data_rx,
             prefetch_rx,
+            control_msg_rx,
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
             shmem_buffer,
@@ -82,9 +90,29 @@ impl Scheduler {
                 Some((pid, data)) = self.prefetch_rx.recv() => {
                     self.received_prioritized_data(pid, data, &mut last_polled).await;
                 }
+                Some(req) = self.control_msg_rx.recv() =>{
+                    self.handle_ctrl(req).await;
+                }
                 _ = tokio::time::sleep(sleep_duration) => {
                     self.poll_queue(&mut last_polled).await;
                 }
+            }
+        }
+    }
+
+    async fn handle_ctrl(&mut self, req: ScheduleControlReq) {
+        match req {
+            ScheduleControlReq::GetState(param) => {
+                let (pid, ret_tx) = param.into_parts();
+                let res = self
+                    .sched_queue
+                    .get_client(pid)
+                    .map(|stat| (stat.priority, stat.state.as_client_state()));
+                let (state, priority) = match res {
+                    Some((priority, state)) => (Some(state), Some(priority)),
+                    None => (None, None),
+                };
+                ret_tx.ret(GetStateResponse { state, priority });
             }
         }
     }

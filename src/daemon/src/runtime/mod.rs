@@ -14,6 +14,7 @@ use crate::{
 use cudarc::driver::result::device;
 pub use daemon::Daemon;
 use nihil_common::{general::CallParameter, GlobalDeviceId};
+pub(crate) use schedule::{ClientState, Priority};
 
 fn get_user() -> Option<nix::unistd::User> {
     if let Ok(n) = std::env::var("SUDO_USER") {

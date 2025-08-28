@@ -21,6 +21,7 @@ use crate::{
     error::{DaemonError, NihilphaseError},
     runtime::{
         daemon_server::DaemonServer,
+        schedule::control::ScheduleControlReq,
         swap::{HybridBufferManager, ShmBufferManager},
         ProcCtlReq,
     },
@@ -103,7 +104,7 @@ impl Daemon {
                 .map_err(|e| DaemonError::Io("create shared memory buffer", e))?,
         );
         let hybrid_buffer = Arc::new(
-            HybridBufferManager::new(self.ram_buffer_size, &self.buffer_path)
+            HybridBufferManager::new(self.ram_buffer_size, 1024 * 1024 * 1024, &self.buffer_path)
                 .map_err(DaemonError::HybridBuffer)?,
         );
         tracing::info!(
@@ -115,12 +116,14 @@ impl Daemon {
         let (exit_tx, mut exit_rx) = mpsc::unbounded_channel();
         let (rpc_data_tx, rpc_data_rx) = mpsc::unbounded_channel();
         let (prefetch_tx, prefetch_rx) = mpsc::unbounded_channel();
+        let (sched_ctl_tx, sched_ctl_rx) = mpsc::unbounded_channel();
         let shm_buffer_path = self.shm_buffer_path.clone();
         // accept app connections
         tokio::spawn(Self::handle_processes(
             self.daemon_path,
             tx,
             exit_tx,
+            sched_ctl_tx,
             rpc_data_tx,
             shm_buffer_path,
             self.shm_buffer_size,
@@ -153,6 +156,7 @@ impl Daemon {
                 list_handle,
                 rpc_data_rx,
                 prefetch_rx,
+                sched_ctl_rx,
                 shm_buffer,
                 hybrid_buffer,
             )
@@ -188,6 +192,7 @@ impl Daemon {
         daemon_path: PathBuf,
         ret_tx: mpsc::UnboundedSender<DaemonServerHandle>,
         exit_tx: mpsc::UnboundedSender<i32>,
+        sched_ctl_tx: mpsc::UnboundedSender<ScheduleControlReq>,
         rpc_data_tx: mpsc::UnboundedSender<(i32, ActivityUpdate)>,
         shm_buffer_path: String,
         shm_buffer_size: usize,
@@ -204,6 +209,7 @@ impl Daemon {
                 stream,
                 exit_tx.clone(),
                 rpc_data_tx.clone(),
+                sched_ctl_tx.clone(),
                 shm_buffer_path.clone(),
                 shm_buffer_size,
             );

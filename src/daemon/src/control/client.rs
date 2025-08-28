@@ -80,11 +80,23 @@ impl ControlClient {
                 .map(|s| s.trim().to_string())
                 .ok();
             println!(
-                "[{}]{}",
+                "[{}]{} <{}, {}>",
                 process.pid.to_string().yellow(),
                 process_name
                     .map_or("".to_string(), |s| format!(" {}", s))
                     .green(),
+                process
+                    .state
+                    .map_or("Unknown".to_string(), |s| format!("{:?}", s))
+                    .blue(),
+                process
+                    .priority
+                    .map_or("N/A".to_string(), |p| format!(
+                        "{:?}{}",
+                        p.level(),
+                        p.weight().map(|w| format!("/{}", w)).unwrap_or_default()
+                    ))
+                    .purple()
             );
             for (device, allocations) in process.allocations {
                 // print aggregated per device info

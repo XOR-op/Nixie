@@ -6,7 +6,7 @@ use crate::{control::ProcessResidualData, runtime::daemon_server::DeviceOrdinalM
 
 use super::{
     hybrid_buffer::HybridBufferManager,
-    migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry},
+    migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry, ShmMigrationSpecEntry},
     ShmBufferManager,
 };
 
@@ -53,7 +53,7 @@ pub(crate) fn two_processes_task(
                     if accu_size >= dst_required_size {
                         break;
                     }
-                    migration_entries.push(MigrationSpecEntry {
+                    migration_entries.push(ShmMigrationSpecEntry {
                         size: entry.size,
                         handle_idx: entry.handle_idx,
                     });
@@ -90,7 +90,7 @@ pub(crate) fn two_processes_task(
                     global_id,
                     entries
                         .into_iter()
-                        .map(|data_entry| MigrationSpecEntry {
+                        .map(|data_entry| ShmMigrationSpecEntry {
                             size: data_entry.size,
                             handle_idx: data_entry.handle_idx,
                         })

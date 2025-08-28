@@ -45,7 +45,7 @@ impl<T> IpcMutex<T> {
         }
     }
 
-    pub fn lock(&self) -> IpcMutexGuard<T> {
+    pub fn lock(&'_ self) -> IpcMutexGuard<'_, T> {
         self.lock_inner();
         IpcMutexGuard { lock: self }
     }

@@ -84,4 +84,8 @@ impl ShmBufferManager {
             will_keep
         });
     }
+
+    pub unsafe fn at_offset(&self, offset: u64, size: usize) -> Option<*mut u8> {
+        self.shm_buffer.at_offset(offset, size)
+    }
 }

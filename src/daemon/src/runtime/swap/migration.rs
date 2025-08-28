@@ -5,18 +5,31 @@ use nihil_common::{
     ProcessLocalDeviceId,
 };
 
-use crate::runtime::daemon_server::DeviceOrdinalMapping;
+use crate::{error::HybridBufferError, runtime::daemon_server::DeviceOrdinalMapping};
 
 use super::{hybrid_buffer::HybridBufferManager, BufferId, ShmBufferManager};
 
 #[derive(Debug, Clone)]
-pub struct MigrationSpecEntry {
+pub struct ShmMigrationSpecEntry {
     pub size: u64,
     pub handle_idx: NonZeroU32,
 }
 
+#[derive(Debug, Clone)]
+pub struct HybridMigrationSpecEntry {
+    pub size: u64,
+    pub handle_idx: NonZeroU32,
+}
+
+#[derive(Debug, Clone)]
+pub enum MigrationSpecEntry {
+    Shm(ShmMigrationSpecEntry),
+    Dram(HybridMigrationSpecEntry),
+    Storage(HybridMigrationSpecEntry),
+}
+
 pub struct MigrationSpec {
-    pub device_map: HashMap<GlobalDeviceId, Vec<MigrationSpecEntry>>,
+    pub device_map: HashMap<GlobalDeviceId, Vec<ShmMigrationSpecEntry>>,
 }
 
 pub struct DataMigrationTask {
@@ -54,7 +67,7 @@ impl DataMigrationTask {
                 i32,
                 ProcessLocalDeviceId,
                 SidecarClient,
-                Vec<MigrationSpecEntry>,
+                Vec<ShmMigrationSpecEntry>,
             )>,
         > = HashMap::new();
         for (pid, spec, rpc_client, mapping) in self.src {
@@ -122,13 +135,13 @@ impl DataMigrationTask {
             i32,
             ProcessLocalDeviceId,
             SidecarClient,
-            Vec<MigrationSpecEntry>,
+            Vec<ShmMigrationSpecEntry>,
         )>,
         dst: (
             i32,
             ProcessLocalDeviceId,
             SidecarClient,
-            Vec<MigrationSpecEntry>,
+            Vec<ShmMigrationSpecEntry>,
         ),
         shm_buffer_mgr: Arc<ShmBufferManager>,
     ) {
@@ -187,7 +200,7 @@ impl DataMigrationTask {
             i32,
             ProcessLocalDeviceId,
             SidecarClient,
-            Vec<MigrationSpecEntry>,
+            Vec<ShmMigrationSpecEntry>,
         ),
         shm_buffer_mgr: Arc<ShmBufferManager>,
         mut notification_rx: tokio::sync::mpsc::UnboundedReceiver<MigrationResponse>,
@@ -234,7 +247,7 @@ async fn host_to_device_transfer_inner(
     global_id: GlobalDeviceId,
     dst_pid: i32,
     dst_device: ProcessLocalDeviceId,
-    dst_entry: MigrationSpecEntry,
+    dst_entry: ShmMigrationSpecEntry,
     rpc_client: &SidecarClient,
     shm_buffer_mgr: &ShmBufferManager,
 ) {
@@ -261,4 +274,58 @@ async fn host_to_device_transfer_inner(
     } else {
         tracing::warn!("Failed to complete H2D migration RPC to destination process");
     }
+}
+
+async fn hybrid_to_shm_transfer_inner(
+    pid: i32,
+    device_id: GlobalDeviceId,
+    dst_entry: HybridMigrationSpecEntry,
+    shm_buffer_mgr: &ShmBufferManager,
+    shm_offset: u64,
+    hybrid_buffer_mgr: &HybridBufferManager,
+) -> Result<(), HybridBufferError> {
+    let buffer_id = BufferId {
+        pid,
+        device_id,
+        block_id: dst_entry.handle_idx,
+        size: dst_entry.size,
+    };
+    let buf_ref = unsafe {
+        std::slice::from_raw_parts_mut(
+            shm_buffer_mgr
+                .at_offset(shm_offset, dst_entry.size as usize)
+                .unwrap(),
+            dst_entry.size as usize,
+        )
+    };
+    hybrid_buffer_mgr.load_to(&buffer_id, buf_ref).await?;
+    Ok(())
+}
+
+async fn shm_to_hybrid_transfer_inner(
+    pid: i32,
+    device_id: GlobalDeviceId,
+    src_entry: ShmMigrationSpecEntry,
+    shm_buffer_mgr: &ShmBufferManager,
+    hybrid_buffer_mgr: &HybridBufferManager,
+) -> Result<(), HybridBufferError> {
+    let buffer_id = BufferId {
+        pid,
+        device_id,
+        block_id: src_entry.handle_idx,
+        size: src_entry.size,
+    };
+    let buf_offset = shm_buffer_mgr
+        .get_buffer(&buffer_id)
+        .ok_or(HybridBufferError::NoBufferId)?;
+    let buf_ref = unsafe {
+        std::slice::from_raw_parts(
+            shm_buffer_mgr
+                .at_offset(buf_offset, src_entry.size as usize)
+                .unwrap(),
+            src_entry.size as usize,
+        )
+    };
+    hybrid_buffer_mgr.store(&buffer_id, buf_ref).await?;
+    Ok(())
 }

@@ -1,6 +1,6 @@
 use crate::{
     error::{DaemonError, UvmError},
-    runtime::{proc_ctl::ProcessControl, shm::open_shm},
+    runtime::{proc_ctl::ProcessControl, schedule::control::ScheduleControlReq, shm::open_shm},
 };
 use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
@@ -135,6 +135,7 @@ impl DaemonServer {
         conn: UnixStream,
         exit_tx: mpsc::UnboundedSender<i32>,
         rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
+        sched_ctl_tx: mpsc::UnboundedSender<ScheduleControlReq>,
         buffer_shmem_path: String,
         buffer_len: usize,
     ) -> DaemonServerHandleFuture {
@@ -158,6 +159,7 @@ impl DaemonServer {
                 ret: handle_tx,
                 inst_rx,
                 rpc_data_tx,
+                sched_ctl_tx,
                 exit_tx,
                 buffer_shmem_path,
                 buffer_len,
@@ -184,6 +186,7 @@ struct StateOfStarting {
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
     exit_tx: mpsc::UnboundedSender<i32>,
     rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
+    sched_ctl_tx: mpsc::UnboundedSender<ScheduleControlReq>,
     ret: mpsc::Sender<(JoinHandle<()>, i32, Arc<DeviceOrdinalMapping>)>,
     buffer_shmem_path: String,
     buffer_len: usize,
@@ -248,7 +251,6 @@ impl nihil_common::rpc::Daemon for DaemonServer {
         let device_mapping = Arc::new(checked!(
             DeviceOrdinalMapping::new(&params.visible_devices).map_err(|e| (e, peer_pid))
         ));
-
         let ctl = ProcessControl::new(
             peer_pid,
             pid_fd,
@@ -256,6 +258,7 @@ impl nihil_common::rpc::Daemon for DaemonServer {
             (*device_mapping).clone(),
             rpc_client.clone(),
             state.inst_rx,
+            state.sched_ctl_tx,
             state.exit_tx,
         );
         let task = tokio::spawn(async move {

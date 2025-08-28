@@ -1,11 +1,14 @@
+pub(crate) mod control;
 mod policy;
 mod scheduler;
 mod statistics;
 
 pub use scheduler::Scheduler;
+use serde::{Deserialize, Serialize};
+pub(crate) use statistics::ClientState;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Priority {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum Priority {
     Dynamic { level: PriorityLevel, weight: i8 },
     Fixed(PriorityLevel),
 }
@@ -15,6 +18,13 @@ impl Priority {
         match self {
             Priority::Dynamic { level, .. } => *level,
             Priority::Fixed(level) => *level,
+        }
+    }
+
+    pub fn weight(&self) -> Option<i8> {
+        match self {
+            Priority::Dynamic { weight, .. } => Some(*weight),
+            Priority::Fixed(_) => None,
         }
     }
 
@@ -60,8 +70,8 @@ impl Priority {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PriorityLevel {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum PriorityLevel {
     Interactive,
     LowInteractive,
     Batch,

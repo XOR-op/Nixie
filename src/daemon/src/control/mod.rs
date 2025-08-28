@@ -5,7 +5,10 @@ use std::{collections::HashMap, num::NonZeroU32};
 use nihil_common::GlobalDeviceId;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Config, ConfigurableArgs};
+use crate::{
+    config::{Config, ConfigurableArgs},
+    runtime::{ClientState, Priority},
+};
 
 pub static CONTROL_PATH: &str = "/tmp/nihilphase-ctl.sock";
 
@@ -31,6 +34,8 @@ pub(crate) struct PrefetchMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProcessMetadata {
     pub pid: i32,
+    pub state: Option<ClientState>,
+    pub priority: Option<Priority>,
     pub allocations: Vec<(GlobalDeviceId, Vec<AllocationData>)>, // Global device ID
 }
 
