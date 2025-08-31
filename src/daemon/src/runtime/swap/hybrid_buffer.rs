@@ -20,6 +20,12 @@ impl BlockMemBuffer {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BufferLocation {
+    HostMem,
+    Storage,
+}
+
 impl HybridBufferManager {
     pub fn new(
         in_mem_size: usize,
@@ -105,6 +111,32 @@ impl HybridBufferManager {
                 inner.disk_bookkeeping.insert(id, alloc_info);
             }
         }
+    }
+
+    pub fn get_buffer_location(&self, buffer_id: &BufferId) -> Option<BufferLocation> {
+        let inner = self.inner.lock().unwrap();
+        if inner.mem_bookkeeping.contains_key(buffer_id) {
+            Some(BufferLocation::HostMem)
+        } else if inner.disk_bookkeeping.contains_key(buffer_id) {
+            Some(BufferLocation::Storage)
+        } else {
+            None
+        }
+    }
+
+    /// Returns: a list of length of free memory segments in bytes.
+    pub fn free_mem_segments(&self) -> Vec<u64> {
+        let inner = self.inner.lock().unwrap();
+        let mut free_count = inner.free_mem_buffers.len() as u64;
+        if inner.free_mem_buffers.len()
+            < inner.max_mem_buffer_count + inner.extra_burst_mem_buffer_count
+        {
+            free_count += (inner.max_mem_buffer_count + inner.extra_burst_mem_buffer_count
+                - inner.free_mem_buffers.len()) as u64;
+        }
+        (0..free_count)
+            .map(|i| i * MAX_ALLOCATION_SIZE as u64)
+            .collect()
     }
 }
 

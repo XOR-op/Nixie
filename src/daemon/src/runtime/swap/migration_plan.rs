@@ -2,7 +2,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use nihil_common::{rpc::SidecarClient, GlobalDeviceId};
 
-use crate::{control::ProcessResidualData, runtime::daemon_server::DeviceOrdinalMapping};
+use crate::{
+    control::ProcessResidualData,
+    runtime::{
+        daemon_server::DeviceOrdinalMapping,
+        swap::{hybrid_buffer::BufferLocation, migration::HybridMigrationSpecEntry, BufferId},
+    },
+};
 
 use super::{
     hybrid_buffer::HybridBufferManager,
@@ -11,19 +17,21 @@ use super::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) enum DstRequestArgs {
+pub(crate) enum DeviceRequestArgs {
     ResidualData(ProcessResidualData),
     Allocation(HashMap<GlobalDeviceId, u64>),
 }
 
+/// Create a migration task that migrates data at the cost of others being moved out.
+/// `out_from_gpu`: the earlier in the list, the more likely to be moved out.
 pub(crate) fn two_processes_task(
-    dst: (
+    into_gpu: (
         i32,
-        DstRequestArgs,
+        DeviceRequestArgs,
         SidecarClient,
         Arc<DeviceOrdinalMapping>,
     ),
-    src: &[(
+    out_from_gpu: &[(
         i32,
         ProcessResidualData,
         SidecarClient,
@@ -32,57 +40,89 @@ pub(crate) fn two_processes_task(
     shm_buffer_mgr: Arc<ShmBufferManager>,
     hybrid_buffer_mgr: Arc<HybridBufferManager>,
 ) -> DataMigrationTask {
-    let mut src_list = Vec::new();
-    let dst_requirement = match &dst.1 {
-        DstRequestArgs::ResidualData(process_residual_data) => process_residual_data
+    let mut out_of_gpu_list = Vec::new();
+    let into_gpu_requirement = match &into_gpu.1 {
+        DeviceRequestArgs::ResidualData(process_residual_data) => process_residual_data
             .allocations
             .iter()
             .map(|(id, entries)| (*id, entries.iter().map(|entry| entry.size).sum::<u64>()))
             .collect::<HashMap<_, _>>(),
-        DstRequestArgs::Allocation(allocation) => allocation.clone(),
+        DeviceRequestArgs::Allocation(allocation) => allocation.clone(),
     };
+    let mut shm_free_segments = shm_buffer_mgr.free_segments();
+    let mut host_mem_free_segments = hybrid_buffer_mgr.free_mem_segments();
     // for every dst device
-    for (global_id, dst_required_size) in dst_requirement {
+    for (global_id, into_gpu_required_size) in into_gpu_requirement {
         let mut accu_size = 0;
         // for every src process
-        for (src_pid, src_entries, src_rpc_client, src_mapping) in src.iter() {
-            if let Some(entries) = src_entries.allocations.get(&global_id) {
+        for (out_from_gpu_pid, out_from_gpu_entries, rpc_client, dev_mapping) in out_from_gpu.iter()
+        {
+            if let Some(entries) = out_from_gpu_entries.allocations.get(&global_id) {
                 let mut migration_entries = Vec::new();
                 // check per device per src process
                 for entry in entries {
-                    if accu_size >= dst_required_size {
+                    if accu_size >= into_gpu_required_size {
                         break;
                     }
-                    migration_entries.push(ShmMigrationSpecEntry {
-                        size: entry.size,
-                        handle_idx: entry.handle_idx,
-                    });
+                    // Use SHM first, then host mem, then storage
+                    // TODO: handle if segments have variable lengths
+                    let spec_entry = if !shm_free_segments.is_empty() {
+                        let seg = shm_free_segments.pop().unwrap();
+                        assert!(
+                            seg >= entry.size,
+                            "SHM segment {} is smaller than required {}",
+                            seg,
+                            entry.size
+                        );
+                        MigrationSpecEntry::Shm(ShmMigrationSpecEntry {
+                            size: entry.size,
+                            handle_idx: entry.handle_idx,
+                        })
+                    } else if !host_mem_free_segments.is_empty() {
+                        let seg = host_mem_free_segments.pop().unwrap();
+                        assert!(
+                            seg >= entry.size,
+                            "Host mem segment {} is smaller than required {}",
+                            seg,
+                            entry.size
+                        );
+                        MigrationSpecEntry::HostMem(HybridMigrationSpecEntry {
+                            size: entry.size,
+                            handle_idx: entry.handle_idx,
+                        })
+                    } else {
+                        MigrationSpecEntry::Storage(HybridMigrationSpecEntry {
+                            size: entry.size,
+                            handle_idx: entry.handle_idx,
+                        })
+                    };
+                    migration_entries.push(spec_entry);
                     accu_size += entry.size;
                 }
                 if !migration_entries.is_empty() {
-                    src_list.push((
-                        *src_pid,
+                    out_of_gpu_list.push((
+                        *out_from_gpu_pid,
                         MigrationSpec {
                             device_map: HashMap::from([(global_id, migration_entries)]),
                         },
-                        src_rpc_client.clone(),
-                        Arc::clone(src_mapping),
+                        rpc_client.clone(),
+                        Arc::clone(dev_mapping),
                     ));
                 }
             }
         }
-        if accu_size < dst_required_size {
+        if accu_size < into_gpu_required_size {
             tracing::warn!(
                 "Not enough data to migrate for device {:?}: required {}, but only {}",
                 global_id,
-                dst_required_size,
+                into_gpu_required_size,
                 accu_size
             );
         }
     }
 
-    let dst_entries = match dst.1 {
-        DstRequestArgs::ResidualData(process_residual_data) => process_residual_data
+    let into_gpu_entries = match into_gpu.1 {
+        DeviceRequestArgs::ResidualData(process_residual_data) => process_residual_data
             .allocations
             .into_iter()
             .map(|(global_id, entries)| {
@@ -90,25 +130,61 @@ pub(crate) fn two_processes_task(
                     global_id,
                     entries
                         .into_iter()
-                        .map(|data_entry| ShmMigrationSpecEntry {
-                            size: data_entry.size,
-                            handle_idx: data_entry.handle_idx,
+                        .filter_map(|data_entry| {
+                            let buffer_id = BufferId {
+                                pid: into_gpu.0,
+                                device_id: global_id,
+                                block_id: data_entry.handle_idx,
+                                size: data_entry.size,
+                            };
+                            if shm_buffer_mgr.get_buffer(&buffer_id).is_some() {
+                                // in SHM
+                                Some(MigrationSpecEntry::Shm(ShmMigrationSpecEntry {
+                                    size: data_entry.size,
+                                    handle_idx: data_entry.handle_idx,
+                                }))
+                            } else {
+                                match hybrid_buffer_mgr.get_buffer_location(&buffer_id) {
+                                    Some(location) => {
+                                        // in host mem or storage
+                                        let spec_entry = HybridMigrationSpecEntry {
+                                            size: data_entry.size,
+                                            handle_idx: data_entry.handle_idx,
+                                        };
+                                        Some(match location {
+                                            BufferLocation::HostMem => {
+                                                MigrationSpecEntry::HostMem(spec_entry)
+                                            }
+                                            BufferLocation::Storage => {
+                                                MigrationSpecEntry::Storage(spec_entry)
+                                            }
+                                        })
+                                    }
+                                    None => {
+                                        tracing::error!(
+                                            "Data to migrate not found in SHM or host mem: {:?}",
+                                            buffer_id
+                                        );
+                                        None
+                                    }
+                                }
+                            }
                         })
                         .collect(),
                 )
             })
             .collect::<HashMap<_, _>>(),
-        DstRequestArgs::Allocation(_) => HashMap::new(),
+        DeviceRequestArgs::Allocation(_) => HashMap::new(),
     };
     DataMigrationTask::new(
-        src_list,
+        out_of_gpu_list,
         (
-            dst.0,
+            into_gpu.0,
             MigrationSpec {
-                device_map: dst_entries,
+                device_map: into_gpu_entries,
             },
-            dst.2,
-            Arc::clone(&dst.3),
+            into_gpu.2,
+            Arc::clone(&into_gpu.3),
         ),
         shm_buffer_mgr,
         hybrid_buffer_mgr,

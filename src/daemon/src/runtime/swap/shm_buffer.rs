@@ -12,9 +12,12 @@ pub struct ShmBufferManager {
     inner: Mutex<ShmBufferInner>,
 }
 
+type Offset = u64;
+type AllocationCapacity = u64;
+
 struct ShmBufferInner {
     bookkeeping: HashMap<BufferId, AllocationInfo>,
-    avail_addrs: BTreeMap<u64, u64>,
+    avail_addrs: BTreeMap<Offset, AllocationCapacity>,
 }
 
 impl ShmBufferManager {
@@ -83,6 +86,17 @@ impl ShmBufferManager {
             }
             will_keep
         });
+    }
+
+    /// Returns: a list of lengths of free segments
+    pub fn free_segments(&self) -> Vec<u64> {
+        self.inner
+            .lock()
+            .unwrap()
+            .avail_addrs
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub unsafe fn at_offset(&self, offset: u64, size: usize) -> Option<*mut u8> {

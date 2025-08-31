@@ -26,7 +26,7 @@ use crate::{
             PriorityLevel,
         },
         swap::{
-            migration_plan::{two_processes_task, DstRequestArgs},
+            migration_plan::{two_processes_task, DeviceRequestArgs},
             HybridBufferManager, ShmBufferManager,
         },
     },
@@ -313,7 +313,7 @@ impl Scheduler {
     async fn perform_migration(
         incoming_pid: i32,
         active_pid: i32,
-        disable_fut: Option<tokio::task::JoinHandle<Result<(), tarpc::client::RpcError>>>,
+        disable_fut: Option<tokio::task::JoinHandle<Result<(), tarpc::client::RpcError>>>, // future of dev sync completion
         mem_req: Option<MemoryRequest>,
         control: &LinkedHashMap<i32, DaemonServerHandle>,
         shmem_buffer: &Arc<ShmBufferManager>,
@@ -341,7 +341,7 @@ impl Scheduler {
                     })
                     .collect::<HashMap<_, _>>();
                 let devs = requirement.keys().cloned().collect();
-                (DstRequestArgs::Allocation(requirement), devs)
+                (DeviceRequestArgs::Allocation(requirement), devs)
             } else {
                 let (para, fut) = CallParameter::new(ProcessResidualRequest {
                     pid: incoming_pid,
@@ -358,7 +358,7 @@ impl Scheduler {
                     .await
                     .expect("Failed to get incoming process residual data");
                 let devs = res.allocations.keys().cloned().collect();
-                (DstRequestArgs::ResidualData(res), devs)
+                (DeviceRequestArgs::ResidualData(res), devs)
             };
 
             // make sure the current process is device-synchronized
@@ -397,10 +397,10 @@ impl Scheduler {
                 hybrid_buffer.clone(),
             );
             // for statistics
-            swap_out = task.get_src().get(0).map(|(_, spec, _, _)| {
+            swap_out = task.get_out_from_gpu().get(0).map(|(_, spec, _, _)| {
                 spec.device_map
                     .values()
-                    .map(|entries| entries.iter().map(|entry| entry.size).sum::<u64>())
+                    .map(|entries| entries.iter().map(|entry| entry.size()).sum::<u64>())
                     .sum::<u64>()
             });
             task.run().await
