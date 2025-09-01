@@ -68,13 +68,8 @@ impl ShmBufferManager {
         }
     }
 
-    pub fn get_buffer(&self, buf_id: &BufferId) -> Option<u64> {
-        self.inner
-            .lock()
-            .unwrap()
-            .bookkeeping
-            .get(buf_id)
-            .map(|info| info.addr)
+    pub fn get_buffer(&self, buf_id: &BufferId) -> Option<AllocationInfo> {
+        self.inner.lock().unwrap().bookkeeping.get(buf_id).cloned()
     }
 
     pub fn release_process_residual(&self, pid: i32) {

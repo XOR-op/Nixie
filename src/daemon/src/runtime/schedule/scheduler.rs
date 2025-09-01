@@ -400,7 +400,7 @@ impl Scheduler {
             swap_out = task.get_out_from_gpu().get(0).map(|(_, spec, _, _)| {
                 spec.device_map
                     .values()
-                    .map(|entries| entries.iter().map(|entry| entry.size()).sum::<u64>())
+                    .map(|entries| entries.iter().map(|entry| entry.size).sum::<u64>())
                     .sum::<u64>()
             });
             task.run().await

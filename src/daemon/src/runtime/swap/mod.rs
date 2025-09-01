@@ -18,7 +18,7 @@ pub struct BufferId {
 }
 
 #[derive(Debug, Clone)]
-struct AllocationInfo {
+pub struct AllocationInfo {
     addr: u64,
     block_size: u64,
 }

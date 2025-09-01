@@ -11,30 +11,18 @@ use crate::{error::HybridBufferError, runtime::daemon_server::DeviceOrdinalMappi
 use super::{hybrid_buffer::HybridBufferManager, BufferId, ShmBufferManager};
 
 #[derive(Debug, Clone)]
-pub struct ShmMigrationSpecEntry {
+pub struct MigrationSpecEntry {
     pub size: u64,
     pub handle_idx: NonZeroU32,
-}
-
-#[derive(Debug, Clone)]
-pub struct HybridMigrationSpecEntry {
-    pub size: u64,
-    pub handle_idx: NonZeroU32,
-}
-
-#[derive(Debug, Clone)]
-pub enum MigrationSpecEntry {
-    Shm(ShmMigrationSpecEntry),
-    HostMem(HybridMigrationSpecEntry),
-    Storage(HybridMigrationSpecEntry),
 }
 
 impl MigrationSpecEntry {
-    pub fn size(&self) -> u64 {
-        match self {
-            MigrationSpecEntry::Shm(entry) => entry.size,
-            MigrationSpecEntry::HostMem(entry) => entry.size,
-            MigrationSpecEntry::Storage(entry) => entry.size,
+    pub fn to_buffer_id(&self, pid: i32, device_id: GlobalDeviceId) -> BufferId {
+        BufferId {
+            pid,
+            device_id,
+            block_id: self.handle_idx,
+            size: self.size,
         }
     }
 }
@@ -44,8 +32,18 @@ pub struct MigrationSpec {
 }
 
 pub struct DataMigrationTask {
+    // movement involving client processes
     out_from_gpu: Vec<(i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>)>,
     into_gpu: (i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>),
+
+    // reorganization of buffers within daemon
+    storage_to_shm: Vec<BufferId>,
+    host_mem_to_shm: Vec<BufferId>,
+    shm_to_host_mem: Vec<BufferId>,
+    shm_to_storage: Vec<BufferId>,
+    storage_to_host_mem: Vec<BufferId>,
+    host_mem_to_storage: Vec<BufferId>,
+
     shm_buffer_mgr: Arc<ShmBufferManager>,
     hybrid_buffer_mgr: Arc<HybridBufferManager>,
 }
@@ -54,12 +52,24 @@ impl DataMigrationTask {
     pub fn new(
         out_from_gpu: Vec<(i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>)>,
         into_gpu: (i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>),
+        storage_to_shm: Vec<BufferId>,
+        host_mem_to_shm: Vec<BufferId>,
+        shm_to_host_mem: Vec<BufferId>,
+        shm_to_storage: Vec<BufferId>,
+        storage_to_host_mem: Vec<BufferId>,
+        host_mem_to_storage: Vec<BufferId>,
         shm_buffer_mgr: Arc<ShmBufferManager>,
         hybrid_buffer_mgr: Arc<HybridBufferManager>,
     ) -> Self {
         Self {
             out_from_gpu,
             into_gpu,
+            storage_to_shm,
+            host_mem_to_shm,
+            shm_to_host_mem,
+            shm_to_storage,
+            storage_to_host_mem,
+            host_mem_to_storage,
             shm_buffer_mgr,
             hybrid_buffer_mgr,
         }
@@ -86,7 +96,7 @@ impl DataMigrationTask {
         for (pid, spec, rpc_client, mapping) in self.out_from_gpu {
             for (device_id, entries) in spec.device_map {
                 largest_transfer_size =
-                    largest_transfer_size.max(entries.iter().map(|e| e.size()).sum::<u64>());
+                    largest_transfer_size.max(entries.iter().map(|e| e.size).sum::<u64>());
                 src_per_device.entry(device_id).or_insert(Vec::new()).push((
                     pid,
                     mapping
@@ -120,7 +130,7 @@ impl DataMigrationTask {
                 .real_to_visible(device)
                 .unwrap_or_else(|| todo!("Handle missing device mapping"));
             largest_transfer_size =
-                largest_transfer_size.max(dst_entries.iter().map(|e| e.size()).sum::<u64>());
+                largest_transfer_size.max(dst_entries.iter().map(|e| e.size).sum::<u64>());
             task_handles.push(tokio::spawn(async move {
                 Self::run_for_device(
                     device,
@@ -184,7 +194,7 @@ impl DataMigrationTask {
             i32,
             ProcessLocalDeviceId,
             SidecarClient,
-            Vec<ShmMigrationSpecEntry>,
+            Vec<MigrationSpecEntry>,
         )>,
         shm_buffer_mgr: Arc<ShmBufferManager>,
         transfer_token_tx: mpsc::UnboundedSender<MigrationResponse>,
@@ -230,7 +240,7 @@ impl DataMigrationTask {
             i32,
             ProcessLocalDeviceId,
             SidecarClient,
-            Vec<ShmMigrationSpecEntry>,
+            Vec<MigrationSpecEntry>,
         ),
         shm_buffer_mgr: Arc<ShmBufferManager>,
         mut notification_rx: mpsc::UnboundedReceiver<MigrationResponse>,
@@ -277,7 +287,7 @@ async fn host_to_device_transfer_inner(
     global_id: GlobalDeviceId,
     into_gpu_pid: i32,
     dst_device: ProcessLocalDeviceId,
-    into_gpu_entry: ShmMigrationSpecEntry,
+    into_gpu_entry: MigrationSpecEntry,
     rpc_client: &SidecarClient,
     shm_buffer_mgr: &ShmBufferManager,
 ) {
@@ -287,9 +297,12 @@ async fn host_to_device_transfer_inner(
         block_id: into_gpu_entry.handle_idx,
         size: into_gpu_entry.size,
     };
-    let offset = shm_buffer_mgr.get_buffer(&buffer_id).unwrap_or_else(|| {
-        panic!("Failed to get buffer for migration: {:?}", buffer_id);
-    });
+    let offset = shm_buffer_mgr
+        .get_buffer(&buffer_id)
+        .unwrap_or_else(|| {
+            panic!("Failed to get buffer for migration: {:?}", buffer_id);
+        })
+        .addr;
     let args = MigrationArgs {
         host_buffer_offset: offset,
         size: into_gpu_entry.size,
@@ -307,53 +320,38 @@ async fn host_to_device_transfer_inner(
 }
 
 async fn hybrid_to_shm_transfer_inner(
-    pid: i32,
-    device_id: GlobalDeviceId,
-    src_entry: HybridMigrationSpecEntry,
+    buffer_id: &BufferId,
     shm_buffer_mgr: &ShmBufferManager,
     shm_offset: u64,
     hybrid_buffer_mgr: &HybridBufferManager,
 ) -> Result<(), HybridBufferError> {
-    let buffer_id = BufferId {
-        pid,
-        device_id,
-        block_id: src_entry.handle_idx,
-        size: src_entry.size,
-    };
     let buf_ref = unsafe {
         std::slice::from_raw_parts_mut(
             shm_buffer_mgr
-                .at_offset(shm_offset, src_entry.size as usize)
+                .at_offset(shm_offset, buffer_id.size as usize)
                 .unwrap(),
-            src_entry.size as usize,
+            buffer_id.size as usize,
         )
     };
-    hybrid_buffer_mgr.load_to(&buffer_id, buf_ref).await?;
+    hybrid_buffer_mgr.load_to(buffer_id, buf_ref).await?;
     Ok(())
 }
 
 async fn shm_to_hybrid_transfer_inner(
-    pid: i32,
-    device_id: GlobalDeviceId,
-    src_entry: ShmMigrationSpecEntry,
+    buffer_id: &BufferId,
     shm_buffer_mgr: &ShmBufferManager,
     hybrid_buffer_mgr: &HybridBufferManager,
 ) -> Result<(), HybridBufferError> {
-    let buffer_id = BufferId {
-        pid,
-        device_id,
-        block_id: src_entry.handle_idx,
-        size: src_entry.size,
-    };
     let buf_offset = shm_buffer_mgr
         .get_buffer(&buffer_id)
-        .ok_or(HybridBufferError::NoBufferId)?;
+        .ok_or(HybridBufferError::NoBufferId)?
+        .addr;
     let buf_ref = unsafe {
         std::slice::from_raw_parts(
             shm_buffer_mgr
-                .at_offset(buf_offset, src_entry.size as usize)
+                .at_offset(buf_offset, buffer_id.size as usize)
                 .unwrap(),
-            src_entry.size as usize,
+            buffer_id.size as usize,
         )
     };
     hybrid_buffer_mgr.store(&buffer_id, buf_ref).await?;
