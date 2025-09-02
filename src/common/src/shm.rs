@@ -3,7 +3,7 @@ use std::{num::NonZeroU32, u32};
 
 use nix::libc;
 
-use crate::{sync::IpcMutex, HANDLE_NUM, MAX_GPUS};
+use crate::{HANDLE_NUM, MAX_GPUS, sync::IpcMutex};
 
 /// There should be no side effects of the drop.
 pub(crate) trait ReInitializable {
@@ -33,8 +33,10 @@ impl AllocationTable {
 
 impl ReInitializable for AllocationTable {
     unsafe fn reinit_from_uninited(&mut self) {
-        self.entry.reinit();
-        self.handle_list.reinit_from_uninited();
+        unsafe {
+            self.entry.reinit();
+            self.handle_list.reinit_from_uninited();
+        }
     }
 }
 impl HandleList {
@@ -207,18 +209,20 @@ impl Shm {
             return Err(libc::EINVAL);
         }
         // create mmap
-        let ptr = libc::mmap(
-            core::ptr::null_mut(),
-            len as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            shm_fd,
-            0,
-        );
+        let ptr = unsafe {
+            libc::mmap(
+                core::ptr::null_mut(),
+                len as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                shm_fd,
+                0,
+            )
+        };
         if ptr == libc::MAP_FAILED {
             Err(nix::errno::Errno::last_raw())
         } else {
-            let r = Pin::new(&mut *(ptr as *mut Self));
+            let r = unsafe { Pin::new(&mut *(ptr as *mut Self)) };
             for alloc_table in r.alloc_tables.iter() {
                 // Increase ref count for each allocation table
                 alloc_table.increase_ref_count();
@@ -228,14 +232,16 @@ impl Shm {
     }
 
     unsafe fn close(&mut self) {
-        for alloc_table in self.alloc_tables.iter_mut() {
-            // Decrease ref count for each allocation table
-            alloc_table.close();
+        unsafe {
+            for alloc_table in self.alloc_tables.iter_mut() {
+                // Decrease ref count for each allocation table
+                alloc_table.close();
+            }
+            libc::munmap(
+                self as *const Self as *mut libc::c_void,
+                self.all_len as usize,
+            );
         }
-        libc::munmap(
-            self as *const Self as *mut libc::c_void,
-            self.all_len as usize,
-        );
     }
 }
 

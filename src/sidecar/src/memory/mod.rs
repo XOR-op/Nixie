@@ -2,19 +2,19 @@ mod streaming;
 use std::{collections::HashMap, num::NonZeroU32};
 
 use cudarc::driver::sys::{
-    cudaError_enum, lib as cuda_lib, CUmemAccessDesc, CUmemAllocationHandleType,
-    CUmemAllocationProp, CUmemAllocationType, CUmemLocation, CUmemLocationType,
+    CUmemAccessDesc, CUmemAllocationHandleType, CUmemAllocationProp, CUmemAllocationType,
+    CUmemLocation, CUmemLocationType, cudaError_enum, lib as cuda_lib,
 };
 use nihil_common::{
-    shm::{AllocationEntry, AllocationTable, HandleList, PhysicalMemoryHandle},
     MAX_ALLOCATION_SIZE,
+    shm::{AllocationEntry, AllocationTable, HandleList, PhysicalMemoryHandle},
 };
 
 use crate::{
     check_cu_err,
     schedule::{LaunchType, SCHED_CTL},
 };
-pub use streaming::{init_memory_migration_ctl, MEMORY_MIGRATION_CTL};
+pub use streaming::{MEMORY_MIGRATION_CTL, init_memory_migration_ctl};
 
 pub(super) fn default_alloc_prop(device: i32) -> CUmemAllocationProp {
     CUmemAllocationProp {

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
 use nihil_common::{
-    general::pretty_size, rpc::SidecarClient, GlobalDeviceId, MigrationArgs, MigrationResponse,
-    ProcessLocalDeviceId,
+    GlobalDeviceId, MigrationArgs, MigrationResponse, ProcessLocalDeviceId, general::pretty_size,
+    rpc::SidecarClient,
 };
 use tokio::sync::mpsc;
 
@@ -11,7 +11,7 @@ use crate::{
     runtime::{daemon_server::DeviceOrdinalMapping, migration::hybrid_buffer::BufferLocation},
 };
 
-use super::{hybrid_buffer::HybridBufferManager, BufferId, ShmBufferManager};
+use super::{BufferId, ShmBufferManager, hybrid_buffer::HybridBufferManager};
 
 #[derive(Debug, Clone)]
 pub struct MigrationSpecEntry {

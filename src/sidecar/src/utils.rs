@@ -1,5 +1,5 @@
 use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
-use nihil_common::{MemoryRequest, CUDA_PROCESS_RESERVATION_SIZE};
+use nihil_common::{CUDA_PROCESS_RESERVATION_SIZE, MemoryRequest};
 
 use crate::{
     env_config::sidecar_config,

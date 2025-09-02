@@ -1,19 +1,19 @@
 use std::{collections::HashMap, sync::Arc};
 
-use nihil_common::{rpc::SidecarClient, GlobalDeviceId, MAX_ALLOCATION_SIZE};
+use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE, rpc::SidecarClient};
 
 use crate::{
     control::ProcessResidualData,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        migration::{hybrid_buffer::BufferLocation, BufferId},
+        migration::{BufferId, hybrid_buffer::BufferLocation},
     },
 };
 
 use super::{
+    ShmBufferManager,
     hybrid_buffer::HybridBufferManager,
     migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry},
-    ShmBufferManager,
 };
 
 #[derive(Debug, Clone)]

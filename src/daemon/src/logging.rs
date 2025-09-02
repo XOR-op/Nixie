@@ -3,7 +3,7 @@ use std::str::FromStr;
 use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub struct SystemTime;

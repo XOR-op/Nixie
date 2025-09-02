@@ -13,7 +13,7 @@ use crate::{
 };
 use cudarc::driver::result::device;
 pub use daemon::Daemon;
-use nihil_common::{general::CallParameter, GlobalDeviceId};
+use nihil_common::{GlobalDeviceId, general::CallParameter};
 pub(crate) use schedule::{ClientState, Priority};
 
 fn get_user() -> Option<nix::unistd::User> {

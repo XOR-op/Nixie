@@ -65,11 +65,13 @@ impl<T> IpcMutex<T> {
 
 impl<T: ReInitializable> ReInitializable for IpcMutex<T> {
     unsafe fn reinit_from_uninited(&mut self) {
-        self.ref_count = AtomicU8::new(1);
-        self.lock = core::mem::zeroed();
-        libc::sem_init(&mut self.lock, 1, 1);
-        // Safety: T and UnsafeCell<T> share the same memory layout.
-        self.inner.get_mut().reinit_from_uninited();
+        unsafe {
+            self.ref_count = AtomicU8::new(1);
+            self.lock = core::mem::zeroed();
+            libc::sem_init(&mut self.lock, 1, 1);
+            // Safety: T and UnsafeCell<T> share the same memory layout.
+            self.inner.get_mut().reinit_from_uninited();
+        }
     }
 }
 

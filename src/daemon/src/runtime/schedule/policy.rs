@@ -5,9 +5,9 @@ use std::{
 
 use nihil_common::ActivityUpdate;
 
-use super::{scheduler::ActiveClientState, Priority};
+use super::{Priority, scheduler::ActiveClientState};
 
-use super::{statistics::ClientStatistics, PriorityLevel};
+use super::{PriorityLevel, statistics::ClientStatistics};
 
 #[derive(Debug, Clone)]
 pub struct SchedRequest {

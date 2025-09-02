@@ -3,7 +3,8 @@ use std::{
     sync::Mutex,
 };
 
-use nihil_common::{shm_buffer::ShmBuffer, MAX_ALLOCATION_SIZE};
+use nihil_common::{MAX_ALLOCATION_SIZE, shm_buffer::ShmBuffer};
+use tokio::sync::oneshot;
 
 use super::{AllocationInfo, BufferId};
 
@@ -18,6 +19,7 @@ type AllocationCapacity = u64;
 struct ShmBufferInner {
     bookkeeping: HashMap<BufferId, AllocationInfo>,
     avail_addrs: BTreeMap<Offset, AllocationCapacity>,
+    pending_reservations: Vec<oneshot::Sender<()>>,
 }
 
 impl ShmBufferInner {
@@ -37,8 +39,19 @@ impl ShmBufferInner {
             .insert(buf_id.clone(), AllocationInfo { addr, block_size });
         Some(addr)
     }
+
+    fn notify_reservation(inner: &mut std::sync::MutexGuard<'_, Self>, mut cnt: usize) {
+        // TODO: better scheduling strategy
+        while cnt > 0
+            && let Some(tx) = inner.pending_reservations.pop()
+        {
+            let _ = tx.send(());
+            cnt -= 1;
+        }
+    }
 }
 
+// Basic operations
 impl ShmBufferManager {
     pub fn new(shm_path: &str, shm_size: usize) -> Result<Self, std::io::Error> {
         assert!(
@@ -58,52 +71,13 @@ impl ShmBufferManager {
             inner: Mutex::new(ShmBufferInner {
                 bookkeeping: HashMap::new(),
                 avail_addrs,
+                pending_reservations: Vec::new(),
             }),
         })
     }
 
-    pub fn try_reserve(&self, buf_id: &BufferId) -> Option<u64> {
-        let mut inner = self.inner.lock().unwrap();
-        ShmBufferInner::reserve_inner(&mut inner, buf_id)
-    }
-
-    pub async fn reserve(&self, buf_id: &BufferId) -> u64 {
-        loop {
-            let mut inner = self.inner.lock().unwrap();
-            if let Some(res) = ShmBufferInner::reserve_inner(&mut inner, buf_id) {
-                return res;
-            }
-            let notify_fut = self.notify.notified();
-            tokio::pin!(notify_fut);
-            notify_fut.as_mut().enable();
-            drop(inner);
-            notify_fut.await;
-        }
-    }
-
-    pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(info) = inner.bookkeeping.remove(buf_id) {
-            inner.avail_addrs.insert(info.addr, info.block_size);
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
     pub fn get_buffer(&self, buf_id: &BufferId) -> Option<AllocationInfo> {
         self.inner.lock().unwrap().bookkeeping.get(buf_id).cloned()
-    }
-
-    pub fn release_process_residual(&self, pid: i32) {
-        let inner = &mut *self.inner.lock().unwrap();
-        inner.bookkeeping.retain(|buf_id, info| {
-            let will_keep = buf_id.pid != pid;
-            if !will_keep {
-                inner.avail_addrs.insert(info.addr, info.block_size);
-            }
-            will_keep
-        });
     }
 
     /// Returns: a list of lengths of free segments
@@ -118,6 +92,48 @@ impl ShmBufferManager {
     }
 
     pub unsafe fn at_offset(&self, offset: u64, size: usize) -> Option<*mut u8> {
-        self.shm_buffer.at_offset(offset, size)
+        unsafe { self.shm_buffer.at_offset(offset, size) }
+    }
+}
+
+// Allocation and release logic
+impl ShmBufferManager {
+    pub fn try_reserve(&self, buf_id: &BufferId) -> Option<u64> {
+        let mut inner = self.inner.lock().unwrap();
+        ShmBufferInner::reserve_inner(&mut inner, buf_id)
+    }
+
+    pub async fn reserve(&self, buf_id: &BufferId) -> u64 {
+        loop {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(res) = ShmBufferInner::reserve_inner(&mut inner, buf_id) {
+                return res;
+            }
+            let (tx, rx) = oneshot::channel();
+            inner.pending_reservations.push(tx);
+            drop(inner);
+            let _ = rx.await;
+        }
+    }
+
+    pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(info) = inner.bookkeeping.remove(buf_id) {
+            inner.avail_addrs.insert(info.addr, info.block_size);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn release_process_residual(&self, pid: i32) {
+        let inner = &mut *self.inner.lock().unwrap();
+        inner.bookkeeping.retain(|buf_id, info| {
+            let will_keep = buf_id.pid != pid;
+            if !will_keep {
+                inner.avail_addrs.insert(info.addr, info.block_size);
+            }
+            will_keep
+        });
     }
 }

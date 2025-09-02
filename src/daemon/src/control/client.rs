@@ -4,7 +4,7 @@ use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::{error::DaemonError, ProcArgs, UpdateConfigArgs};
+use crate::{ProcArgs, UpdateConfigArgs, error::DaemonError};
 use nihil_common::general::pretty_size;
 
 use super::{ControllableClient, PrefetchMsg};

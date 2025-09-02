@@ -1,4 +1,4 @@
-use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUstream};
+use cudarc::driver::sys::{CUstream, cudaError_enum, lib as cuda_lib};
 use nihil_common::{
     shm::{AllocationTable, Shm, ShmGuard},
     shm_buffer::ShmBuffer,

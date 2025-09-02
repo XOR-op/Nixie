@@ -1,9 +1,9 @@
 use nihil_common::{
-    general::CallParameter, ActivityUpdate, MigrationArgs, MigrationResponse, SchedulingArgs,
+    ActivityUpdate, MigrationArgs, MigrationResponse, SchedulingArgs, general::CallParameter,
 };
 use tarpc::context::Context;
 
-use super::init::{init_comm, COMM};
+use super::init::{COMM, init_comm};
 use super::msg::{A2SMessage, S2AMessage};
 
 macro_rules! chan_send {

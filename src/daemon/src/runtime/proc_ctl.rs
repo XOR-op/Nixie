@@ -2,7 +2,7 @@
 use std::{collections::HashMap, os::fd::OwnedFd};
 
 use nihil_common::{
-    general::CallParameter, rpc::SidecarClient, shm::ShmGuard, ProcessLocalDeviceId, MAX_GPUS,
+    MAX_GPUS, ProcessLocalDeviceId, general::CallParameter, rpc::SidecarClient, shm::ShmGuard,
 };
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
@@ -12,7 +12,7 @@ use crate::{
     runtime::schedule::control::ScheduleControlReq,
 };
 
-use super::{daemon_server::DeviceOrdinalMapping, ProcCtlReq};
+use super::{ProcCtlReq, daemon_server::DeviceOrdinalMapping};
 
 pub(crate) struct ProcessControl {
     peer_pid: i32,

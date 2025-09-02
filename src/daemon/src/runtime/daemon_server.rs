@@ -5,8 +5,8 @@ use crate::{
 use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
 use nihil_common::{
-    rpc::{rpc_multiplex_twoway, Daemon, SidecarClient},
     GlobalDeviceId, HandshakeResponse, ProcessLocalDeviceId,
+    rpc::{Daemon, SidecarClient, rpc_multiplex_twoway},
 };
 use nix::libc::c_int;
 use std::{
@@ -14,9 +14,9 @@ use std::{
     future::Future,
     os::fd::{FromRawFd, OwnedFd},
     sync::Arc,
-    task::{ready, Poll},
+    task::{Poll, ready},
 };
-use syscalls::{syscall, Sysno};
+use syscalls::{Sysno, syscall};
 use tarpc::{
     context::Context,
     server::{BaseChannel, Channel},
@@ -25,7 +25,7 @@ use tarpc::{
 use tokio::{
     io::unix::AsyncFd,
     net::UnixStream,
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
     task::JoinHandle,
 };
 

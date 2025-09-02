@@ -4,7 +4,7 @@ use nihil_common::rpc::DaemonClient;
 use super::msg::{A2SMessage, S2AMessage};
 use crate::{
     info_eprintln,
-    memory::{init_memory_migration_ctl, MEMORY_MIGRATION_CTL},
+    memory::{MEMORY_MIGRATION_CTL, init_memory_migration_ctl},
     schedule::Scheduler,
     warn_eprintln,
 };
@@ -52,7 +52,9 @@ impl Controller {
                                     super::init::init_buffer_by_handshake_resp(resp)
                                 });
                             } else {
-                                panic!("Handshake failed, daemon did not respond with handshake response");
+                                panic!(
+                                    "Handshake failed, daemon did not respond with handshake response"
+                                );
                             }
                             Ok(())
                         }

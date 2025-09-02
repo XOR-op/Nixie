@@ -1,9 +1,9 @@
 use cudarc::driver::sys::lib as cuda_lib;
-use nihil_common::shm_buffer::ShmBuffer;
 use nihil_common::ProcessLocalDeviceId;
+use nihil_common::shm_buffer::ShmBuffer;
 
-use crate::comm::init::{init_comm, COMM};
-use crate::{check_cu_err, set_device, shm_buf, GenericData};
+use crate::comm::init::{COMM, init_comm};
+use crate::{GenericData, check_cu_err, set_device, shm_buf};
 
 pub(crate) fn should_have_initialized() -> GenericData {
     panic!("GENERIC_DATA should already be initialized by init_comm");

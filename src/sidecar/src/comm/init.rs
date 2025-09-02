@@ -7,7 +7,7 @@ use crate::comm::controller::Controller;
 use colored::Colorize;
 use futures::StreamExt;
 
-use nihil_common::rpc::{rpc_multiplex_twoway, DaemonClient, Sidecar};
+use nihil_common::rpc::{DaemonClient, Sidecar, rpc_multiplex_twoway};
 use nihil_common::{Handshake, HandshakeResponse};
 use tarpc::{
     server::{BaseChannel, Channel},
@@ -15,7 +15,7 @@ use tarpc::{
 };
 
 use crate::comm::msg::A2SMessage;
-use crate::{check_cu_err, global_shm_buffer, info_eprintln, schedule, set_device, GENERIC_DATA};
+use crate::{GENERIC_DATA, check_cu_err, global_shm_buffer, info_eprintln, schedule, set_device};
 
 use crate::init::{init_cuda_env, init_generic_data, init_shm_buffer};
 

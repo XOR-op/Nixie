@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
 use nihil_common::{
-    general::CallParameter, rpc::SidecarClient, ActivityUpdate, GlobalDeviceId, MemoryRequest,
-    SchedulingArgs, MAX_GPUS,
+    ActivityUpdate, GlobalDeviceId, MAX_GPUS, MemoryRequest, SchedulingArgs,
+    general::CallParameter, rpc::SidecarClient,
 };
 use tokio::sync::mpsc;
 
@@ -20,19 +20,19 @@ use crate::{
     runtime::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
-            migration_plan::{two_processes_task, DeviceRequestArgs},
             HybridBufferManager, ShmBufferManager,
+            migration_plan::{DeviceRequestArgs, two_processes_task},
         },
         schedule::{
+            PriorityLevel,
             control::{GetStateResponse, ScheduleControlReq},
             policy::IdleRequestType,
             statistics::PreemptionReason,
-            PriorityLevel,
         },
     },
 };
 
-use crate::runtime::{daemon_server::DaemonServerHandle, ProcCtlReq};
+use crate::runtime::{ProcCtlReq, daemon_server::DaemonServerHandle};
 
 use super::{
     policy::{GenericRequest, ScheduleQueue},

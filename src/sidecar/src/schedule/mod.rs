@@ -1,9 +1,9 @@
 use std::{
-    sync::{atomic::AtomicBool, Condvar, Mutex, MutexGuard},
+    sync::{Condvar, Mutex, MutexGuard, atomic::AtomicBool},
     time::Duration,
 };
 
-use nihil_common::{general::CallParameter, ActivityUpdate, MemoryRequest, SchedulingArgs};
+use nihil_common::{ActivityUpdate, MemoryRequest, SchedulingArgs, general::CallParameter};
 use stats::LaunchStats;
 
 use cudarc::driver::sys::lib as cuda_lib;

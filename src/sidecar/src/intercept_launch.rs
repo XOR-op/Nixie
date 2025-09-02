@@ -1,10 +1,10 @@
 use std::{
     ffi::c_void,
-    sync::{atomic::AtomicBool, OnceLock},
+    sync::{OnceLock, atomic::AtomicBool},
 };
 
-use cudarc::driver::sys::{cudaError_enum, CUgraphExec, CUstream};
-use nix::libc::{self, dlsym, RTLD_NEXT};
+use cudarc::driver::sys::{CUgraphExec, CUstream, cudaError_enum};
+use nix::libc::{self, RTLD_NEXT, dlsym};
 
 use crate::{
     generate_init_fn, generate_init_fn_as,
@@ -20,7 +20,7 @@ pub struct CudaDim3 {
 static IS_DURING_CAPTURE: AtomicBool = AtomicBool::new(false);
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaLaunchKernel(
     func: *const libc::c_void,
     gridDim: CudaDim3,
@@ -45,7 +45,7 @@ pub extern "C" fn cudaLaunchKernel(
 }
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaGraphLaunch(graph: CUgraphExec, stream: CUstream) -> cudaError_enum {
     type CudaGraphLaunchType = extern "C" fn(CUgraphExec, CUstream) -> cudaError_enum; // we use CU here since they are actually opaque pointers; can be fixed later
     static GRAPH_LAUNCH_FN: OnceLock<CudaGraphLaunchType> = OnceLock::new();
@@ -56,7 +56,7 @@ pub extern "C" fn cudaGraphLaunch(graph: CUgraphExec, stream: CUstream) -> cudaE
 }
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaStreamCaptureBegin(stream: CUstream, mode: i32) -> cudaError_enum {
     type CudaStreamBeginCaptureType = extern "C" fn(CUstream, i32) -> cudaError_enum;
     static STREAM_CAPTURE_BEGIN_FN: OnceLock<CudaStreamBeginCaptureType> = OnceLock::new();
@@ -67,7 +67,7 @@ pub extern "C" fn cudaStreamCaptureBegin(stream: CUstream, mode: i32) -> cudaErr
 }
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaStreamEndCapture(stream: CUstream, pGraph: *mut c_void) -> cudaError_enum {
     type CudaStreamEndCaptureType = extern "C" fn(CUstream, *mut c_void) -> cudaError_enum;
     static STREAM_END_CAPTURE_FN: OnceLock<CudaStreamEndCaptureType> = OnceLock::new();

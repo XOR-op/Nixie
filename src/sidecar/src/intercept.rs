@@ -1,10 +1,10 @@
-use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib, CUdevice, CUstream};
+use cudarc::driver::sys::{CUdevice, CUstream, cudaError_enum, lib as cuda_lib};
 use nihil_common::shm::AllocationEntry;
 use nihil_common::{
-    MemoryRequest, CUDA_CONTROL_PLANE_RESERVATION_SIZE, MAX_ALLOCATION_SIZE, MAX_GPUS,
-    MIN_ALLOCATION_SIZE,
+    CUDA_CONTROL_PLANE_RESERVATION_SIZE, MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE,
+    MemoryRequest,
 };
-use nix::libc::{self, c_char, c_int, dlsym, RTLD_NEXT};
+use nix::libc::{self, RTLD_NEXT, c_char, c_int, dlsym};
 use nix::sys::stat::mode_t;
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
@@ -13,7 +13,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
 use crate::memory::{deallocate_list, get_max_allocation_size, populate_entry};
 use crate::schedule::{LaunchType, SCHED_CTL};
-use crate::{check_cu_err, warn_eprintln, GENERIC_DATA};
+use crate::{GENERIC_DATA, check_cu_err, warn_eprintln};
 
 #[macro_export]
 macro_rules! generate_init_fn_as {
@@ -58,7 +58,7 @@ static SMALL_ALLOCATION: Mutex<BTreeMap<u64, u64>> = Mutex::new(BTreeMap::new())
 static CURRENT_ALLOCATION_SIZE: AtomicU64 = AtomicU64::new(0);
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_enum {
     type CudaMallocType = extern "C" fn(*mut *mut libc::c_void, usize) -> cudaError_enum;
     static MALLOC_FN: OnceLock<CudaMallocType> = OnceLock::new();
@@ -177,7 +177,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
 }
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     type CudaFreeType = extern "C" fn(*mut libc::c_void) -> cudaError_enum;
     static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
@@ -235,7 +235,7 @@ pub enum CudaMemcpyKind {
 }
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaMemcpy(
     dst: *mut libc::c_void,
     src: *const libc::c_void,
@@ -256,7 +256,7 @@ pub extern "C" fn cudaMemcpy(
 }
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaMemcpyAsync(
     dst: *mut libc::c_void,
     src: *const libc::c_void,
@@ -279,7 +279,7 @@ pub extern "C" fn cudaMemcpyAsync(
 }
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaMemset(
     dev_ptr: *mut libc::c_void,
     value: i32,
@@ -295,7 +295,7 @@ pub extern "C" fn cudaMemset(
 
 // cudaMemGetInfo
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaError_enum {
     let mem_get_info_func = get_func_ptr_cuda_mem_get_info();
     init_cuda_env();
@@ -313,7 +313,7 @@ pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaErr
 }
 
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn open(path: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
     type OpenType = extern "C" fn(*const c_char, c_int, mode_t) -> c_int;
     static OPEN_FN: OnceLock<OpenType> = OnceLock::new();
