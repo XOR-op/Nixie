@@ -6,7 +6,10 @@ use nihil_common::{
 };
 use tokio::sync::mpsc;
 
-use crate::{error::HybridBufferError, runtime::daemon_server::DeviceOrdinalMapping};
+use crate::{
+    error::HybridBufferError,
+    runtime::{daemon_server::DeviceOrdinalMapping, migration::hybrid_buffer::BufferLocation},
+};
 
 use super::{hybrid_buffer::HybridBufferManager, BufferId, ShmBufferManager};
 
@@ -176,110 +179,109 @@ impl DataMigrationTask {
         let (transfer_token_tx, transfer_token_rx) =
             tokio::sync::mpsc::unbounded_channel::<MigrationResponse>();
         // H2D direction
-        let h2d_handle = tokio::spawn(Self::host_to_device_transfer(
+        let h2d_handle = tokio::spawn(host_to_device_transfer(
             global_id,
             into_gpu,
             shm_buffer_mgr.clone(),
             transfer_token_rx,
         ));
         // D2H direction
-        Self::device_to_host_transfer(global_id, out_from_gpu, shm_buffer_mgr, transfer_token_tx)
-            .await;
+        device_to_host_transfer(global_id, out_from_gpu, shm_buffer_mgr, transfer_token_tx).await;
         let _ = h2d_handle.await;
     }
+}
 
-    async fn device_to_host_transfer(
-        global_id: GlobalDeviceId,
-        out_from_gpu: Vec<(
-            i32,
-            ProcessLocalDeviceId,
-            SidecarClient,
-            Vec<MigrationSpecEntry>,
-        )>,
-        shm_buffer_mgr: Arc<ShmBufferManager>,
-        transfer_token_tx: mpsc::UnboundedSender<MigrationResponse>,
-    ) {
-        for (out_from_gpu_pid, device, rpc_client, out_from_gpu_entries) in out_from_gpu {
-            // Migrate each entry
-            for out_from_gpu_entry in out_from_gpu_entries {
-                let src_buffer_id = BufferId {
-                    pid: out_from_gpu_pid,
-                    device_id: global_id,
-                    block_id: out_from_gpu_entry.handle_idx,
+async fn device_to_host_transfer(
+    global_id: GlobalDeviceId,
+    out_from_gpu: Vec<(
+        i32,
+        ProcessLocalDeviceId,
+        SidecarClient,
+        Vec<MigrationSpecEntry>,
+    )>,
+    shm_buffer_mgr: Arc<ShmBufferManager>,
+    transfer_token_tx: mpsc::UnboundedSender<MigrationResponse>,
+) {
+    for (out_from_gpu_pid, device, rpc_client, out_from_gpu_entries) in out_from_gpu {
+        // Migrate each entry
+        for out_from_gpu_entry in out_from_gpu_entries {
+            let src_buffer_id = BufferId {
+                pid: out_from_gpu_pid,
+                device_id: global_id,
+                block_id: out_from_gpu_entry.handle_idx,
+                size: out_from_gpu_entry.size,
+            };
+            // Reserve shared memory for the migration
+            if let Some(offset) = shm_buffer_mgr.try_reserve(&src_buffer_id) {
+                let args = MigrationArgs {
+                    host_buffer_offset: offset,
                     size: out_from_gpu_entry.size,
+                    device,
+                    handle_idx: out_from_gpu_entry.handle_idx,
+                    host_to_device: false,
                 };
-                // Reserve shared memory for the migration
-                if let Some(offset) = shm_buffer_mgr.reserve(&src_buffer_id) {
-                    let args = MigrationArgs {
-                        host_buffer_offset: offset,
-                        size: out_from_gpu_entry.size,
-                        device,
-                        handle_idx: out_from_gpu_entry.handle_idx,
-                        host_to_device: false,
-                    };
-                    // Send migration request to the source process
-                    if let Ok(resp) = rpc_client.migrate(tarpc::context::current(), args).await {
-                        let _ = transfer_token_tx.send(resp);
-                    } else {
-                        tracing::warn!("Failed to complete D2H migration RPC to source process");
-                    }
+                // Send migration request to the source process
+                if let Ok(resp) = rpc_client.migrate(tarpc::context::current(), args).await {
+                    let _ = transfer_token_tx.send(resp);
                 } else {
-                    tracing::warn!(
-                        "Failed to reserve shared memory for migration: {:?}",
-                        src_buffer_id
-                    );
+                    tracing::warn!("Failed to complete D2H migration RPC to source process");
                 }
+            } else {
+                tracing::warn!(
+                    "Failed to reserve shared memory for migration: {:?}",
+                    src_buffer_id
+                );
             }
         }
-        drop(transfer_token_tx); // close the channel
     }
+    drop(transfer_token_tx); // close the channel
+}
 
-    async fn host_to_device_transfer(
-        global_id: GlobalDeviceId,
-        into_gpu: (
-            i32,
-            ProcessLocalDeviceId,
-            SidecarClient,
-            Vec<MigrationSpecEntry>,
-        ),
-        shm_buffer_mgr: Arc<ShmBufferManager>,
-        mut notification_rx: mpsc::UnboundedReceiver<MigrationResponse>,
-    ) {
-        let (dst_pid, dst_device, dst_rpc_client, mut dst_entries) = into_gpu;
-        dst_entries.reverse();
-        let mut accu_length = 0;
-        let mut next_entry = dst_entries.pop();
-        while let Some(d2h_resp) = notification_rx.recv().await {
-            accu_length += d2h_resp.size;
-            if let Some(entry) = next_entry.take() {
-                if accu_length >= entry.size {
-                    accu_length -= entry.size;
-                    host_to_device_transfer_inner(
-                        global_id,
-                        dst_pid,
-                        dst_device,
-                        entry,
-                        &dst_rpc_client,
-                        &shm_buffer_mgr,
-                    )
-                    .await;
-                    next_entry = dst_entries.pop();
-                }
+async fn host_to_device_transfer(
+    global_id: GlobalDeviceId,
+    into_gpu: (
+        i32,
+        ProcessLocalDeviceId,
+        SidecarClient,
+        Vec<MigrationSpecEntry>,
+    ),
+    shm_buffer_mgr: Arc<ShmBufferManager>,
+    mut notification_rx: mpsc::UnboundedReceiver<MigrationResponse>,
+) {
+    let (dst_pid, dst_device, dst_rpc_client, mut dst_entries) = into_gpu;
+    dst_entries.reverse();
+    let mut accu_length = 0;
+    let mut next_entry = dst_entries.pop();
+    while let Some(d2h_resp) = notification_rx.recv().await {
+        accu_length += d2h_resp.size;
+        if let Some(entry) = next_entry.take() {
+            if accu_length >= entry.size {
+                accu_length -= entry.size;
+                host_to_device_transfer_inner(
+                    global_id,
+                    dst_pid,
+                    dst_device,
+                    entry,
+                    &dst_rpc_client,
+                    &shm_buffer_mgr,
+                )
+                .await;
+                next_entry = dst_entries.pop();
             }
         }
-        // If there are remaining entries, we need to handle them
-        while let Some(entry) = next_entry {
-            host_to_device_transfer_inner(
-                global_id,
-                dst_pid,
-                dst_device,
-                entry,
-                &dst_rpc_client,
-                &shm_buffer_mgr,
-            )
-            .await;
-            next_entry = dst_entries.pop();
-        }
+    }
+    // If there are remaining entries, we need to handle them
+    while let Some(entry) = next_entry {
+        host_to_device_transfer_inner(
+            global_id,
+            dst_pid,
+            dst_device,
+            entry,
+            &dst_rpc_client,
+            &shm_buffer_mgr,
+        )
+        .await;
+        next_entry = dst_entries.pop();
     }
 }
 
@@ -319,12 +321,22 @@ async fn host_to_device_transfer_inner(
     }
 }
 
+async fn hybrid_to_shm_transfer(
+    host_mem_to_shm: Vec<BufferId>,
+    storage_to_shm: Vec<BufferId>,
+    from_storage_tx: mpsc::UnboundedSender<BufferId>,
+    from_host_mem_tx: mpsc::UnboundedSender<BufferId>,
+    shm_buffer_mgr: Arc<ShmBufferManager>,
+    hybrid_buffer_mgr: Arc<HybridBufferManager>,
+) {
+}
+
 async fn hybrid_to_shm_transfer_inner(
     buffer_id: &BufferId,
     shm_buffer_mgr: &ShmBufferManager,
     shm_offset: u64,
     hybrid_buffer_mgr: &HybridBufferManager,
-) -> Result<(), HybridBufferError> {
+) -> Result<BufferLocation, HybridBufferError> {
     let buf_ref = unsafe {
         std::slice::from_raw_parts_mut(
             shm_buffer_mgr
@@ -333,15 +345,15 @@ async fn hybrid_to_shm_transfer_inner(
             buffer_id.size as usize,
         )
     };
-    hybrid_buffer_mgr.load_to(buffer_id, buf_ref).await?;
-    Ok(())
+    // HybridBufferManager takes care of releasing the buffer
+    hybrid_buffer_mgr.load_to(buffer_id, buf_ref).await
 }
 
 async fn shm_to_hybrid_transfer_inner(
     buffer_id: &BufferId,
     shm_buffer_mgr: &ShmBufferManager,
     hybrid_buffer_mgr: &HybridBufferManager,
-) -> Result<(), HybridBufferError> {
+) -> Result<BufferLocation, HybridBufferError> {
     let buf_offset = shm_buffer_mgr
         .get_buffer(&buffer_id)
         .ok_or(HybridBufferError::NoBufferId)?
@@ -354,6 +366,9 @@ async fn shm_to_hybrid_transfer_inner(
             buffer_id.size as usize,
         )
     };
-    hybrid_buffer_mgr.store(&buffer_id, buf_ref).await?;
-    Ok(())
+    let res = hybrid_buffer_mgr.store(&buffer_id, buf_ref).await?;
+    shm_buffer_mgr
+        .release(buffer_id)
+        .map_err(|_| HybridBufferError::NoBufferId)?;
+    Ok(res)
 }

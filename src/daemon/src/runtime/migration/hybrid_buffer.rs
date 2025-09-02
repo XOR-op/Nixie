@@ -54,7 +54,11 @@ impl HybridBufferManager {
         })
     }
 
-    pub async fn store(&self, buffer_id: &BufferId, data: &[u8]) -> Result<(), HybridBufferError> {
+    pub async fn store(
+        &self,
+        buffer_id: &BufferId,
+        data: &[u8],
+    ) -> Result<BufferLocation, HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
         if data.len() > MAX_ALLOCATION_SIZE as usize {
             return Err(HybridBufferError::InvalidInputBuffer);
@@ -65,18 +69,19 @@ impl HybridBufferManager {
             inner
                 .mem_bookkeeping
                 .insert(buffer_id.clone(), block_buffer);
+            Ok(BufferLocation::HostMem)
         } else {
             let alloc_info = inner.save_to_disk(data).await?;
             inner.disk_bookkeeping.insert(buffer_id.clone(), alloc_info);
+            Ok(BufferLocation::Storage)
         }
-        Ok(())
     }
 
     pub async fn load_to(
         &self,
         buffer_id: &BufferId,
         data: &mut [u8],
-    ) -> Result<(), HybridBufferError> {
+    ) -> Result<BufferLocation, HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
         if buffer_id.size > (MAX_ALLOCATION_SIZE as u64) || (data.len() as u64) < buffer_id.size {
             return Err(HybridBufferError::InvalidInputBuffer);
@@ -87,9 +92,12 @@ impl HybridBufferManager {
             }
             data[..block_buffer.0.len()].copy_from_slice(&block_buffer.0);
             inner.put_back(block_buffer);
-            Ok(())
+            Ok(BufferLocation::HostMem)
         } else if let Some(info) = inner.disk_bookkeeping.remove(buffer_id) {
-            inner.load_from_disk(info.addr, buffer_id.size, data).await
+            inner
+                .load_from_disk(info.addr, buffer_id.size, data)
+                .await?;
+            Ok(BufferLocation::Storage)
         } else {
             Err(HybridBufferError::NoBufferId)
         }

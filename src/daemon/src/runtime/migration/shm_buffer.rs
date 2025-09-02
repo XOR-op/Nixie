@@ -20,6 +20,25 @@ struct ShmBufferInner {
     avail_addrs: BTreeMap<Offset, AllocationCapacity>,
 }
 
+impl ShmBufferInner {
+    fn reserve_inner(
+        inner: &mut std::sync::MutexGuard<'_, Self>,
+        buf_id: &BufferId,
+    ) -> Option<u64> {
+        let r = inner
+            .avail_addrs
+            .iter()
+            .find(|(_, size)| **size as u64 >= buf_id.size)?;
+        let (addr, block_size) = (*r.0, *r.1);
+        let len = inner.avail_addrs.remove(&addr);
+        debug_assert!(len.is_some());
+        inner
+            .bookkeeping
+            .insert(buf_id.clone(), AllocationInfo { addr, block_size });
+        Some(addr)
+    }
+}
+
 impl ShmBufferManager {
     pub fn new(shm_path: &str, shm_size: usize) -> Result<Self, std::io::Error> {
         assert!(
@@ -43,19 +62,23 @@ impl ShmBufferManager {
         })
     }
 
-    pub fn reserve(&self, buf_id: &BufferId) -> Option<u64> {
+    pub fn try_reserve(&self, buf_id: &BufferId) -> Option<u64> {
         let mut inner = self.inner.lock().unwrap();
-        let r = inner
-            .avail_addrs
-            .iter()
-            .find(|(_, size)| **size as u64 >= buf_id.size)?;
-        let (addr, block_size) = (*r.0, *r.1);
-        let len = inner.avail_addrs.remove(&addr);
-        debug_assert!(len.is_some());
-        inner
-            .bookkeeping
-            .insert(buf_id.clone(), AllocationInfo { addr, block_size });
-        Some(addr)
+        ShmBufferInner::reserve_inner(&mut inner, buf_id)
+    }
+
+    pub async fn reserve(&self, buf_id: &BufferId) -> u64 {
+        loop {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(res) = ShmBufferInner::reserve_inner(&mut inner, buf_id) {
+                return res;
+            }
+            let notify_fut = self.notify.notified();
+            tokio::pin!(notify_fut);
+            notify_fut.as_mut().enable();
+            drop(inner);
+            notify_fut.await;
+        }
     }
 
     pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {

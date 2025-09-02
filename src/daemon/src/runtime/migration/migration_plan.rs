@@ -6,7 +6,7 @@ use crate::{
     control::ProcessResidualData,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        swap::{hybrid_buffer::BufferLocation, BufferId},
+        migration::{hybrid_buffer::BufferLocation, BufferId},
     },
 };
 

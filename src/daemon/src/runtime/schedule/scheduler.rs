@@ -19,15 +19,15 @@ use crate::{
     error::ScheduleError,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
+        migration::{
+            migration_plan::{two_processes_task, DeviceRequestArgs},
+            HybridBufferManager, ShmBufferManager,
+        },
         schedule::{
             control::{GetStateResponse, ScheduleControlReq},
             policy::IdleRequestType,
             statistics::PreemptionReason,
             PriorityLevel,
-        },
-        swap::{
-            migration_plan::{two_processes_task, DeviceRequestArgs},
-            HybridBufferManager, ShmBufferManager,
         },
     },
 };

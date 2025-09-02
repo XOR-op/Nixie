@@ -21,8 +21,8 @@ use crate::{
     error::{DaemonError, NihilphaseError},
     runtime::{
         daemon_server::DaemonServer,
+        migration::{HybridBufferManager, ShmBufferManager},
         schedule::control::ScheduleControlReq,
-        swap::{HybridBufferManager, ShmBufferManager},
         ProcCtlReq,
     },
 };
