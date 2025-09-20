@@ -91,12 +91,13 @@ impl HybridBufferManager {
                 return Err(HybridBufferError::InvalidInputBuffer);
             }
             data[..block_buffer.0.len()].copy_from_slice(&block_buffer.0);
-            inner.put_back(block_buffer);
+            inner.put_back_mem(block_buffer);
             Ok(BufferLocation::HostMem)
         } else if let Some(info) = inner.disk_bookkeeping.remove(buffer_id) {
             inner
                 .load_from_disk(info.addr, buffer_id.size, data)
                 .await?;
+            inner.put_back_disk(info);
             Ok(BufferLocation::Storage)
         } else {
             Err(HybridBufferError::NoBufferId)
@@ -107,7 +108,7 @@ impl HybridBufferManager {
         let inner = &mut *self.inner.lock().unwrap();
         for (id, mem) in std::mem::take(&mut inner.mem_bookkeeping) {
             if id.pid == pid {
-                inner.put_back(mem);
+                inner.put_back_mem(mem);
             } else {
                 inner.mem_bookkeeping.insert(id, mem);
             }
@@ -174,10 +175,14 @@ impl HybridBufferInner {
         }
     }
 
-    fn put_back(&mut self, buffer: BlockMemBuffer) {
+    fn put_back_mem(&mut self, buffer: BlockMemBuffer) {
         if self.free_mem_buffers.len() < self.max_mem_buffer_count {
             self.free_mem_buffers.push(buffer);
         }
+    }
+
+    fn put_back_disk(&mut self, alloc_info: AllocationInfo) {
+        self.free_disk_buffers.push(alloc_info);
     }
 
     async fn save_to_disk(&mut self, buf: &[u8]) -> Result<AllocationInfo, HybridBufferError> {

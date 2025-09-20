@@ -83,6 +83,7 @@ pub(crate) fn two_processes_task(
                                 Some(MigrationSpecEntry {
                                     size: data_entry.size,
                                     handle_idx: data_entry.handle_idx,
+                                    ready_for_pcie_xfer: true,
                                 })
                             } else {
                                 match hybrid_buffer_mgr.get_buffer_location(&buffer_id) {
@@ -102,6 +103,7 @@ pub(crate) fn two_processes_task(
                                         Some(MigrationSpecEntry {
                                             size: data_entry.size,
                                             handle_idx: data_entry.handle_idx,
+                                            ready_for_pcie_xfer: false,
                                         })
                                     }
                                     None => {
@@ -138,6 +140,7 @@ pub(crate) fn two_processes_task(
                     let spec_entry = MigrationSpecEntry {
                         size: entry.size,
                         handle_idx: entry.handle_idx,
+                        ready_for_pcie_xfer: true, // the buffer is on GPU
                     };
                     // Use SHM first, then host mem, then storage
                     // TODO: handle if segments have variable lengths

@@ -1,3 +1,4 @@
+mod channel;
 mod hybrid_buffer;
 mod migration;
 pub(super) mod migration_plan;

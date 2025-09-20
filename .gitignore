@@ -5,6 +5,7 @@
 
 # Private files
 _private/
+.private/
 
 # Compiled files
 *.o

@@ -120,6 +120,7 @@ impl ShmBufferManager {
         let mut inner = self.inner.lock().unwrap();
         if let Some(info) = inner.bookkeeping.remove(buf_id) {
             inner.avail_addrs.insert(info.addr, info.block_size);
+            ShmBufferInner::notify_reservation(&mut inner, 1);
             Ok(())
         } else {
             Err(())
@@ -127,13 +128,19 @@ impl ShmBufferManager {
     }
 
     pub fn release_process_residual(&self, pid: i32) {
-        let inner = &mut *self.inner.lock().unwrap();
-        inner.bookkeeping.retain(|buf_id, info| {
-            let will_keep = buf_id.pid != pid;
-            if !will_keep {
-                inner.avail_addrs.insert(info.addr, info.block_size);
-            }
-            will_keep
-        });
+        let mut inner = self.inner.lock().unwrap();
+        let mut cnt = 0;
+        {
+            let inner_ref = &mut *inner;
+            inner_ref.bookkeeping.retain(|buf_id, info| {
+                let will_keep = buf_id.pid != pid;
+                if !will_keep {
+                    inner_ref.avail_addrs.insert(info.addr, info.block_size);
+                    cnt += 1;
+                }
+                will_keep
+            });
+        }
+        ShmBufferInner::notify_reservation(&mut inner, cnt);
     }
 }
