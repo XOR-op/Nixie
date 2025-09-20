@@ -1,14 +1,16 @@
 mod channel;
-mod hybrid_buffer;
+mod hostmem_buffer;
 mod migration;
 pub(super) mod migration_plan;
 mod shm_buffer;
+mod storage_buffer;
 
 use std::num::NonZeroU32;
 
-pub use hybrid_buffer::HybridBufferManager;
+pub use hostmem_buffer::HostMemBufferManager;
 use nihil_common::GlobalDeviceId;
 pub use shm_buffer::ShmBufferManager;
+pub use storage_buffer::StorageBufferManager;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BufferId {
@@ -22,4 +24,10 @@ pub struct BufferId {
 pub struct AllocationInfo {
     addr: u64,
     block_size: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BufferLocation {
+    HostMem,
+    Storage,
 }

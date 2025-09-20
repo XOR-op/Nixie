@@ -22,7 +22,7 @@ use crate::{
     runtime::{
         ProcCtlReq,
         daemon_server::DaemonServer,
-        migration::{HybridBufferManager, ShmBufferManager},
+        migration::{HostMemBufferManager, ShmBufferManager, StorageBufferManager},
         schedule::control::ScheduleControlReq,
     },
 };
@@ -103,9 +103,12 @@ impl Daemon {
             ShmBufferManager::new(&self.shm_buffer_path, self.shm_buffer_size)
                 .map_err(|e| DaemonError::Io("create shared memory buffer", e))?,
         );
-        let hybrid_buffer = Arc::new(
-            HybridBufferManager::new(self.ram_buffer_size, 1024 * 1024 * 1024, &self.buffer_path)
-                .map_err(DaemonError::HybridBuffer)?,
+        let hostmem_buffer = Arc::new(HostMemBufferManager::new(
+            self.ram_buffer_size,
+            1024 * 1024 * 1024,
+        ));
+        let storage_buffer = Arc::new(
+            StorageBufferManager::new(&self.buffer_path).map_err(DaemonError::HybridBuffer)?,
         );
         tracing::info!(
             "Shared memory buffer created at {}, size = {}",
@@ -131,7 +134,8 @@ impl Daemon {
         let list_handle = self.data.processes.clone();
         {
             let shm_buffer = shm_buffer.clone();
-            let hybrid_buffer = hybrid_buffer.clone();
+            let hostmem_buffer = hostmem_buffer.clone();
+            let storage_buffer = storage_buffer.clone();
             tokio::spawn(async move {
                 // maintain app list
                 loop {
@@ -143,7 +147,8 @@ impl Daemon {
                             list_handle.write().await.remove(&pid);
                             // release used buffer by the exited process
                             shm_buffer.release_process_residual(pid);
-                            hybrid_buffer.release_process_residual(pid);
+                            hostmem_buffer.release_process_residual(pid);
+                            storage_buffer.release_process_residual(pid);
                         }
                     }
                 }
@@ -158,7 +163,8 @@ impl Daemon {
                 prefetch_rx,
                 sched_ctl_rx,
                 shm_buffer,
-                hybrid_buffer,
+                hostmem_buffer,
+                storage_buffer,
             )
             .run()
             .await;

@@ -105,13 +105,14 @@ impl ShmBufferManager {
 
     pub async fn reserve(&self, buf_id: &BufferId) -> u64 {
         loop {
-            let mut inner = self.inner.lock().unwrap();
-            if let Some(res) = ShmBufferInner::reserve_inner(&mut inner, buf_id) {
-                return res;
-            }
             let (tx, rx) = oneshot::channel();
-            inner.pending_reservations.push(tx);
-            drop(inner);
+            {
+                let mut inner = self.inner.lock().unwrap();
+                if let Some(res) = ShmBufferInner::reserve_inner(&mut inner, buf_id) {
+                    return res;
+                }
+                inner.pending_reservations.push(tx);
+            }
             let _ = rx.await;
         }
     }

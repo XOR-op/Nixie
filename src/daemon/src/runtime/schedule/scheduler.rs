@@ -20,7 +20,7 @@ use crate::{
     runtime::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
-            HybridBufferManager, ShmBufferManager,
+            HostMemBufferManager, ShmBufferManager, StorageBufferManager,
             migration_plan::{DeviceRequestArgs, two_processes_task},
         },
         schedule::{
@@ -54,7 +54,8 @@ pub struct Scheduler {
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
     shmem_buffer: Arc<ShmBufferManager>,
-    hybrid_buffer: Arc<HybridBufferManager>,
+    hostmem_buffer: Arc<HostMemBufferManager>,
+    storage_buffer: Arc<StorageBufferManager>,
 }
 
 impl Scheduler {
@@ -64,7 +65,8 @@ impl Scheduler {
         prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
         control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
         shmem_buffer: Arc<ShmBufferManager>,
-        hybrid_buffer: Arc<HybridBufferManager>,
+        hostmem_buffer: Arc<HostMemBufferManager>,
+        storage_buffer: Arc<StorageBufferManager>,
     ) -> Self {
         Self {
             list,
@@ -74,7 +76,8 @@ impl Scheduler {
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
             shmem_buffer,
-            hybrid_buffer,
+            hostmem_buffer,
+            storage_buffer,
         }
     }
 
@@ -270,7 +273,8 @@ impl Scheduler {
                 mem_req,
                 &control,
                 &self.shmem_buffer,
-                &self.hybrid_buffer,
+                &self.hostmem_buffer,
+                &self.storage_buffer,
             )
             .await?;
         }
@@ -317,7 +321,8 @@ impl Scheduler {
         mem_req: Option<MemoryRequest>,
         control: &LinkedHashMap<i32, DaemonServerHandle>,
         shmem_buffer: &Arc<ShmBufferManager>,
-        hybrid_buffer: &Arc<HybridBufferManager>,
+        hostmem_buffer: &Arc<HostMemBufferManager>,
+        storage_buffer: &Arc<StorageBufferManager>,
     ) -> Result<Option<u64>, ScheduleError> {
         let mut swap_out = None;
         // disable current process if needed; and migrate VRAM
@@ -394,7 +399,8 @@ impl Scheduler {
                 ),
                 &others,
                 shmem_buffer.clone(),
-                hybrid_buffer.clone(),
+                hostmem_buffer.clone(),
+                storage_buffer.clone(),
             );
             // for statistics
             swap_out = task.get_out_from_gpu().get(0).map(|(_, spec, _, _)| {

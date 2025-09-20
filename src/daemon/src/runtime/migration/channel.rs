@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use nihil_common::GlobalDeviceId;
 use tokio::sync::mpsc;
 
-use super::hybrid_buffer::BufferLocation;
+use super::BufferLocation;
 
 use super::BufferId;
 

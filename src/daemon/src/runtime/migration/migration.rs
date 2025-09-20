@@ -7,7 +7,7 @@ use std::{
 use itertools::Itertools;
 use nihil_common::{
     GlobalDeviceId, MigrationArgs, MigrationResponse, ProcessLocalDeviceId, general::pretty_size,
-    rpc::SidecarClient, shm_buffer,
+    rpc::SidecarClient,
 };
 use tokio::sync::mpsc;
 
@@ -16,16 +16,18 @@ use crate::{
     runtime::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
+            BufferLocation,
             channel::{
                 InDataReadyRx, InDataReadyTx, OutDataReadyRx, OutDataReadyTx,
                 create_data_ready_channel,
             },
-            hybrid_buffer::BufferLocation,
+            hostmem_buffer::HostMemBufferManager,
+            storage_buffer::StorageBufferManager,
         },
     },
 };
 
-use super::{BufferId, ShmBufferManager, hybrid_buffer::HybridBufferManager};
+use super::{BufferId, ShmBufferManager};
 
 macro_rules! warn_on_send_error {
     ($res:expr) => {
@@ -65,13 +67,14 @@ pub struct DataMigrationTask {
 
     // reorganization of buffers within daemon
     storage_to_shm: Vec<BufferId>,
-    host_mem_to_shm: Vec<BufferId>,
-    shm_to_hybrid: HashMap<BufferId, BufferLocation>,
-    storage_to_host_mem: Vec<BufferId>,
-    host_mem_to_storage: Vec<BufferId>,
+    hostmem_to_shm: Vec<BufferId>,
+    shm_to_backend: HashMap<BufferId, BufferLocation>,
+    storage_to_hostmem: Vec<BufferId>,
+    hostmem_to_storage: Vec<BufferId>,
 
     shm_buffer_mgr: Arc<ShmBufferManager>,
-    hybrid_buffer_mgr: Arc<HybridBufferManager>,
+    hostmem_buffer_mgr: Arc<HostMemBufferManager>,
+    storage_buffer_mgr: Arc<StorageBufferManager>,
 }
 
 impl DataMigrationTask {
@@ -80,22 +83,28 @@ impl DataMigrationTask {
         into_gpu: (i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>),
         storage_to_shm: Vec<BufferId>,
         host_mem_to_shm: Vec<BufferId>,
-        shm_to_hybrid: HashMap<BufferId, BufferLocation>,
+        shm_to_backend: HashMap<BufferId, BufferLocation>,
         storage_to_host_mem: Vec<BufferId>,
         host_mem_to_storage: Vec<BufferId>,
         shm_buffer_mgr: Arc<ShmBufferManager>,
-        hybrid_buffer_mgr: Arc<HybridBufferManager>,
+        hostmem_buffer_mgr: Arc<HostMemBufferManager>,
+        storage_buffer_mgr: Arc<StorageBufferManager>,
     ) -> Self {
+        assert!(
+            storage_to_host_mem.is_empty() && host_mem_to_storage.is_empty(),
+            "not implemented yet"
+        );
         Self {
             out_from_gpu,
             into_gpu,
             storage_to_shm,
-            host_mem_to_shm,
-            shm_to_hybrid,
-            storage_to_host_mem,
-            host_mem_to_storage,
+            hostmem_to_shm: host_mem_to_shm,
+            shm_to_backend,
+            storage_to_hostmem: storage_to_host_mem,
+            hostmem_to_storage: host_mem_to_storage,
             shm_buffer_mgr,
-            hybrid_buffer_mgr,
+            hostmem_buffer_mgr,
+            storage_buffer_mgr,
         }
     }
 
@@ -136,7 +145,7 @@ impl DataMigrationTask {
                 .keys()
                 .chain(self.into_gpu.1.device_map.keys())
                 .cloned(),
-            self.shm_to_hybrid.clone(),
+            self.shm_to_backend.clone(),
         );
         let mut task_handles = Vec::new();
         for (device, (in_rx, out_tx)) in device_junction {
@@ -172,25 +181,41 @@ impl DataMigrationTask {
         // interact with host mem and storage
         task_handles.push({
             let shm_buffer_mgr = self.shm_buffer_mgr.clone();
-            let hybrid_buffer_mgr = self.hybrid_buffer_mgr.clone();
+            let hostmem_buffer_mgr = self.hostmem_buffer_mgr.clone();
+            let in_tx = in_tx.clone();
             tokio::spawn(async move {
-                hybrid_to_shm_transfer(
-                    self.host_mem_to_shm,
+                hostmem_to_shm_transfer(
+                    self.hostmem_to_shm,
+                    in_tx,
+                    shm_buffer_mgr,
+                    hostmem_buffer_mgr,
+                )
+                .await
+            })
+        });
+
+        task_handles.push({
+            let shm_buffer_mgr = self.shm_buffer_mgr.clone();
+            let storage_buffer_mgr = self.storage_buffer_mgr.clone();
+            let in_tx = in_tx.clone();
+            tokio::spawn(async move {
+                storage_to_shm_transfer(
                     self.storage_to_shm,
                     in_tx,
                     shm_buffer_mgr,
-                    hybrid_buffer_mgr,
+                    storage_buffer_mgr,
                 )
                 .await
             })
         });
 
         task_handles.push(tokio::spawn(async move {
-            shm_to_hybrid_transfer(
-                self.shm_to_hybrid,
+            shm_to_backend_transfer(
+                self.shm_to_backend,
                 out_rx,
                 self.shm_buffer_mgr.clone(),
-                self.hybrid_buffer_mgr.clone(),
+                self.hostmem_buffer_mgr.clone(),
+                self.storage_buffer_mgr.clone(),
             )
             .await
         }));
@@ -424,37 +449,40 @@ async fn host_to_device_transfer_inner(
     Ok(())
 }
 
-async fn hybrid_to_shm_transfer(
+async fn hostmem_to_shm_transfer(
     host_mem_to_shm: Vec<BufferId>,
-    storage_to_shm: Vec<BufferId>,
     in_data_ready_tx: InDataReadyTx,
     shm_buffer_mgr: Arc<ShmBufferManager>,
-    hybrid_buffer_mgr: Arc<HybridBufferManager>,
+    hostmem_buffer_mgr: Arc<HostMemBufferManager>,
 ) {
-    // TODO: optimize the order of transfers
-    for buffer_id in host_mem_to_shm
-        .into_iter()
-        .chain(storage_to_shm.into_iter())
-    {
+    for buffer_id in host_mem_to_shm {
         let shm_buf_offset = shm_buffer_mgr.reserve(&buffer_id).await;
-        let location = panic_on_error!(
-            hybrid_to_shm_transfer_inner(
-                &buffer_id,
-                &shm_buffer_mgr,
-                shm_buf_offset,
-                &hybrid_buffer_mgr,
-            )
-            .await
-        );
-        warn_on_send_error!(in_data_ready_tx.send(buffer_id, location));
+        let buf = unsafe { get_buffer_ref_mut(&shm_buffer_mgr, &buffer_id, shm_buf_offset) };
+        panic_on_error!(hostmem_buffer_mgr.load_to(&buffer_id, buf));
+        warn_on_send_error!(in_data_ready_tx.send(buffer_id, BufferLocation::HostMem));
     }
 }
 
-async fn shm_to_hybrid_transfer(
+async fn storage_to_shm_transfer(
+    storage_to_shm: Vec<BufferId>,
+    in_data_ready_tx: InDataReadyTx,
+    shm_buffer_mgr: Arc<ShmBufferManager>,
+    storage_buffer_mgr: Arc<StorageBufferManager>,
+) {
+    for buffer_id in storage_to_shm {
+        let shm_buf_offset = shm_buffer_mgr.reserve(&buffer_id).await;
+        let buf = unsafe { get_buffer_ref_mut(&shm_buffer_mgr, &buffer_id, shm_buf_offset) };
+        panic_on_error!(storage_buffer_mgr.load_to(&buffer_id, buf).await);
+        warn_on_send_error!(in_data_ready_tx.send(buffer_id, BufferLocation::Storage));
+    }
+}
+
+async fn shm_to_backend_transfer(
     shm_to_hybrid: HashMap<BufferId, BufferLocation>,
     mut out_data_ready_rx: OutDataReadyRx,
     shm_buffer_mgr: Arc<ShmBufferManager>,
-    hybrid_buffer_mgr: Arc<HybridBufferManager>,
+    hostmem_buffer_mgr: Arc<HostMemBufferManager>,
+    storage_buffer_mgr: Arc<StorageBufferManager>,
 ) {
     fn check_location(buffer_id: &BufferId, expected: BufferLocation, actual: BufferLocation) {
         if expected != actual {
@@ -476,10 +504,11 @@ async fn shm_to_hybrid_transfer(
     }
     let mut next_shm_handling = HashMap::new();
     for (buf_id, expected_location) in shm_to_hybrid {
-        let location = match shm_to_hybrid_transfer_inner(
+        let location = match shm_to_backend_transfer_inner(
             &buf_id,
             &shm_buffer_mgr,
-            &hybrid_buffer_mgr,
+            &hostmem_buffer_mgr,
+            &storage_buffer_mgr,
         )
         .await
         {
@@ -501,7 +530,13 @@ async fn shm_to_hybrid_transfer(
         };
         if let Some(expected_location) = next_shm_handling.remove(&buf_id) {
             let location = panic_on_error!(
-                shm_to_hybrid_transfer_inner(&buf_id, &shm_buffer_mgr, &hybrid_buffer_mgr).await
+                shm_to_backend_transfer_inner(
+                    &buf_id,
+                    &shm_buffer_mgr,
+                    &hostmem_buffer_mgr,
+                    &storage_buffer_mgr
+                )
+                .await
             );
             check_location(&buf_id, expected_location, location);
         } else {
@@ -514,44 +549,58 @@ async fn shm_to_hybrid_transfer(
     }
 }
 
-async fn hybrid_to_shm_transfer_inner(
-    buffer_id: &BufferId,
+unsafe fn get_buffer_ref_mut<'a>(
     shm_buffer_mgr: &ShmBufferManager,
+    buffer_id: &'a BufferId,
     shm_offset: u64,
-    hybrid_buffer_mgr: &HybridBufferManager,
-) -> Result<BufferLocation, HybridBufferError> {
-    let buf_ref = unsafe {
+) -> &'a mut [u8] {
+    unsafe {
         std::slice::from_raw_parts_mut(
             shm_buffer_mgr
                 .at_offset(shm_offset, buffer_id.size as usize)
                 .unwrap(),
             buffer_id.size as usize,
         )
-    };
-    // HybridBufferManager takes care of releasing the buffer
-    hybrid_buffer_mgr.load_to(buffer_id, buf_ref).await
+    }
 }
 
-async fn shm_to_hybrid_transfer_inner(
+unsafe fn get_buffer_ref<'a>(
+    shm_buffer_mgr: &ShmBufferManager,
+    buffer_id: &'a BufferId,
+    shm_offset: u64,
+) -> &'a [u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            shm_buffer_mgr
+                .at_offset(shm_offset, buffer_id.size as usize)
+                .unwrap(),
+            buffer_id.size as usize,
+        )
+    }
+}
+
+async fn shm_to_backend_transfer_inner(
     buffer_id: &BufferId,
     shm_buffer_mgr: &ShmBufferManager,
-    hybrid_buffer_mgr: &HybridBufferManager,
+    hostmem_buffer_mgr: &HostMemBufferManager,
+    storage_buffer_mgr: &StorageBufferManager,
 ) -> Result<BufferLocation, HybridBufferError> {
     let buf_offset = shm_buffer_mgr
         .get_buffer(&buffer_id)
         .ok_or(HybridBufferError::NoBufferId)?
         .addr;
-    let buf_ref = unsafe {
-        std::slice::from_raw_parts(
-            shm_buffer_mgr
-                .at_offset(buf_offset, buffer_id.size as usize)
-                .unwrap(),
-            buffer_id.size as usize,
-        )
-    };
-    let res = hybrid_buffer_mgr.store(&buffer_id, buf_ref).await?;
+    let buf_ref = unsafe { get_buffer_ref(shm_buffer_mgr, buffer_id, buf_offset) };
+    let mut target_loc = BufferLocation::HostMem;
+    match hostmem_buffer_mgr.store(buffer_id, buf_ref) {
+        Ok(_) => {}
+        Err(HybridBufferError::MemoryExhausted) => {
+            storage_buffer_mgr.store(buffer_id, buf_ref).await?;
+            target_loc = BufferLocation::Storage;
+        }
+        Err(e) => return Err(e),
+    }
     shm_buffer_mgr
         .release(buffer_id)
         .map_err(|_| HybridBufferError::NoBufferId)?;
-    Ok(res)
+    Ok(target_loc)
 }

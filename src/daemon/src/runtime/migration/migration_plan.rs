@@ -6,13 +6,13 @@ use crate::{
     control::ProcessResidualData,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        migration::{BufferId, hybrid_buffer::BufferLocation},
+        migration::{BufferId, BufferLocation, storage_buffer::StorageBufferManager},
     },
 };
 
 use super::{
     ShmBufferManager,
-    hybrid_buffer::HybridBufferManager,
+    hostmem_buffer::HostMemBufferManager,
     migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry},
 };
 
@@ -38,7 +38,8 @@ pub(crate) fn two_processes_task(
         Arc<DeviceOrdinalMapping>,
     )],
     shm_buffer_mgr: Arc<ShmBufferManager>,
-    hybrid_buffer_mgr: Arc<HybridBufferManager>,
+    hostmem_buffer_mgr: Arc<HostMemBufferManager>,
+    storage_buffer_mgr: Arc<StorageBufferManager>,
 ) -> DataMigrationTask {
     let mut out_of_gpu_list = Vec::new();
     let into_gpu_requirement = match &into_gpu.1 {
@@ -50,15 +51,14 @@ pub(crate) fn two_processes_task(
         DeviceRequestArgs::Allocation(allocation) => allocation.clone(),
     };
     let mut shm_free_segments = shm_buffer_mgr.free_segments();
-    let mut host_mem_free_segments = hybrid_buffer_mgr.free_mem_segments();
+    let mut host_mem_free_segments = hostmem_buffer_mgr.free_mem_segments();
 
-    let mut host_mem_to_shm = Vec::new();
-    let mut shm_to_host_mem = Vec::new();
+    let mut hostmem_to_shm = Vec::new();
     let mut storage_to_shm = Vec::new();
-    let mut shm_to_storage = Vec::new();
+    let mut shm_to_backend = HashMap::new();
     // TODO: use these two to reduce migration time
-    let storage_to_host_mem = Vec::new();
-    let host_mem_to_storage = Vec::new();
+    let storage_to_hostmem = Vec::new();
+    let hostmem_to_storage = Vec::new();
 
     // prepare into_gpu entries, and also update free segments
     let into_gpu_entries = match into_gpu.1 {
@@ -86,34 +86,25 @@ pub(crate) fn two_processes_task(
                                     ready_for_pcie_xfer: true,
                                 })
                             } else {
-                                match hybrid_buffer_mgr.get_buffer_location(&buffer_id) {
-                                    Some(location) => {
-                                        // in host mem or storage
-                                        match location {
-                                            BufferLocation::HostMem => {
-                                                // TODO: use non-uniform segment sizes
-                                                host_mem_free_segments
-                                                    .push(MAX_ALLOCATION_SIZE as u64);
-                                                host_mem_to_shm.push(buffer_id);
-                                            }
-                                            BufferLocation::Storage => {
-                                                storage_to_shm.push(buffer_id);
-                                            }
-                                        }
-                                        Some(MigrationSpecEntry {
-                                            size: data_entry.size,
-                                            handle_idx: data_entry.handle_idx,
-                                            ready_for_pcie_xfer: false,
-                                        })
-                                    }
-                                    None => {
-                                        tracing::error!(
-                                            "Data to migrate not found in SHM or host mem: {:?}",
-                                            buffer_id
-                                        );
-                                        None
-                                    }
+                                if hostmem_buffer_mgr.contains(&buffer_id) {
+                                    // in host mem
+                                    host_mem_free_segments.push(MAX_ALLOCATION_SIZE as u64);
+                                    hostmem_to_shm.push(buffer_id);
+                                } else if storage_buffer_mgr.contains(&buffer_id) {
+                                    // in storage
+                                    storage_to_shm.push(buffer_id);
+                                } else {
+                                    tracing::error!(
+                                        "Data to migrate not found in SHM or host mem: {:?}",
+                                        buffer_id
+                                    );
+                                    return None;
                                 }
+                                return Some(MigrationSpecEntry {
+                                    size: data_entry.size,
+                                    handle_idx: data_entry.handle_idx,
+                                    ready_for_pcie_xfer: false,
+                                });
                             }
                         })
                         .collect(),
@@ -158,9 +149,15 @@ pub(crate) fn two_processes_task(
                             seg,
                             entry.size
                         );
-                        shm_to_host_mem.push(spec_entry.to_buffer_id(*out_from_gpu_pid, global_id))
+                        shm_to_backend.insert(
+                            spec_entry.to_buffer_id(*out_from_gpu_pid, global_id),
+                            BufferLocation::HostMem,
+                        );
                     } else {
-                        shm_to_storage.push(spec_entry.to_buffer_id(*out_from_gpu_pid, global_id))
+                        shm_to_backend.insert(
+                            spec_entry.to_buffer_id(*out_from_gpu_pid, global_id),
+                            BufferLocation::Storage,
+                        );
                     };
                     migration_entries.push(spec_entry);
                     accu_size += entry.size;
@@ -198,12 +195,12 @@ pub(crate) fn two_processes_task(
             Arc::clone(&into_gpu.3),
         ),
         storage_to_shm,
-        host_mem_to_shm,
-        shm_to_host_mem,
-        shm_to_storage,
-        storage_to_host_mem,
-        host_mem_to_storage,
+        hostmem_to_shm,
+        shm_to_backend,
+        storage_to_hostmem,
+        hostmem_to_storage,
         shm_buffer_mgr,
-        hybrid_buffer_mgr,
+        hostmem_buffer_mgr,
+        storage_buffer_mgr,
     )
 }
