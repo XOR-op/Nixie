@@ -2,7 +2,6 @@ use crate::{
     error::{DaemonError, UvmError},
     runtime::{proc_ctl::ProcessControl, schedule::control::ScheduleControlReq, shm::open_shm},
 };
-use cudarc::driver::sys::lib as cuda_lib;
 use futures::StreamExt;
 use nihil_common::{
     GlobalDeviceId, HandshakeResponse, ProcessLocalDeviceId,
@@ -344,7 +343,7 @@ impl DeviceOrdinalMapping {
             // no CUDA_VISIBLE_DEVICES set, use default mapping
             let num_dev = {
                 let mut num_dev = 0;
-                let res = unsafe { cuda_lib().cuDeviceGetCount(&mut num_dev as *mut _) };
+                let res = unsafe { cudarc::driver::sys::cuDeviceGetCount(&mut num_dev as *mut _) };
                 if res != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
                     return Err(DaemonError::Cuda("cuDeviceGetCount", res));
                 }
@@ -411,14 +410,15 @@ impl DeviceOrdinalMapping {
 fn get_device_uuid_mapping() -> HashMap<String, i32> {
     let mut uuid_mapping = HashMap::new();
     let mut num_dev = 0;
-    let res = unsafe { cuda_lib().cuDeviceGetCount(&mut num_dev as *mut _) };
+    let res = unsafe { cudarc::driver::sys::cuDeviceGetCount(&mut num_dev as *mut _) };
     if res != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
         tracing::error!("Failed to get device count: {:?}", res);
         return uuid_mapping;
     }
     for i in 0..num_dev {
         let mut uuid = [0u8; 16];
-        let res = unsafe { cuda_lib().cuDeviceGetUuid_v2(uuid.as_mut_ptr() as *mut _, i) };
+        let res =
+            unsafe { cudarc::driver::sys::cuDeviceGetUuid_v2(uuid.as_mut_ptr() as *mut _, i) };
         if res != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
             tracing::error!("Failed to get device {} UUID: {:?}", i, res);
             continue;

@@ -1,4 +1,3 @@
-use cudarc::driver::sys::lib as cuda_lib;
 use std::sync::OnceLock;
 use tokio::net::UnixStream;
 
@@ -112,7 +111,7 @@ pub(super) fn init_buffer_by_handshake_resp(resp: HandshakeResponse) {
         let shm_buf_ptr = global_buf.at_offset(0, 1).unwrap();
         let size = global_buf.size();
         check_cu_err!(
-            cuda_lib().cuMemHostRegister_v2(
+            cudarc::driver::sys::cuMemHostRegister_v2(
                 shm_buf_ptr as *mut nix::libc::c_void,
                 size,
                 cudarc::driver::sys::CU_MEMHOSTALLOC_PORTABLE,

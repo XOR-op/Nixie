@@ -71,7 +71,7 @@ impl Daemon {
     pub fn run(self, config_path: Option<PathBuf>) {
         crate::logging::init_tracing();
         tracing::info!("Starting daemon...");
-        if unsafe { cudarc::driver::sys::lib().cuInit(0) }
+        if unsafe { cudarc::driver::sys::cuInit(0) }
             != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS
         {
             tracing::error!("Failed to initialize CUDA");

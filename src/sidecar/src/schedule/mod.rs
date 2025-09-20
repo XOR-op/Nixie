@@ -6,8 +6,6 @@ use std::{
 use nihil_common::{ActivityUpdate, MemoryRequest, SchedulingArgs, general::CallParameter};
 use stats::LaunchStats;
 
-use cudarc::driver::sys::lib as cuda_lib;
-
 use crate::{check_cu_err, env_config::sidecar_config, set_device};
 
 mod stats;
@@ -60,14 +58,17 @@ impl Scheduler {
                 let mut dev_count = 0;
                 unsafe {
                     check_cu_err!(
-                        cuda_lib().cuDeviceGetCount(&mut dev_count),
+                        cudarc::driver::sys::cuDeviceGetCount(&mut dev_count),
                         "get device count"
                     )
                 };
                 for i in 0..dev_count {
                     set_device(i);
                     unsafe {
-                        check_cu_err!(cuda_lib().cuCtxSynchronize(), "synchronize all contexts")
+                        check_cu_err!(
+                            cudarc::driver::sys::cuCtxSynchronize(),
+                            "synchronize all contexts"
+                        )
                     };
                 }
             }

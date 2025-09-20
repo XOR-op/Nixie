@@ -1,4 +1,4 @@
-use cudarc::driver::sys::{CUstream, cudaError_enum, lib as cuda_lib};
+use cudarc::driver::sys::{CUstream, cudaError_enum};
 use nihil_common::{
     shm::{AllocationTable, Shm, ShmGuard},
     shm_buffer::ShmBuffer,
@@ -33,7 +33,7 @@ impl CuStreamWrapper {
         set_device(device);
         let mut stream = std::ptr::null_mut();
         let res = unsafe {
-            cuda_lib().cuStreamCreate(
+            cudarc::driver::sys::cuStreamCreate(
                 &mut stream,
                 cudarc::driver::sys::CUstream_flags_enum::CU_STREAM_NON_BLOCKING as u32,
             )

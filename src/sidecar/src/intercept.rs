@@ -1,4 +1,4 @@
-use cudarc::driver::sys::{CUdevice, CUstream, cudaError_enum, lib as cuda_lib};
+use cudarc::driver::sys::{CUdevice, CUstream, cudaError_enum};
 use nihil_common::shm::AllocationEntry;
 use nihil_common::{
     CUDA_CONTROL_PLANE_RESERVATION_SIZE, MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE,
@@ -69,7 +69,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     // check against size limit
     let device_id = {
         let mut device_id = CUdevice::default();
-        let res = unsafe { cuda_lib().cuCtxGetDevice(&mut device_id as *mut _) };
+        let res = unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id as *mut _) };
         if res != cudaError_enum::CUDA_SUCCESS {
             panic!("Failed to get device id: {:?}", res);
         }
@@ -98,7 +98,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     // round up the size to the nearest multiple of MIN_ALLOCATION_SIZE
     let rounded_up_size = (size + MIN_ALLOCATION_SIZE - 1) & !(MIN_ALLOCATION_SIZE - 1);
     let res = unsafe {
-        cuda_lib().cuMemAddressReserve(
+        cudarc::driver::sys::cuMemAddressReserve(
             dev_ptr as *mut _,
             rounded_up_size,
             MIN_ALLOCATION_SIZE,
@@ -301,7 +301,7 @@ pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaErr
     init_cuda_env();
     let mut device_id = 0;
     check_cu_err!(
-        unsafe { cuda_lib().cuCtxGetDevice(&mut device_id as *mut _) },
+        unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id as *mut _) },
         "get device"
     );
     let available_size = get_max_allocation_size(device_id)

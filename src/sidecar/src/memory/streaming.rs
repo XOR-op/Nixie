@@ -2,7 +2,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 
 use cudarc::driver::sys::CUevent;
-use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
+use cudarc::driver::sys::cudaError_enum;
 use nihil_common::general::{CallParameter, CallReturnChannel};
 use nihil_common::{MAX_GPUS, MigrationArgs, MigrationResponse};
 
@@ -28,7 +28,7 @@ impl MemoryMigrationControl {
         let device_cnt = unsafe {
             let mut count = 0;
             check_cu_err!(
-                cuda_lib().cuDeviceGetCount(&mut count),
+                cudarc::driver::sys::cuDeviceGetCount(&mut count),
                 "Failed to get device count"
             );
             count
@@ -109,7 +109,7 @@ impl StreamingMemoryMigrator {
         };
         check_cu_err!(
             unsafe {
-                cuda_lib().cuEventCreate(
+                cudarc::driver::sys::cuEventCreate(
                     &mut event,
                     cudarc::driver::sys::CUevent_flags_enum::CU_EVENT_DISABLE_TIMING as u32,
                 )
@@ -120,7 +120,7 @@ impl StreamingMemoryMigrator {
             // allocate physical memory
             let mut cu_handle = 0u64;
             let res = unsafe {
-                cuda_lib().cuMemCreate(
+                cudarc::driver::sys::cuMemCreate(
                     &mut cu_handle,
                     args.size as usize,
                     &default_alloc_prop(self.device_id),
@@ -150,7 +150,7 @@ impl StreamingMemoryMigrator {
             // h2d copy
             check_cu_err!(
                 unsafe {
-                    cuda_lib().cuMemcpyHtoDAsync_v2(
+                    cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
                         virtual_addr,
                         host_buffer_ptr as *const _,
                         args.size as usize,
@@ -160,7 +160,7 @@ impl StreamingMemoryMigrator {
                 "Failed to copy memory from host to device"
             );
             check_cu_err!(
-                unsafe { cuda_lib().cuEventRecord(event, self.h2d_stream.0) },
+                unsafe { cudarc::driver::sys::cuEventRecord(event, self.h2d_stream.0) },
                 "Failed to record CUDA event for h2d copy"
             );
             // send request to worker thread
@@ -186,7 +186,7 @@ impl StreamingMemoryMigrator {
             };
             check_cu_err!(
                 unsafe {
-                    cuda_lib().cuMemcpyDtoHAsync_v2(
+                    cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
                         host_buffer_ptr as *mut _,
                         virtual_addr,
                         args.size as usize,
@@ -196,7 +196,7 @@ impl StreamingMemoryMigrator {
                 "Failed to copy memory from device to host"
             );
             check_cu_err!(
-                unsafe { cuda_lib().cuEventRecord(event, self.d2h_stream.0) },
+                unsafe { cudarc::driver::sys::cuEventRecord(event, self.d2h_stream.0) },
                 "Failed to record CUDA event for d2h copy"
             );
             // send request to worker thread
@@ -221,7 +221,7 @@ impl StreamingMemoryMigrator {
         while let Some((event, args, ret_chan)) = req_queue.recv().ok() {
             // wait for the event to complete
             check_cu_err!(
-                unsafe { cuda_lib().cuEventSynchronize(event.0) },
+                unsafe { cudarc::driver::sys::cuEventSynchronize(event.0) },
                 "Failed to synchronize CUDA event"
             );
             // send back response

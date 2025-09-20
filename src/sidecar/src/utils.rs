@@ -1,4 +1,4 @@
-use cudarc::driver::sys::{cudaError_enum, lib as cuda_lib};
+use cudarc::driver::sys::cudaError_enum;
 use nihil_common::{CUDA_PROCESS_RESERVATION_SIZE, MemoryRequest};
 
 use crate::{
@@ -49,7 +49,7 @@ macro_rules! check_cu_err {
 
 pub(crate) fn set_device(dev: i32) {
     let mut cu_ctx = std::ptr::null_mut();
-    let mut res = unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
+    let mut res = unsafe { cudarc::driver::sys::cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
     if res == cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY {
         crate::debug_eprintln!("Allocating memory for CUDA context");
         SCHED_CTL.pause_then_require_memory(
@@ -64,11 +64,11 @@ pub(crate) fn set_device(dev: i32) {
                 }),
             },
         );
-        res = unsafe { cuda_lib().cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
+        res = unsafe { cudarc::driver::sys::cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
     }
     check_cu_err!(res, "cuCtxGetCurrent");
     assert!(!cu_ctx.is_null());
-    let res = unsafe { cuda_lib().cuCtxSetCurrent(cu_ctx) };
+    let res = unsafe { cudarc::driver::sys::cuCtxSetCurrent(cu_ctx) };
     check_cu_err!(res, "cuCtxSetCurrent");
 }
 
@@ -84,7 +84,7 @@ impl CudaContextGuard {
     #[allow(unused)]
     pub fn new() -> Self {
         let mut cu_ctx = std::ptr::null_mut();
-        let res = unsafe { cuda_lib().cuCtxGetCurrent(&mut cu_ctx) };
+        let res = unsafe { cudarc::driver::sys::cuCtxGetCurrent(&mut cu_ctx) };
         check_cu_err!(res, "cuCtxGetCurrent");
         assert!(!cu_ctx.is_null());
         Self {
@@ -96,7 +96,7 @@ impl CudaContextGuard {
 
 impl Drop for CudaContextGuard {
     fn drop(&mut self) {
-        let res = unsafe { cuda_lib().cuCtxSetCurrent(self.ctx_ptr) };
+        let res = unsafe { cudarc::driver::sys::cuCtxSetCurrent(self.ctx_ptr) };
         check_cu_err!(res, "cuCtxSetCurrent");
     }
 }

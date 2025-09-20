@@ -1,4 +1,3 @@
-use cudarc::driver::sys::lib as cuda_lib;
 use nihil_common::ProcessLocalDeviceId;
 use nihil_common::shm_buffer::ShmBuffer;
 
@@ -26,11 +25,10 @@ pub(crate) fn init_cuda_env() {
         return; // already initialized
     }
     *guard = true;
-    let lib = unsafe { cuda_lib() };
     let mut dev_cnt = 0;
-    let res = unsafe { lib.cuDeviceGetCount(&mut dev_cnt) };
+    let res = unsafe { cudarc::driver::sys::cuDeviceGetCount(&mut dev_cnt) };
     if res == cudarc::driver::sys::cudaError_enum::CUDA_ERROR_NOT_INITIALIZED {
-        check_cu_err!(unsafe { lib.cuInit(0) }, "initialize CUDA");
+        check_cu_err!(unsafe { cudarc::driver::sys::cuInit(0) }, "initialize CUDA");
         set_device(0);
         crate::debug_eprintln!("CUDA initialized successfully");
     } else if res == cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS {
