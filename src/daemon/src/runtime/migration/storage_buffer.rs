@@ -1,15 +1,18 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    io::{Read, Seek, Write},
+    path::Path,
+};
 
 use nihil_common::MAX_ALLOCATION_SIZE;
 
 use crate::{
     error::HybridBufferError,
-    runtime::migration::{AllocationInfo, BufferId, BufferLocation},
+    runtime::migration::{AllocationInfo, BufferId},
 };
 
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 pub struct StorageBufferManager {
-    inner: tokio::sync::Mutex<StorageBufferInner>,
+    inner: std::sync::Mutex<StorageBufferInner>,
 }
 
 impl StorageBufferManager {
@@ -21,62 +24,43 @@ impl StorageBufferManager {
             .open(disk_path)
             .map_err(|e| HybridBufferError::IoError(e, "Failed to open disk file".to_string()))?;
         let inner = StorageBufferInner {
-            file: tokio::fs::File::from_std(file),
+            file,
             disk_bookkeeping: HashMap::new(),
             free_disk_buffers: Vec::new(),
             file_size: 0,
         };
         Ok(Self {
-            inner: tokio::sync::Mutex::new(inner),
+            inner: std::sync::Mutex::new(inner),
         })
     }
 
-    pub async fn store(
-        &self,
-        buffer_id: &BufferId,
-        data: &[u8],
-    ) -> Result<BufferLocation, HybridBufferError> {
-        let mut inner = self.inner.lock().await;
+    pub fn store(&self, buffer_id: &BufferId, data: &[u8]) -> Result<(), HybridBufferError> {
+        let mut inner = self.inner.lock().unwrap();
         if data.len() > MAX_ALLOCATION_SIZE as usize {
             return Err(HybridBufferError::InvalidInputBuffer);
         }
 
-        let alloc_info = inner.save_to_disk(data).await?;
+        let alloc_info = inner.save_to_disk(data)?;
         inner.disk_bookkeeping.insert(buffer_id.clone(), alloc_info);
-        Ok(BufferLocation::Storage)
+        Ok(())
     }
 
-    pub async fn load_to(
-        &self,
-        buffer_id: &BufferId,
-        data: &mut [u8],
-    ) -> Result<BufferLocation, HybridBufferError> {
-        let mut inner = self.inner.lock().await;
+    pub fn load_to(&self, buffer_id: &BufferId, data: &mut [u8]) -> Result<(), HybridBufferError> {
+        let mut inner = self.inner.lock().unwrap();
         if buffer_id.size > (MAX_ALLOCATION_SIZE as u64) || (data.len() as u64) < buffer_id.size {
             return Err(HybridBufferError::InvalidInputBuffer);
         }
         if let Some(info) = inner.disk_bookkeeping.remove(buffer_id) {
-            inner
-                .load_from_disk(info.addr, buffer_id.size, data)
-                .await?;
+            inner.load_from_disk(info.addr, buffer_id.size, data)?;
             inner.put_back_disk(info);
-            Ok(BufferLocation::Storage)
+            Ok(())
         } else {
             Err(HybridBufferError::NoBufferId)
         }
     }
 
     pub fn release_process_residual(&self, pid: i32) {
-        // use wrapper; otherwise blocking_lock in async context will panic
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(move || self._release_process_residual_inner(pid))
-        } else {
-            self._release_process_residual_inner(pid)
-        }
-    }
-
-    fn _release_process_residual_inner(&self, pid: i32) {
-        let inner = &mut *self.inner.blocking_lock();
+        let inner = &mut *self.inner.lock().unwrap();
         for (id, alloc_info) in std::mem::take(&mut inner.disk_bookkeeping) {
             if id.pid == pid {
                 inner.free_disk_buffers.push(alloc_info);
@@ -87,24 +71,26 @@ impl StorageBufferManager {
     }
 
     pub fn contains(&self, buffer_id: &BufferId) -> bool {
-        // use wrapper; otherwise blocking_lock in async context will panic
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(move || self._contains_inner(buffer_id))
-        } else {
-            self._contains_inner(buffer_id)
-        }
-    }
-
-    fn _contains_inner(&self, buffer_id: &BufferId) -> bool {
         self.inner
-            .blocking_lock()
+            .lock()
+            .unwrap()
             .disk_bookkeeping
             .contains_key(buffer_id)
+    }
+
+    pub fn dump_buffers(&self) -> HashMap<BufferId, u64> {
+        self.inner
+            .lock()
+            .unwrap()
+            .disk_bookkeeping
+            .iter()
+            .map(|(k, v)| (k.clone(), v.block_size))
+            .collect()
     }
 }
 
 struct StorageBufferInner {
-    file: tokio::fs::File,
+    file: std::fs::File,
     disk_bookkeeping: std::collections::HashMap<BufferId, AllocationInfo>,
     free_disk_buffers: Vec<AllocationInfo>,
     file_size: u64,
@@ -115,24 +101,22 @@ impl StorageBufferInner {
         self.free_disk_buffers.push(alloc_info);
     }
 
-    async fn save_to_disk(&mut self, buf: &[u8]) -> Result<AllocationInfo, HybridBufferError> {
+    fn save_to_disk(&mut self, buf: &[u8]) -> Result<AllocationInfo, HybridBufferError> {
         let offset = if let Some(alloc_info) = self.free_disk_buffers.pop() {
             alloc_info.addr
         } else {
             let offset = self.file_size;
             self.file_size += MAX_ALLOCATION_SIZE as u64;
-            self.file.set_len(self.file_size).await.map_err(|e| {
+            self.file.set_len(self.file_size).map_err(|e| {
                 HybridBufferError::IoError(e, "Failed to set file length".to_string())
             })?;
             offset
         };
         self.file
             .seek(std::io::SeekFrom::Start(offset))
-            .await
             .map_err(|e| HybridBufferError::IoError(e, "Failed to seek in file".to_string()))?;
         self.file
             .write_all(buf)
-            .await
             .map_err(|e| HybridBufferError::IoError(e, "Failed to write to file".to_string()))?;
         Ok(AllocationInfo {
             addr: offset,
@@ -140,7 +124,7 @@ impl StorageBufferInner {
         })
     }
 
-    async fn load_from_disk(
+    fn load_from_disk(
         &mut self,
         offset: u64,
         read_length: u64,
@@ -148,11 +132,9 @@ impl StorageBufferInner {
     ) -> Result<(), HybridBufferError> {
         self.file
             .seek(std::io::SeekFrom::Start(offset))
-            .await
             .map_err(|e| HybridBufferError::IoError(e, "Failed to seek in file".to_string()))?;
         self.file
             .read_exact(&mut data[..read_length as usize])
-            .await
             .map_err(|e| HybridBufferError::IoError(e, "Failed to read from file".to_string()))?;
         Ok(())
     }

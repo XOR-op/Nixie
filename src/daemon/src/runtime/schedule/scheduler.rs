@@ -20,7 +20,7 @@ use crate::{
     runtime::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
-            HostMemBufferManager, ShmBufferManager, StorageBufferManager,
+            DataManagerHandle,
             migration_plan::{DeviceRequestArgs, two_processes_task},
         },
         schedule::{
@@ -53,9 +53,7 @@ pub struct Scheduler {
     control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
-    shmem_buffer: Arc<ShmBufferManager>,
-    hostmem_buffer: Arc<HostMemBufferManager>,
-    storage_buffer: Arc<StorageBufferManager>,
+    data_manager: DataManagerHandle,
 }
 
 impl Scheduler {
@@ -64,9 +62,7 @@ impl Scheduler {
         rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
         prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
         control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
-        shmem_buffer: Arc<ShmBufferManager>,
-        hostmem_buffer: Arc<HostMemBufferManager>,
-        storage_buffer: Arc<StorageBufferManager>,
+        data_manager: DataManagerHandle,
     ) -> Self {
         Self {
             list,
@@ -75,9 +71,7 @@ impl Scheduler {
             control_msg_rx,
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
-            shmem_buffer,
-            hostmem_buffer,
-            storage_buffer,
+            data_manager,
         }
     }
 
@@ -272,9 +266,7 @@ impl Scheduler {
                 disable_current_fut,
                 mem_req,
                 &control,
-                &self.shmem_buffer,
-                &self.hostmem_buffer,
-                &self.storage_buffer,
+                self.data_manager.clone(),
             )
             .await?;
         }
@@ -320,9 +312,7 @@ impl Scheduler {
         disable_fut: Option<tokio::task::JoinHandle<Result<(), tarpc::client::RpcError>>>, // future of dev sync completion
         mem_req: Option<MemoryRequest>,
         control: &LinkedHashMap<i32, DaemonServerHandle>,
-        shmem_buffer: &Arc<ShmBufferManager>,
-        hostmem_buffer: &Arc<HostMemBufferManager>,
-        storage_buffer: &Arc<StorageBufferManager>,
+        data_manager: DataManagerHandle,
     ) -> Result<Option<u64>, ScheduleError> {
         let mut swap_out = None;
         // disable current process if needed; and migrate VRAM
@@ -398,9 +388,7 @@ impl Scheduler {
                     new_handle.dev_mapping(),
                 ),
                 &others,
-                shmem_buffer.clone(),
-                hostmem_buffer.clone(),
-                storage_buffer.clone(),
+                data_manager,
             );
             // for statistics
             swap_out = task.get_out_from_gpu().get(0).map(|(_, spec, _, _)| {

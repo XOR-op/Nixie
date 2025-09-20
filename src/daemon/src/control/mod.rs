@@ -18,6 +18,8 @@ pub(crate) trait Controllable {
 
     async fn list_processes() -> Vec<ProcessMetadata>;
 
+    async fn data_details() -> DataManagerMetadata;
+
     async fn prefetch(args: PrefetchMsg);
 
     async fn update_config(config: ConfigurableArgs);
@@ -63,5 +65,26 @@ pub(crate) struct AllocationData {
 pub(crate) struct PhysicalMemoryData {
     pub on_gpu: bool,
     pub handle_idx: NonZeroU32,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DataManagerMetadata {
+    pub shm: Vec<ProcessDataMeta>,
+    pub hostmem: Vec<ProcessDataMeta>,
+    pub storage: Vec<ProcessDataMeta>,
+    pub shm_capacity: u64,
+    pub hostmem_capacity: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProcessDataMeta {
+    pub pid: i32,
+    pub data_blocks: Vec<DataBlockMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DataBlockMeta {
+    pub device_id: GlobalDeviceId,
     pub size: u64,
 }

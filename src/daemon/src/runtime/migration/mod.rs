@@ -5,7 +5,7 @@ pub(super) mod migration_plan;
 mod shm_buffer;
 mod storage_buffer;
 
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, sync::Arc};
 
 pub use hostmem_buffer::HostMemBufferManager;
 use nihil_common::GlobalDeviceId;
@@ -30,4 +30,11 @@ pub struct AllocationInfo {
 pub(crate) enum BufferLocation {
     HostMem,
     Storage,
+}
+
+#[derive(Clone)]
+pub struct DataManagerHandle {
+    pub shm: Arc<ShmBufferManager>,
+    pub hostmem: Arc<HostMemBufferManager>,
+    pub storage: Arc<StorageBufferManager>,
 }

@@ -16,7 +16,7 @@ use crate::{
     runtime::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
-            BufferLocation,
+            BufferLocation, DataManagerHandle,
             channel::{
                 InDataReadyRx, InDataReadyTx, OutDataReadyRx, OutDataReadyTx,
                 create_data_ready_channel,
@@ -72,9 +72,7 @@ pub struct DataMigrationTask {
     storage_to_hostmem: Vec<BufferId>,
     hostmem_to_storage: Vec<BufferId>,
 
-    shm_buffer_mgr: Arc<ShmBufferManager>,
-    hostmem_buffer_mgr: Arc<HostMemBufferManager>,
-    storage_buffer_mgr: Arc<StorageBufferManager>,
+    data_manager: DataManagerHandle,
 }
 
 impl DataMigrationTask {
@@ -86,9 +84,7 @@ impl DataMigrationTask {
         shm_to_backend: HashMap<BufferId, BufferLocation>,
         storage_to_host_mem: Vec<BufferId>,
         host_mem_to_storage: Vec<BufferId>,
-        shm_buffer_mgr: Arc<ShmBufferManager>,
-        hostmem_buffer_mgr: Arc<HostMemBufferManager>,
-        storage_buffer_mgr: Arc<StorageBufferManager>,
+        data_manager: DataManagerHandle,
     ) -> Self {
         assert!(
             storage_to_host_mem.is_empty() && host_mem_to_storage.is_empty(),
@@ -102,9 +98,7 @@ impl DataMigrationTask {
             shm_to_backend,
             storage_to_hostmem: storage_to_host_mem,
             hostmem_to_storage: host_mem_to_storage,
-            shm_buffer_mgr,
-            hostmem_buffer_mgr,
-            storage_buffer_mgr,
+            data_manager,
         }
     }
 
@@ -157,7 +151,7 @@ impl DataMigrationTask {
                 .remove(&device)
                 .unwrap_or_default();
             // Run migration for each device
-            let shm_buffer_mgr = Arc::clone(&self.shm_buffer_mgr);
+            let shm_buffer_mgr = self.data_manager.shm.clone();
             let rpc_client = self.into_gpu.2.clone();
             let device_id = self
                 .into_gpu
@@ -180,8 +174,8 @@ impl DataMigrationTask {
         }
         // interact with host mem and storage
         task_handles.push({
-            let shm_buffer_mgr = self.shm_buffer_mgr.clone();
-            let hostmem_buffer_mgr = self.hostmem_buffer_mgr.clone();
+            let shm_buffer_mgr = self.data_manager.shm.clone();
+            let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
             let in_tx = in_tx.clone();
             tokio::spawn(async move {
                 hostmem_to_shm_transfer(
@@ -195,8 +189,8 @@ impl DataMigrationTask {
         });
 
         task_handles.push({
-            let shm_buffer_mgr = self.shm_buffer_mgr.clone();
-            let storage_buffer_mgr = self.storage_buffer_mgr.clone();
+            let shm_buffer_mgr = self.data_manager.shm.clone();
+            let storage_buffer_mgr = self.data_manager.storage.clone();
             let in_tx = in_tx.clone();
             tokio::spawn(async move {
                 storage_to_shm_transfer(
@@ -213,9 +207,9 @@ impl DataMigrationTask {
             shm_to_backend_transfer(
                 self.shm_to_backend,
                 out_rx,
-                self.shm_buffer_mgr.clone(),
-                self.hostmem_buffer_mgr.clone(),
-                self.storage_buffer_mgr.clone(),
+                self.data_manager.shm.clone(),
+                self.data_manager.hostmem.clone(),
+                self.data_manager.storage.clone(),
             )
             .await
         }));
@@ -471,8 +465,22 @@ async fn storage_to_shm_transfer(
 ) {
     for buffer_id in storage_to_shm {
         let shm_buf_offset = shm_buffer_mgr.reserve(&buffer_id).await;
-        let buf = unsafe { get_buffer_ref_mut(&shm_buffer_mgr, &buffer_id, shm_buf_offset) };
-        panic_on_error!(storage_buffer_mgr.load_to(&buffer_id, buf).await);
+        // Safety: the lifetime of the buffer will not exceed the end of the block
+        let buf = unsafe {
+            get_buffer_ref_mut(
+                convert_to_static(&shm_buffer_mgr),
+                &buffer_id,
+                shm_buf_offset,
+            )
+        };
+        {
+            let storage_buffer_mgr = storage_buffer_mgr.clone();
+            let buffer_id = buffer_id.clone();
+            panic_on_error!(panic_on_error!(
+                tokio::task::spawn_blocking(move || storage_buffer_mgr.load_to(&buffer_id, buf))
+                    .await
+            ));
+        }
         warn_on_send_error!(in_data_ready_tx.send(buffer_id, BufferLocation::Storage));
     }
 }
@@ -550,8 +558,8 @@ async fn shm_to_backend_transfer(
 }
 
 unsafe fn get_buffer_ref_mut<'a>(
-    shm_buffer_mgr: &ShmBufferManager,
-    buffer_id: &'a BufferId,
+    shm_buffer_mgr: &'a ShmBufferManager,
+    buffer_id: &BufferId,
     shm_offset: u64,
 ) -> &'a mut [u8] {
     unsafe {
@@ -565,8 +573,8 @@ unsafe fn get_buffer_ref_mut<'a>(
 }
 
 unsafe fn get_buffer_ref<'a>(
-    shm_buffer_mgr: &ShmBufferManager,
-    buffer_id: &'a BufferId,
+    shm_buffer_mgr: &'a ShmBufferManager,
+    buffer_id: &BufferId,
     shm_offset: u64,
 ) -> &'a [u8] {
     unsafe {
@@ -579,28 +587,37 @@ unsafe fn get_buffer_ref<'a>(
     }
 }
 
+unsafe fn convert_to_static<'a, T>(r: &'a T) -> &'static T {
+    unsafe { &*(r as *const T) }
+}
+
 async fn shm_to_backend_transfer_inner(
     buffer_id: &BufferId,
     shm_buffer_mgr: &ShmBufferManager,
     hostmem_buffer_mgr: &HostMemBufferManager,
-    storage_buffer_mgr: &StorageBufferManager,
+    storage_buffer_mgr: &Arc<StorageBufferManager>,
 ) -> Result<BufferLocation, HybridBufferError> {
     let buf_offset = shm_buffer_mgr
         .get_buffer(&buffer_id)
         .ok_or(HybridBufferError::NoBufferId)?
         .addr;
-    let buf_ref = unsafe { get_buffer_ref(shm_buffer_mgr, buffer_id, buf_offset) };
+    // Safety: the lifetime of the buffer will not exceed the end of the block
+    let buf_ref =
+        unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), buffer_id, buf_offset) };
     let mut target_loc = BufferLocation::HostMem;
     match hostmem_buffer_mgr.store(buffer_id, buf_ref) {
         Ok(_) => {}
         Err(HybridBufferError::MemoryExhausted) => {
-            storage_buffer_mgr.store(buffer_id, buf_ref).await?;
+            let buf_id = buffer_id.clone();
+            let storage_buffer_mgr = storage_buffer_mgr.clone();
+            tokio::task::spawn_blocking(move || storage_buffer_mgr.store(&buf_id, buf_ref))
+                .await??;
             target_loc = BufferLocation::Storage;
         }
         Err(e) => return Err(e),
     }
     shm_buffer_mgr
         .release(buffer_id)
-        .map_err(|_| HybridBufferError::NoBufferId)?;
+        .expect("BufferId released twice");
     Ok(target_loc)
 }

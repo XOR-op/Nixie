@@ -2,6 +2,7 @@ use futures::StreamExt;
 use hashlink::LinkedHashMap;
 use nihil_common::{ActivityUpdate, general::pretty_size};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -17,12 +18,15 @@ use tokio::{
 
 use crate::{
     config::{Config, ConfigurableArgs, init_config, update_config},
-    control::{self, Controllable, PrefetchMsg},
+    control::{self, Controllable, DataManagerMetadata, PrefetchMsg},
     error::{DaemonError, NihilphaseError},
     runtime::{
         ProcCtlReq,
         daemon_server::DaemonServer,
-        migration::{HostMemBufferManager, ShmBufferManager, StorageBufferManager},
+        migration::{
+            BufferId, DataManagerHandle, HostMemBufferManager, ShmBufferManager,
+            StorageBufferManager,
+        },
         schedule::control::ScheduleControlReq,
     },
 };
@@ -110,6 +114,11 @@ impl Daemon {
         let storage_buffer = Arc::new(
             StorageBufferManager::new(&self.buffer_path).map_err(DaemonError::HybridBuffer)?,
         );
+        let data_manager = DataManagerHandle {
+            shm: shm_buffer,
+            hostmem: hostmem_buffer,
+            storage: storage_buffer,
+        };
         tracing::info!(
             "Shared memory buffer created at {}, size = {}",
             self.shm_buffer_path,
@@ -133,9 +142,9 @@ impl Daemon {
         ));
         let list_handle = self.data.processes.clone();
         {
-            let shm_buffer = shm_buffer.clone();
-            let hostmem_buffer = hostmem_buffer.clone();
-            let storage_buffer = storage_buffer.clone();
+            let shm_buffer = data_manager.shm.clone();
+            let hostmem_buffer = data_manager.hostmem.clone();
+            let storage_buffer = data_manager.storage.clone();
             tokio::spawn(async move {
                 // maintain app list
                 loop {
@@ -154,21 +163,21 @@ impl Daemon {
                 }
             });
         }
-
-        let list_handle = self.data.processes.clone();
-        tokio::spawn(async move {
-            Scheduler::new(
-                list_handle,
-                rpc_data_rx,
-                prefetch_rx,
-                sched_ctl_rx,
-                shm_buffer,
-                hostmem_buffer,
-                storage_buffer,
-            )
-            .run()
-            .await;
-        });
+        {
+            let list_handle = self.data.processes.clone();
+            let data_manager = data_manager.clone();
+            tokio::spawn(async move {
+                Scheduler::new(
+                    list_handle,
+                    rpc_data_rx,
+                    prefetch_rx,
+                    sched_ctl_rx,
+                    data_manager,
+                )
+                .run()
+                .await;
+            });
+        }
 
         let listener_guard = UnixListenerGuard::new(&self.control_path)?;
 
@@ -181,6 +190,7 @@ impl Daemon {
             let server = ControllableDaemon {
                 data: self.data.clone(),
                 prefetch_tx: prefetch_tx.clone(),
+                data_mgr_handle: data_manager.clone(),
             };
             tokio::spawn(
                 BaseChannel::with_defaults(conn)
@@ -233,6 +243,7 @@ impl Daemon {
 #[derive(Clone)]
 struct ControllableDaemon {
     data: Arc<DaemonData>,
+    data_mgr_handle: DataManagerHandle,
     prefetch_tx: mpsc::UnboundedSender<(i32, ActivityUpdate)>,
 }
 
@@ -279,6 +290,35 @@ impl Controllable for ControllableDaemon {
 
     async fn get_config(self, _context: Context) -> Config {
         crate::config::load_config().as_ref().clone()
+    }
+
+    async fn data_details(self, _context: Context) -> DataManagerMetadata {
+        fn to_meta(buffers: HashMap<BufferId, u64>) -> Vec<control::ProcessDataMeta> {
+            let mut procs = HashMap::<i32, Vec<control::DataBlockMeta>>::new();
+            for (buf_id, size) in buffers {
+                let entry = procs.entry(buf_id.pid).or_default();
+                entry.push(control::DataBlockMeta {
+                    device_id: buf_id.device_id,
+                    size,
+                });
+            }
+            procs
+                .into_iter()
+                .map(|(pid, blocks)| control::ProcessDataMeta {
+                    pid,
+                    data_blocks: blocks,
+                })
+                .collect()
+        }
+        let shm_size = self.data_mgr_handle.shm.capacity() as u64;
+        let hostmem_size = self.data_mgr_handle.hostmem.capacity() as u64;
+        DataManagerMetadata {
+            shm: to_meta(self.data_mgr_handle.shm.dump_buffers()),
+            hostmem: to_meta(self.data_mgr_handle.hostmem.dump_buffers()),
+            storage: to_meta(self.data_mgr_handle.storage.dump_buffers()),
+            shm_capacity: shm_size,
+            hostmem_capacity: hostmem_size,
+        }
     }
 }
 // Utils

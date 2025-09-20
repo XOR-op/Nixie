@@ -6,15 +6,11 @@ use crate::{
     control::ProcessResidualData,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        migration::{BufferId, BufferLocation, storage_buffer::StorageBufferManager},
+        migration::{BufferId, BufferLocation, DataManagerHandle},
     },
 };
 
-use super::{
-    ShmBufferManager,
-    hostmem_buffer::HostMemBufferManager,
-    migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry},
-};
+use super::migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry};
 
 #[derive(Debug, Clone)]
 pub(crate) enum DeviceRequestArgs {
@@ -37,9 +33,7 @@ pub(crate) fn two_processes_task(
         SidecarClient,
         Arc<DeviceOrdinalMapping>,
     )],
-    shm_buffer_mgr: Arc<ShmBufferManager>,
-    hostmem_buffer_mgr: Arc<HostMemBufferManager>,
-    storage_buffer_mgr: Arc<StorageBufferManager>,
+    data_manager: DataManagerHandle,
 ) -> DataMigrationTask {
     let mut out_of_gpu_list = Vec::new();
     let into_gpu_requirement = match &into_gpu.1 {
@@ -50,8 +44,8 @@ pub(crate) fn two_processes_task(
             .collect::<HashMap<_, _>>(),
         DeviceRequestArgs::Allocation(allocation) => allocation.clone(),
     };
-    let mut shm_free_segments = shm_buffer_mgr.free_segments();
-    let mut host_mem_free_segments = hostmem_buffer_mgr.free_mem_segments();
+    let mut shm_free_segments = data_manager.shm.free_segments();
+    let mut host_mem_free_segments = data_manager.hostmem.free_mem_segments();
 
     let mut hostmem_to_shm = Vec::new();
     let mut storage_to_shm = Vec::new();
@@ -77,7 +71,7 @@ pub(crate) fn two_processes_task(
                                 block_id: data_entry.handle_idx,
                                 size: data_entry.size,
                             };
-                            if let Some(alloc_info) = shm_buffer_mgr.get_buffer(&buffer_id) {
+                            if let Some(alloc_info) = data_manager.shm.get_buffer(&buffer_id) {
                                 shm_free_segments.push(alloc_info.block_size);
                                 // in SHM
                                 Some(MigrationSpecEntry {
@@ -86,11 +80,11 @@ pub(crate) fn two_processes_task(
                                     ready_for_pcie_xfer: true,
                                 })
                             } else {
-                                if hostmem_buffer_mgr.contains(&buffer_id) {
+                                if data_manager.hostmem.contains(&buffer_id) {
                                     // in host mem
                                     host_mem_free_segments.push(MAX_ALLOCATION_SIZE as u64);
                                     hostmem_to_shm.push(buffer_id);
-                                } else if storage_buffer_mgr.contains(&buffer_id) {
+                                } else if data_manager.storage.contains(&buffer_id) {
                                     // in storage
                                     storage_to_shm.push(buffer_id);
                                 } else {
@@ -199,8 +193,6 @@ pub(crate) fn two_processes_task(
         shm_to_backend,
         storage_to_hostmem,
         hostmem_to_storage,
-        shm_buffer_mgr,
-        hostmem_buffer_mgr,
-        storage_buffer_mgr,
+        data_manager,
     )
 }

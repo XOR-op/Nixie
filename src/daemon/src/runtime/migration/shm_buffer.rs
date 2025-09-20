@@ -94,6 +94,20 @@ impl ShmBufferManager {
     pub unsafe fn at_offset(&self, offset: u64, size: usize) -> Option<*mut u8> {
         unsafe { self.shm_buffer.at_offset(offset, size) }
     }
+
+    pub fn dump_buffers(&self) -> HashMap<BufferId, u64> {
+        self.inner
+            .lock()
+            .unwrap()
+            .bookkeeping
+            .iter()
+            .map(|(k, v)| (k.clone(), v.block_size))
+            .collect()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.shm_buffer.size()
+    }
 }
 
 // Allocation and release logic

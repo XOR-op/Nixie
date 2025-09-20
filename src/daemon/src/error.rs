@@ -37,6 +37,8 @@ pub enum HybridBufferError {
     NoBufferId,
     #[error("{1} failed with error: {0}")]
     IoError(std::io::Error, String),
+    #[error("Tokio task failed: {0}")]
+    TaskError(#[from] tokio::task::JoinError),
 }
 
 #[derive(Debug, Error)]

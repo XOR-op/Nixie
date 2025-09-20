@@ -103,6 +103,20 @@ impl HostMemBufferManager {
             .map(|i| i * MAX_ALLOCATION_SIZE as u64)
             .collect()
     }
+
+    pub fn dump_buffers(&self) -> HashMap<BufferId, u64> {
+        self.inner
+            .lock()
+            .unwrap()
+            .mem_bookkeeping
+            .iter()
+            .map(|(k, v)| (k.clone(), v.0.len() as u64))
+            .collect()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.inner.lock().unwrap().max_mem_buffer_count * MAX_ALLOCATION_SIZE
+    }
 }
 
 struct HostMemBufferInner {
