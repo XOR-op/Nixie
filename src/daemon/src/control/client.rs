@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
@@ -126,6 +126,100 @@ impl ControlClient {
         Ok(())
     }
 
+    pub async fn data_details(&self, verbose: bool) -> Result<(), DaemonError> {
+        let data_meta = self
+            .client
+            .data_details(tarpc::context::current())
+            .await
+            .map_err(|e| DaemonError::ClientRpc("data_details", e))?;
+        let shm_used = data_meta
+            .shm
+            .iter()
+            .map(|p| p.data_blocks.iter().map(|b| b.size).sum::<u64>())
+            .sum::<u64>();
+        let hostmem_used = data_meta
+            .hostmem
+            .iter()
+            .map(|p| p.data_blocks.iter().map(|b| b.size).sum::<u64>())
+            .sum::<u64>();
+        let storage_used = data_meta
+            .storage
+            .iter()
+            .map(|p| p.data_blocks.iter().map(|b| b.size).sum::<u64>())
+            .sum::<u64>();
+        println!(
+            "SHM: {}/{} ({}, {} procs), HostMem: {}/{} ({}, {} procs), Disk: {} ({} procs)",
+            pretty_size(shm_used).bright_blue(),
+            pretty_size(data_meta.shm_capacity).blue(),
+            pretty_precentage((shm_used as f64) / (data_meta.shm_capacity as f64) * 100.0),
+            data_meta.shm.len(),
+            pretty_size(hostmem_used).bright_blue(),
+            pretty_size(data_meta.hostmem_capacity).blue(),
+            pretty_precentage((hostmem_used as f64) / (data_meta.hostmem_capacity as f64) * 100.0,),
+            data_meta.hostmem.len(),
+            pretty_size(storage_used).bright_blue(),
+            data_meta.storage.len()
+        );
+
+        if verbose {
+            let mut proc_shm = HashMap::new();
+            let mut proc_hostmem = HashMap::new();
+            let mut proc_storage = HashMap::new();
+            for p in data_meta.shm {
+                let used = p.data_blocks.iter().map(|b| b.size).sum::<u64>();
+                proc_shm.insert(p.pid, (used, p.data_blocks.len()));
+            }
+            for p in data_meta.hostmem {
+                let used = p.data_blocks.iter().map(|b| b.size).sum::<u64>();
+                proc_hostmem.insert(p.pid, (used, p.data_blocks.len()));
+            }
+            for p in data_meta.storage {
+                let used = p.data_blocks.iter().map(|b| b.size).sum::<u64>();
+                proc_storage.insert(p.pid, (used, p.data_blocks.len()));
+            }
+            let sorted_pids = proc_shm
+                .keys()
+                .chain(proc_hostmem.keys())
+                .chain(proc_storage.keys())
+                .copied()
+                .collect::<std::collections::BTreeSet<i32>>();
+            for pid in sorted_pids {
+                let process_name = std::fs::read_to_string(format!("/proc/{}/comm", pid))
+                    .map(|s| s.trim().to_string())
+                    .ok()
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let mut str = format!("[{}]{}; ", pid.to_string().yellow(), process_name.green());
+                if let Some((used, blocks)) = proc_shm.get(&pid) {
+                    str.push_str(&format!(
+                        "{}: {} in {} blocks; ",
+                        "SHM".bold(),
+                        pretty_size(*used).bright_blue(),
+                        blocks
+                    ));
+                }
+                if let Some((used, blocks)) = proc_hostmem.get(&pid) {
+                    str.push_str(&format!(
+                        "{}: {} in {} blocks; ",
+                        "HostMem".bold(),
+                        pretty_size(*used).bright_blue(),
+                        blocks
+                    ));
+                }
+                if let Some((used, blocks)) = proc_storage.get(&pid) {
+                    str.push_str(&format!(
+                        "{}: {} in {} blocks; ",
+                        "Storage".bold(),
+                        pretty_size(*used).bright_blue(),
+                        blocks
+                    ));
+                }
+                println!("{}", str.trim_end_matches("; "));
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn show_config(&self) -> Result<(), DaemonError> {
         let config = self
             .client
@@ -186,5 +280,15 @@ fn colored_bool(b: bool) -> colored::ColoredString {
         "T".bright_green()
     } else {
         "F".bright_red()
+    }
+}
+
+fn pretty_precentage(p: f64) -> colored::ColoredString {
+    if p >= 85.0 {
+        format!("{:.2}%", p).red()
+    } else if p >= 60.0 {
+        format!("{:.2}%", p).yellow()
+    } else {
+        format!("{:.2}%", p).green()
     }
 }

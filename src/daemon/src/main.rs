@@ -78,11 +78,19 @@ struct DaemonArgs {
 }
 
 #[derive(Debug, Parser)]
+struct UsageArgs {
+    /// Show detailed information
+    #[arg(short, long, default_value = "false")]
+    pub verbose: bool,
+}
+
+#[derive(Debug, Parser)]
 #[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
     Daemon(DaemonArgs),
     Prefetch(PrefetchArgs),
     List(ListArgs),
+    Usage(UsageArgs),
     #[clap(subcommand)]
     Config(ConfigArgs),
 }
@@ -143,6 +151,12 @@ fn main() {
                         client.update_config(args).await.unwrap();
                     }
                 }
+            }
+            Args::Usage(args) => {
+                let client = check_error!(
+                    ControlClient::new(control::CONTROL_PATH, ProcArgs::empty()).await
+                );
+                client.data_details(args.verbose).await.unwrap();
             }
             Args::Daemon(_) => unreachable!(),
         };
