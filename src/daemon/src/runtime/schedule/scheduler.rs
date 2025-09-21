@@ -125,7 +125,7 @@ impl Scheduler {
     }
 
     async fn received_data(&mut self, pid: i32, data: ActivityUpdate, last_polled: &mut Instant) {
-        tracing::trace!("Received data from process {}: {:?}", pid, data);
+        // tracing::trace!("Received data from process {}: {:?}", pid, data);
         self.sched_queue.schedule_push(pid, data);
         self.poll_queue(last_polled).await;
     }
@@ -142,7 +142,11 @@ impl Scheduler {
         }
         self.sched_queue.update_active(self.active_client);
         if let Some(req) = self.sched_queue.schedule_pop(self.active_client) {
-            tracing::trace!("Handling request from process {}: {:?}", req.pid(), req);
+            // tracing::trace!(
+            //     "Handling request from process {}: {}",
+            //     req.pid(),
+            //     req.req_type()
+            // );
             match req {
                 GenericRequest::Idle(req) => match req.request_type {
                     IdleRequestType::Idle => self.handle_activity_idle(req.pid),
@@ -199,9 +203,17 @@ impl Scheduler {
         let mut swap_out = None;
         if mem_req.is_some() {
             tracing::debug!(
-                "Process {} requests scheduling with memory requirement: {:?}",
+                "Process {} requests memory: {}",
                 incoming_pid,
-                mem_req
+                nihil_common::general::pretty_size(
+                    mem_req
+                        .as_ref()
+                        .unwrap()
+                        .mem_req
+                        .iter()
+                        .map(|v| v.iter().sum::<u64>())
+                        .sum::<u64>()
+                )
             );
         }
 
@@ -294,12 +306,6 @@ impl Scheduler {
             swap_out.map(|x| x / (1024 * 1024)).unwrap_or_default(),
             config.schedule_cooldown,
             client.priority,
-        );
-        tracing::debug!(
-            "Process {}: {:?}, cooldown={:.2}s",
-            incoming_pid,
-            client,
-            cooldown.as_secs_f64()
         );
         // prevent thrashing
         self.sched_queue.cooldown(Some(cooldown));

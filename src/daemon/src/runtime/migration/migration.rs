@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     num::NonZeroU32,
     sync::Arc,
 };
@@ -90,7 +90,7 @@ impl DataMigrationTask {
             storage_to_host_mem.is_empty() && host_mem_to_storage.is_empty(),
             "not implemented yet"
         );
-        Self {
+        let res = Self {
             out_from_gpu,
             into_gpu,
             storage_to_shm,
@@ -99,7 +99,58 @@ impl DataMigrationTask {
             storage_to_hostmem: storage_to_host_mem,
             hostmem_to_storage: host_mem_to_storage,
             data_manager,
+        };
+        tracing::debug!("Created migration task: {}", res.json_summary());
+        res
+    }
+
+    pub fn json_summary(&self) -> String {
+        let into_gpu_size = self
+            .into_gpu
+            .1
+            .device_map
+            .values()
+            .flatten()
+            .map(|e| e.size)
+            .sum::<u64>();
+        let out_from_gpu_size = self
+            .out_from_gpu
+            .iter()
+            .flat_map(|(_, spec, _, _)| spec.device_map.values().flatten())
+            .map(|e| e.size)
+            .sum::<u64>();
+        let mut data = HashMap::new();
+        data.insert("shm_to_gpu_size", pretty_size(into_gpu_size));
+        data.insert("gpu_to_shm_size", pretty_size(out_from_gpu_size));
+        if self.hostmem_to_shm.len() > 0 {
+            let hostmem_to_shm_size = self.hostmem_to_shm.iter().map(|b| b.size).sum::<u64>();
+            data.insert("hostmem_to_shm_size", pretty_size(hostmem_to_shm_size));
         }
+        if self.storage_to_shm.len() > 0 {
+            let storage_to_shm_size = self.storage_to_shm.iter().map(|b| b.size).sum::<u64>();
+            data.insert("storage_to_shm_size", pretty_size(storage_to_shm_size));
+        }
+        if self.shm_to_backend.len() > 0 {
+            let shm_to_backend_size = self.shm_to_backend.keys().map(|b| b.size).sum::<u64>();
+            data.insert("shm_to_backend_size", pretty_size(shm_to_backend_size));
+        }
+        if self.storage_to_hostmem.len() > 0 {
+            let storage_to_hostmem_size =
+                self.storage_to_hostmem.iter().map(|b| b.size).sum::<u64>();
+            data.insert(
+                "storage_to_hostmem_size",
+                pretty_size(storage_to_hostmem_size),
+            );
+        }
+        if self.hostmem_to_storage.len() > 0 {
+            let hostmem_to_storage_size =
+                self.hostmem_to_storage.iter().map(|b| b.size).sum::<u64>();
+            data.insert(
+                "hostmem_to_storage_size",
+                pretty_size(hostmem_to_storage_size),
+            );
+        }
+        serde_json::to_string(&data).unwrap_or_default()
     }
 
     pub fn get_out_from_gpu(
@@ -138,7 +189,9 @@ impl DataMigrationTask {
             src_per_device
                 .keys()
                 .chain(self.into_gpu.1.device_map.keys())
-                .cloned(),
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter(),
             self.shm_to_backend.clone(),
         );
         let mut task_handles = Vec::new();
@@ -303,7 +356,8 @@ async fn device_to_host_transfer(
                 // Send migration request to the source process
                 if let Ok(resp) = rpc_client.migrate(tarpc::context::current(), args).await {
                     warn_on_send_error!(gpu_mem_token_tx.send(resp));
-                    warn_on_send_error!(out_data_ready_tx.send(src_buffer_id));
+                    // Rx may close early if no shm to backend transfer is needed
+                    let _ = out_data_ready_tx.send(src_buffer_id);
                 } else {
                     tracing::warn!("Failed to complete D2H migration RPC to source process");
                 }

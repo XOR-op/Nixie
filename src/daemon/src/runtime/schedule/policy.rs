@@ -42,6 +42,13 @@ impl GenericRequest {
             GenericRequest::Schedule(req) => req.pid,
         }
     }
+
+    pub fn req_type(&self) -> &'static str {
+        match self {
+            GenericRequest::Idle(_) => "Idle",
+            GenericRequest::Schedule(_) => "Schedule",
+        }
+    }
 }
 
 pub struct ScheduleQueue {
