@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     num::NonZeroU32,
     sync::Arc,
+    time::Duration,
 };
 
 use itertools::Itertools;
@@ -345,7 +346,11 @@ async fn device_to_host_transfer(
                 size: out_from_gpu_entry.size,
             };
             // Reserve shared memory for the migration
-            if let Some(offset) = shm_buffer_mgr.try_reserve(&src_buffer_id) {
+            let timeout = Duration::from_secs(30);
+            if let Ok(offset) = shm_buffer_mgr
+                .reserve_with_timeout(&src_buffer_id, Some(timeout))
+                .await
+            {
                 let args = MigrationArgs {
                     host_buffer_offset: offset,
                     size: out_from_gpu_entry.size,
@@ -363,9 +368,12 @@ async fn device_to_host_transfer(
                 }
             } else {
                 tracing::warn!(
-                    "Failed to reserve shared memory for migration: {:?}",
-                    src_buffer_id
+                    "Failed to reserve shared memory for migration: {:?} for timeout {:?}",
+                    src_buffer_id,
+                    timeout
                 );
+                // early return for debugging purpose
+                return;
             }
         }
     }

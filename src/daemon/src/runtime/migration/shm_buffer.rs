@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Mutex,
+    time::Duration,
 };
 
 use nihil_common::{MAX_ALLOCATION_SIZE, shm_buffer::ShmBuffer};
@@ -117,18 +118,37 @@ impl ShmBufferManager {
         ShmBufferInner::reserve_inner(&mut inner, buf_id)
     }
 
-    pub async fn reserve(&self, buf_id: &BufferId) -> u64 {
+    pub async fn reserve_with_timeout(
+        &self,
+        buf_id: &BufferId,
+        timeout: Option<Duration>,
+    ) -> Result<u64, ()> {
         loop {
             let (tx, rx) = oneshot::channel();
             {
                 let mut inner = self.inner.lock().unwrap();
                 if let Some(res) = ShmBufferInner::reserve_inner(&mut inner, buf_id) {
-                    return res;
+                    return Ok(res);
                 }
                 inner.pending_reservations.push(tx);
             }
-            let _ = rx.await;
+
+            // wait for notification or timeout
+            if let Some(timeout) = timeout {
+                tokio::select! {
+                    _ = rx => {},
+                    _ = tokio::time::sleep(timeout) => {
+                        return Err(());
+                    }
+                }
+            } else {
+                let _ = rx.await;
+            }
         }
+    }
+
+    pub async fn reserve(&self, buf_id: &BufferId) -> u64 {
+        self.reserve_with_timeout(buf_id, None).await.unwrap()
     }
 
     pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {
