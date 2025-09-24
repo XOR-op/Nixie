@@ -61,31 +61,31 @@ pub struct MigrationSpec {
     pub device_map: HashMap<GlobalDeviceId, Vec<MigrationSpecEntry>>,
 }
 
-pub struct DataMigrationTask {
+pub struct DataMigrationTask<Client, Handle> {
     // movement involving client processes
-    out_from_gpu: Vec<(i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>)>,
-    into_gpu: (i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>),
+    pub(super) out_from_gpu: Vec<(i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>)>,
+    pub(super) into_gpu: (i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>),
 
     // reorganization of buffers within daemon
-    storage_to_shm: Vec<BufferId>,
-    hostmem_to_shm: Vec<BufferId>,
-    shm_to_backend: HashMap<BufferId, BufferLocation>,
-    storage_to_hostmem: Vec<BufferId>,
-    hostmem_to_storage: Vec<BufferId>,
+    pub(super) storage_to_shm: Vec<BufferId>,
+    pub(super) hostmem_to_shm: Vec<BufferId>,
+    pub(super) shm_to_backend: HashMap<BufferId, BufferLocation>,
+    pub(super) storage_to_hostmem: Vec<BufferId>,
+    pub(super) hostmem_to_storage: Vec<BufferId>,
 
-    data_manager: DataManagerHandle,
+    pub(super) data_manager: Handle,
 }
 
-impl DataMigrationTask {
+impl<Client, Handle> DataMigrationTask<Client, Handle> {
     pub fn new(
-        out_from_gpu: Vec<(i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>)>,
-        into_gpu: (i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>),
+        out_from_gpu: Vec<(i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>)>,
+        into_gpu: (i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>),
         storage_to_shm: Vec<BufferId>,
         host_mem_to_shm: Vec<BufferId>,
         shm_to_backend: HashMap<BufferId, BufferLocation>,
         storage_to_host_mem: Vec<BufferId>,
         host_mem_to_storage: Vec<BufferId>,
-        data_manager: DataManagerHandle,
+        data_manager: Handle,
     ) -> Self {
         assert!(
             storage_to_host_mem.is_empty() && host_mem_to_storage.is_empty(),
@@ -153,7 +153,9 @@ impl DataMigrationTask {
         }
         serde_json::to_string(&data).unwrap_or_default()
     }
+}
 
+impl DataMigrationTask<SidecarClient, DataManagerHandle> {
     pub fn get_out_from_gpu(
         &self,
     ) -> &[(i32, MigrationSpec, SidecarClient, Arc<DeviceOrdinalMapping>)] {

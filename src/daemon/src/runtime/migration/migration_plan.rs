@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE, rpc::SidecarClient};
+use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE};
 
 use crate::{
     control::ProcessResidualData,
@@ -18,23 +18,45 @@ pub(crate) enum DeviceRequestArgs {
     Allocation(HashMap<GlobalDeviceId, u64>),
 }
 
+pub(crate) trait AbstractDataHandle: Clone {
+    fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<u64>;
+    fn hostmem_contains(&self, buf_id: &BufferId) -> bool;
+    fn storage_contains(&self, buf_id: &BufferId) -> bool;
+
+    fn shm_free_segments(&self) -> Vec<u64>;
+    fn hostmem_free_segments(&self) -> Vec<u64>;
+}
+
+impl AbstractDataHandle for DataManagerHandle {
+    fn hostmem_contains(&self, buf_id: &BufferId) -> bool {
+        self.hostmem.contains(buf_id)
+    }
+    fn storage_contains(&self, buf_id: &BufferId) -> bool {
+        self.storage.contains(buf_id)
+    }
+    fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<u64> {
+        self.shm.get_buffer(buf_id).map(|info| info.block_size)
+    }
+
+    fn shm_free_segments(&self) -> Vec<u64> {
+        self.shm.free_segments()
+    }
+    fn hostmem_free_segments(&self) -> Vec<u64> {
+        self.hostmem.free_mem_segments()
+    }
+}
+
 /// Create a migration task that migrates data at the cost of others being moved out.
 /// `out_from_gpu`: the earlier in the list, the more likely to be moved out.
-pub(crate) fn two_processes_task(
-    into_gpu: (
-        i32,
-        DeviceRequestArgs,
-        SidecarClient,
-        Arc<DeviceOrdinalMapping>,
-    ),
-    out_from_gpu: &[(
-        i32,
-        ProcessResidualData,
-        SidecarClient,
-        Arc<DeviceOrdinalMapping>,
-    )],
-    data_manager: DataManagerHandle,
-) -> DataMigrationTask {
+pub(crate) fn two_processes_task<Client, Handle>(
+    into_gpu: (i32, DeviceRequestArgs, Client, Arc<DeviceOrdinalMapping>),
+    out_from_gpu: &[(i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>)],
+    data_manager: Handle,
+) -> DataMigrationTask<Client, Handle>
+where
+    Client: Clone,
+    Handle: AbstractDataHandle,
+{
     let mut out_of_gpu_list = Vec::new();
     let into_gpu_requirement = match &into_gpu.1 {
         DeviceRequestArgs::ResidualData(process_residual_data) => process_residual_data
@@ -44,8 +66,8 @@ pub(crate) fn two_processes_task(
             .collect::<HashMap<_, _>>(),
         DeviceRequestArgs::Allocation(allocation) => allocation.clone(),
     };
-    let mut shm_free_segments = data_manager.shm.free_segments();
-    let mut host_mem_free_segments = data_manager.hostmem.free_mem_segments();
+    let mut shm_free_segments = data_manager.shm_free_segments();
+    let mut host_mem_free_segments = data_manager.hostmem_free_segments();
 
     let mut hostmem_to_shm = Vec::new();
     let mut storage_to_shm = Vec::new();
@@ -71,8 +93,8 @@ pub(crate) fn two_processes_task(
                                 block_id: data_entry.handle_idx,
                                 size: data_entry.size,
                             };
-                            if let Some(alloc_info) = data_manager.shm.get_buffer(&buffer_id) {
-                                shm_free_segments.push(alloc_info.block_size);
+                            if let Some(alloc_size) = data_manager.shm_alloc_size(&buffer_id) {
+                                shm_free_segments.push(alloc_size);
                                 // in SHM
                                 Some(MigrationSpecEntry {
                                     size: data_entry.size,
@@ -80,11 +102,11 @@ pub(crate) fn two_processes_task(
                                     ready_for_pcie_xfer: true,
                                 })
                             } else {
-                                if data_manager.hostmem.contains(&buffer_id) {
+                                if data_manager.hostmem_contains(&buffer_id) {
                                     // in host mem
                                     host_mem_free_segments.push(MAX_ALLOCATION_SIZE as u64);
                                     hostmem_to_shm.push(buffer_id);
-                                } else if data_manager.storage.contains(&buffer_id) {
+                                } else if data_manager.storage_contains(&buffer_id) {
                                     // in storage
                                     storage_to_shm.push(buffer_id);
                                 } else {
@@ -195,4 +217,269 @@ pub(crate) fn two_processes_task(
         hostmem_to_storage,
         data_manager,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use colored::Colorize;
+    use nihil_common::ProcessLocalDeviceId;
+
+    use super::*;
+    use std::{collections::HashMap, num::NonZeroU32};
+
+    use crate::{control::PhysicalMemoryData, runtime::migration::BufferId};
+    #[derive(Default)]
+    struct MockProcessInput {
+        pid: i32,
+        gpu: u64,
+        shm: u64,
+        hostmem: u64,
+        storage: u64,
+    }
+
+    struct MockProcessData {
+        pid: i32,
+        gpu_buffer_ids: Vec<BufferId>,
+        shm_buffer_ids: Vec<BufferId>,
+        hostmem_buffer_ids: Vec<BufferId>,
+        storage_buffer_ids: Vec<BufferId>,
+    }
+
+    impl MockProcessData {
+        fn from_input(input: &MockProcessInput) -> Self {
+            let block_size = MAX_ALLOCATION_SIZE as u64;
+            assert_eq!(input.gpu % block_size, 0);
+            assert_eq!(input.shm % block_size, 0);
+            assert_eq!(input.hostmem % block_size, 0);
+            assert_eq!(input.storage % block_size, 0);
+            Self {
+                pid: input.pid,
+                gpu_buffer_ids: (0..input.gpu / block_size)
+                    .map(|i| BufferId {
+                        pid: input.pid,
+                        device_id: GlobalDeviceId(0),
+                        block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
+                        size: block_size,
+                    })
+                    .collect(),
+                shm_buffer_ids: (0..input.shm / block_size)
+                    .map(|i| BufferId {
+                        pid: input.pid,
+                        device_id: GlobalDeviceId(0),
+                        block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
+                        size: block_size,
+                    })
+                    .collect(),
+                hostmem_buffer_ids: (0..input.hostmem / block_size)
+                    .map(|i| BufferId {
+                        pid: input.pid,
+                        device_id: GlobalDeviceId(0),
+                        block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
+                        size: block_size,
+                    })
+                    .collect(),
+                storage_buffer_ids: (0..input.storage / block_size)
+                    .map(|i| BufferId {
+                        pid: input.pid,
+                        device_id: GlobalDeviceId(0),
+                        block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
+                        size: block_size,
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockManager {
+        shm_map: HashMap<BufferId, u64>,
+        hostmem_map: HashMap<BufferId, u64>,
+        storage_map: HashMap<BufferId, u64>,
+        shm_capacity: u64,
+        hostmem_capacity: u64,
+    }
+
+    impl AbstractDataHandle for MockManager {
+        fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<u64> {
+            self.shm_map.get(buf_id).copied()
+        }
+        fn hostmem_contains(&self, buf_id: &BufferId) -> bool {
+            self.hostmem_map.contains_key(buf_id)
+        }
+        fn storage_contains(&self, buf_id: &BufferId) -> bool {
+            self.storage_map.contains_key(buf_id)
+        }
+
+        fn shm_free_segments(&self) -> Vec<u64> {
+            let free_cnt = (self.shm_capacity - self.shm_map.values().sum::<u64>())
+                / MAX_ALLOCATION_SIZE as u64;
+            vec![MAX_ALLOCATION_SIZE as u64; free_cnt as usize]
+        }
+        fn hostmem_free_segments(&self) -> Vec<u64> {
+            let free_cnt = (self.hostmem_capacity - self.hostmem_map.values().sum::<u64>())
+                / MAX_ALLOCATION_SIZE as u64;
+            vec![MAX_ALLOCATION_SIZE as u64; free_cnt as usize]
+        }
+    }
+
+    fn create_mock_task(
+        schedued_pid: i32,
+        processes: Vec<MockProcessInput>,
+        gpu_capacity: u64,
+        shm_capacity: u64,
+        hostmem_capacity: u64,
+    ) -> DataMigrationTask<(), MockManager> {
+        let dev_mapping = Arc::new(DeviceOrdinalMapping::from_real_to_visible_map(
+            HashMap::from([(GlobalDeviceId(0), ProcessLocalDeviceId(0))]),
+        ));
+        let process_data_list: Vec<MockProcessData> =
+            processes.iter().map(MockProcessData::from_input).collect();
+        let mut shm_map = HashMap::new();
+        let mut hostmem_map = HashMap::new();
+        let mut storage_map = HashMap::new();
+        for process_data in process_data_list.iter() {
+            for buf_id in process_data.shm_buffer_ids.iter() {
+                shm_map.insert(buf_id.clone(), buf_id.size);
+            }
+            for buf_id in process_data.hostmem_buffer_ids.iter() {
+                hostmem_map.insert(buf_id.clone(), buf_id.size);
+            }
+            for buf_id in process_data.storage_buffer_ids.iter() {
+                storage_map.insert(buf_id.clone(), buf_id.size);
+            }
+        }
+        assert!(
+            process_data_list
+                .iter()
+                .map(|p| p.gpu_buffer_ids.iter().map(|b| b.size).sum::<u64>())
+                .sum::<u64>()
+                <= gpu_capacity
+        );
+        assert!(shm_map.values().sum::<u64>() <= shm_capacity);
+        assert!(hostmem_map.values().sum::<u64>() <= hostmem_capacity);
+        let data_manager = MockManager {
+            shm_map,
+            hostmem_map,
+            storage_map,
+            shm_capacity,
+            hostmem_capacity,
+        };
+        let task = two_processes_task(
+            (
+                schedued_pid,
+                DeviceRequestArgs::ResidualData(ProcessResidualData {
+                    pid: schedued_pid,
+                    allocations: HashMap::from([(
+                        GlobalDeviceId(0),
+                        process_data_list
+                            .iter()
+                            .find(|p| p.pid == schedued_pid)
+                            .unwrap()
+                            .gpu_buffer_ids
+                            .iter()
+                            .map(|b| PhysicalMemoryData {
+                                on_gpu: true,
+                                handle_idx: b.block_id,
+                                size: b.size,
+                            })
+                            .collect(),
+                    )]),
+                }),
+                (),
+                dev_mapping.clone(),
+            ),
+            &process_data_list
+                .iter()
+                .filter(|p| p.pid != schedued_pid && !p.gpu_buffer_ids.is_empty())
+                .map(|p| {
+                    (
+                        p.pid,
+                        ProcessResidualData {
+                            pid: p.pid,
+                            allocations: HashMap::from([(
+                                GlobalDeviceId(0),
+                                p.gpu_buffer_ids
+                                    .iter()
+                                    .map(|b| PhysicalMemoryData {
+                                        on_gpu: true,
+                                        handle_idx: b.block_id,
+                                        size: b.size,
+                                    })
+                                    .collect(),
+                            )]),
+                        },
+                        (),
+                        dev_mapping.clone(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            data_manager,
+        );
+        task
+    }
+
+    fn size_to_bytes(size: &str) -> u64 {
+        // support GB/G/gb/g etc.
+        let size = size.trim().to_lowercase();
+        let mapping = HashMap::from([
+            ("g", 1024u64 * 1024 * 1024),
+            ("gb", 1024u64 * 1024 * 1024),
+            ("m", 1024u64 * 1024),
+            ("mb", 1024u64 * 1024),
+            ("k", 1024u64),
+            ("kb", 1024u64),
+        ]);
+        for (unit, multiplier) in mapping.iter() {
+            if size.ends_with(unit) {
+                let num_part = size.trim_end_matches(unit).trim();
+                if let Ok(num) = num_part.parse::<f64>() {
+                    return (num * (*multiplier as f64)) as u64;
+                }
+            }
+        }
+        if let Ok(num) = size.parse::<u64>() {
+            return num;
+        }
+        panic!("Invalid size format: {}", size);
+    }
+
+    #[test]
+    fn test_migration_task() {
+        let task = create_mock_task(
+            1,
+            vec![
+                MockProcessInput {
+                    pid: 1,
+                    gpu: size_to_bytes("8GB"),
+                    shm: size_to_bytes("16GB"),
+                    ..Default::default()
+                },
+                MockProcessInput {
+                    pid: 2,
+                    gpu: size_to_bytes("24GB"),
+                    shm: size_to_bytes("0GB"),
+                    ..Default::default()
+                },
+                MockProcessInput {
+                    pid: 3,
+                    shm: size_to_bytes("20GB"),
+                    ..Default::default()
+                },
+            ],
+            size_to_bytes("32GB"),
+            size_to_bytes("36GB"),
+            size_to_bytes("32GB"),
+        );
+        println!(
+            "{}",
+            "================================ Output Start ================================="
+                .bold()
+        );
+        println!("Migration Task: {}", task.json_summary());
+        println!(
+            "{}",
+            "================================= Output End =================================="
+                .bold()
+        );
+    }
 }

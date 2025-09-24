@@ -328,7 +328,7 @@ fn duplicate_peer_fd(
     }
 }
 
-// Mapping  between real GPU indices and indices exposed to processes
+// Mapping between real GPU indices and indices exposed to processes
 #[derive(Debug, Clone)]
 pub(super) struct DeviceOrdinalMapping {
     real_to_visible: HashMap<GlobalDeviceId, ProcessLocalDeviceId>,
@@ -403,6 +403,17 @@ impl DeviceOrdinalMapping {
             Some(*dev)
         } else {
             None
+        }
+    }
+
+    pub fn from_real_to_visible_map(map: HashMap<GlobalDeviceId, ProcessLocalDeviceId>) -> Self {
+        let mut visible_to_real = HashMap::new();
+        for (real, visible) in &map {
+            visible_to_real.insert(*visible, *real);
+        }
+        Self {
+            real_to_visible: map,
+            visible_to_real,
         }
     }
 }
