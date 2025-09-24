@@ -26,7 +26,7 @@ pub struct AllocationInfo {
     block_size: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BufferLocation {
     HostMem,
     Storage,

@@ -121,35 +121,29 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
             .map(|e| e.size)
             .sum::<u64>();
         let mut data = HashMap::new();
-        data.insert("shm_to_gpu_size", pretty_size(into_gpu_size));
-        data.insert("gpu_to_shm_size", pretty_size(out_from_gpu_size));
+        data.insert("shm -> gpu", pretty_size(into_gpu_size));
+        data.insert("gpu -> shm", pretty_size(out_from_gpu_size));
         if self.hostmem_to_shm.len() > 0 {
             let hostmem_to_shm_size = self.hostmem_to_shm.iter().map(|b| b.size).sum::<u64>();
-            data.insert("hostmem_to_shm_size", pretty_size(hostmem_to_shm_size));
+            data.insert("hostmem -> shm", pretty_size(hostmem_to_shm_size));
         }
         if self.storage_to_shm.len() > 0 {
             let storage_to_shm_size = self.storage_to_shm.iter().map(|b| b.size).sum::<u64>();
-            data.insert("storage_to_shm_size", pretty_size(storage_to_shm_size));
+            data.insert("storage -> shm", pretty_size(storage_to_shm_size));
         }
         if self.shm_to_backend.len() > 0 {
             let shm_to_backend_size = self.shm_to_backend.keys().map(|b| b.size).sum::<u64>();
-            data.insert("shm_to_backend_size", pretty_size(shm_to_backend_size));
+            data.insert("shm -> backend", pretty_size(shm_to_backend_size));
         }
         if self.storage_to_hostmem.len() > 0 {
             let storage_to_hostmem_size =
                 self.storage_to_hostmem.iter().map(|b| b.size).sum::<u64>();
-            data.insert(
-                "storage_to_hostmem_size",
-                pretty_size(storage_to_hostmem_size),
-            );
+            data.insert("storage -> hostmem", pretty_size(storage_to_hostmem_size));
         }
         if self.hostmem_to_storage.len() > 0 {
             let hostmem_to_storage_size =
                 self.hostmem_to_storage.iter().map(|b| b.size).sum::<u64>();
-            data.insert(
-                "hostmem_to_storage_size",
-                pretty_size(hostmem_to_storage_size),
-            );
+            data.insert("hostmem -> storage", pretty_size(hostmem_to_storage_size));
         }
         serde_json::to_string(&data).unwrap_or_default()
     }

@@ -222,10 +222,13 @@ where
 #[cfg(test)]
 mod tests {
     use colored::Colorize;
-    use nihil_common::ProcessLocalDeviceId;
+    use nihil_common::{ProcessLocalDeviceId, general::pretty_size};
 
     use super::*;
-    use std::{collections::HashMap, num::NonZeroU32};
+    use std::{
+        collections::{BTreeMap, HashMap},
+        num::NonZeroU32,
+    };
 
     use crate::{control::PhysicalMemoryData, runtime::migration::BufferId};
     #[derive(Default)]
@@ -324,11 +327,19 @@ mod tests {
 
     fn create_mock_task(
         schedued_pid: i32,
+        new_allocation: Option<u64>,
         processes: Vec<MockProcessInput>,
         gpu_capacity: u64,
         shm_capacity: u64,
         hostmem_capacity: u64,
     ) -> DataMigrationTask<(), MockManager> {
+        assert_ne!(schedued_pid, 0); // we don't use pid = 0 in tests to avoid accidently use Default.
+        assert!(
+            new_allocation.is_none()
+                || processes
+                    .iter()
+                    .any(|p| (p.pid == schedued_pid) && (p.hostmem + p.shm + p.storage == 0))
+        );
         let dev_mapping = Arc::new(DeviceOrdinalMapping::from_real_to_visible_map(
             HashMap::from([(GlobalDeviceId(0), ProcessLocalDeviceId(0))]),
         ));
@@ -367,24 +378,28 @@ mod tests {
         let task = two_processes_task(
             (
                 schedued_pid,
-                DeviceRequestArgs::ResidualData(ProcessResidualData {
-                    pid: schedued_pid,
-                    allocations: HashMap::from([(
-                        GlobalDeviceId(0),
-                        process_data_list
-                            .iter()
-                            .find(|p| p.pid == schedued_pid)
-                            .unwrap()
-                            .gpu_buffer_ids
-                            .iter()
-                            .map(|b| PhysicalMemoryData {
-                                on_gpu: true,
-                                handle_idx: b.block_id,
-                                size: b.size,
-                            })
-                            .collect(),
-                    )]),
-                }),
+                if let Some(size) = new_allocation {
+                    DeviceRequestArgs::Allocation(HashMap::from([(GlobalDeviceId(0), size)]))
+                } else {
+                    DeviceRequestArgs::ResidualData(ProcessResidualData {
+                        pid: schedued_pid,
+                        allocations: HashMap::from([(
+                            GlobalDeviceId(0),
+                            process_data_list
+                                .iter()
+                                .find(|p| p.pid == schedued_pid)
+                                .unwrap()
+                                .gpu_buffer_ids
+                                .iter()
+                                .map(|b| PhysicalMemoryData {
+                                    on_gpu: true,
+                                    handle_idx: b.block_id,
+                                    size: b.size,
+                                })
+                                .collect(),
+                        )]),
+                    })
+                },
                 (),
                 dev_mapping.clone(),
             ),
@@ -447,17 +462,18 @@ mod tests {
     fn test_migration_task() {
         let task = create_mock_task(
             1,
+            Some(size_to_bytes("10GB")),
             vec![
                 MockProcessInput {
                     pid: 1,
-                    gpu: size_to_bytes("8GB"),
-                    shm: size_to_bytes("16GB"),
+                    gpu: size_to_bytes("6GB"),
+                    shm: size_to_bytes("0GB"),
                     ..Default::default()
                 },
                 MockProcessInput {
                     pid: 2,
                     gpu: size_to_bytes("24GB"),
-                    shm: size_to_bytes("0GB"),
+                    shm: size_to_bytes("15GB"),
                     ..Default::default()
                 },
                 MockProcessInput {
@@ -476,6 +492,39 @@ mod tests {
                 .bold()
         );
         println!("Migration Task: {}", task.json_summary());
+        let shm_to_backend = task
+            .shm_to_backend
+            .iter()
+            .map(|(k, v)| BTreeMap::from([(k.pid, HashMap::from([(*v, k.size)]))]))
+            .reduce(|mut acc, m| {
+                for (k, v) in m {
+                    acc.entry(k)
+                        .and_modify(|e| {
+                            for (loc, size) in &v {
+                                *e.entry(*loc).or_insert(0) += size;
+                            }
+                        })
+                        .or_insert(v);
+                }
+                acc
+            });
+        if let Some(shm_to_backend) = shm_to_backend {
+            println!(
+                "SHM to backend distribution: [{}]",
+                shm_to_backend
+                    .iter()
+                    .map(|(k, v)| format!(
+                        "pid {} = ({})",
+                        k,
+                        v.iter()
+                            .map(|(loc, size)| format!("SHM -> {:?} {}", loc, pretty_size(*size)))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         println!(
             "{}",
             "================================= Output End =================================="
