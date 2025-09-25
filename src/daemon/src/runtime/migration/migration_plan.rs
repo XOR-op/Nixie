@@ -20,6 +20,10 @@ pub(crate) enum DeviceRequestArgs {
 
 pub(crate) trait AbstractDataHandle: Clone {
     fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<u64>;
+
+    fn shm_contains(&self, buf_id: &BufferId) -> bool {
+        self.shm_alloc_size(buf_id).is_some()
+    }
     fn hostmem_contains(&self, buf_id: &BufferId) -> bool;
     fn storage_contains(&self, buf_id: &BufferId) -> bool;
 
@@ -200,7 +204,7 @@ where
         }
     }
 
-    DataMigrationTask::new(
+    let result = DataMigrationTask::new(
         out_of_gpu_list,
         (
             into_gpu.0,
@@ -216,11 +220,13 @@ where
         storage_to_hostmem,
         hostmem_to_storage,
         data_manager,
-    )
+    );
+    tests::check_task_no_deadlock(&result);
+    result
 }
 
-#[cfg(test)]
-mod tests {
+// #[cfg(test)]
+pub(super) mod tests {
     use colored::Colorize;
     use nihil_common::{ProcessLocalDeviceId, general::pretty_size};
 
@@ -466,14 +472,14 @@ mod tests {
             vec![
                 MockProcessInput {
                     pid: 1,
-                    gpu: size_to_bytes("6GB"),
+                    gpu: size_to_bytes("8GB"),
                     shm: size_to_bytes("0GB"),
                     ..Default::default()
                 },
                 MockProcessInput {
                     pid: 2,
                     gpu: size_to_bytes("24GB"),
-                    shm: size_to_bytes("15GB"),
+                    shm: size_to_bytes("16GB"),
                     ..Default::default()
                 },
                 MockProcessInput {
@@ -525,10 +531,39 @@ mod tests {
                     .join(", ")
             );
         }
+        assert!(check_task_no_deadlock(&task));
         println!(
             "{}",
             "================================= Output End =================================="
                 .bold()
         );
+    }
+
+    pub(super) fn check_task_no_deadlock<C, Handle: AbstractDataHandle>(
+        task: &DataMigrationTask<C, Handle>,
+    ) -> bool {
+        if task.shm_to_backend.is_empty() {
+            // no data to move out, no deadlock
+            return true;
+        }
+        let shm_free_size: u64 = task.data_manager.shm_free_segments().iter().sum();
+        // let hostmem_free_size: u64 = task.data_manager.hostmem_free_segments().iter().sum();
+        let mut ready_shm_xfer = 0;
+        // check if any shm to backend is already available in shm
+        for (buf_id, _) in task.shm_to_backend.iter() {
+            if task.data_manager.shm_contains(buf_id) {
+                ready_shm_xfer += buf_id.size;
+            }
+        }
+        println!(
+            "SHM free size: {}, ready SHM to backend size: {}",
+            pretty_size(shm_free_size),
+            pretty_size(ready_shm_xfer)
+        );
+        if shm_free_size == 0 && ready_shm_xfer == 0 {
+            println!("Deadlock detected: no SHM free space, and no SHM to backend can be done.");
+            return false;
+        }
+        return true;
     }
 }
