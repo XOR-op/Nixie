@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE};
+use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE, shm};
 
 use crate::{
     control::ProcessResidualData,
@@ -27,6 +27,8 @@ pub(crate) trait AbstractDataHandle: Clone {
     fn hostmem_contains(&self, buf_id: &BufferId) -> bool;
     fn storage_contains(&self, buf_id: &BufferId) -> bool;
 
+    fn shm_buffer_ids(&self) -> HashMap<BufferId, u64>;
+
     fn shm_free_segments(&self) -> Vec<u64>;
     fn hostmem_free_segments(&self) -> Vec<u64>;
 }
@@ -42,12 +44,25 @@ impl AbstractDataHandle for DataManagerHandle {
         self.shm.get_buffer(buf_id).map(|info| info.block_size)
     }
 
+    fn shm_buffer_ids(&self) -> HashMap<BufferId, u64> {
+        self.shm.dump_buffers()
+    }
+
     fn shm_free_segments(&self) -> Vec<u64> {
         self.shm.free_segments()
     }
     fn hostmem_free_segments(&self) -> Vec<u64> {
         self.hostmem.free_mem_segments()
     }
+}
+
+macro_rules! check_size {
+    ($given:expr, $expected:expr, $msg:expr
+    ) => {
+        if $given < $expected {
+            panic!("{} {} is smaller than expected {}", $msg, $given, $expected);
+        }
+    };
 }
 
 /// Create a migration task that migrates data at the cost of others being moved out.
@@ -79,6 +94,9 @@ where
     // TODO: use these two to reduce migration time
     let storage_to_hostmem = Vec::new();
     let hostmem_to_storage = Vec::new();
+
+    let mut shm_eviction_candidates = data_manager.shm_buffer_ids();
+    shm_eviction_candidates.retain(|k, _| k.pid != into_gpu.0);
 
     // prepare into_gpu entries, and also update free segments
     let into_gpu_entries = match into_gpu.1 {
@@ -156,28 +174,31 @@ where
                     // Use SHM first, then host mem, then storage
                     // TODO: handle if segments have variable lengths
                     if let Some(seg) = shm_free_segments.pop() {
-                        assert!(
-                            seg >= entry.size,
-                            "SHM segment {} is smaller than required {}",
-                            seg,
-                            entry.size
-                        );
-                    } else if let Some(seg) = host_mem_free_segments.pop() {
-                        assert!(
-                            seg >= entry.size,
-                            "Host mem segment {} is smaller than required {}",
-                            seg,
-                            entry.size
-                        );
-                        shm_to_backend.insert(
-                            spec_entry.to_buffer_id(*out_from_gpu_pid, global_id),
-                            BufferLocation::HostMem,
-                        );
+                        check_size!(seg, entry.size, "SHM free segment");
                     } else {
-                        shm_to_backend.insert(
-                            spec_entry.to_buffer_id(*out_from_gpu_pid, global_id),
-                            BufferLocation::Storage,
-                        );
+                        // pop one entry from shm_eviction_candidates
+                        let evicted_buf_id = {
+                            let res = shm_eviction_candidates
+                                .iter()
+                                .next()
+                                .map(|(k, v)| (k.clone(), *v));
+                            match res {
+                                Some((k, v)) => {
+                                    check_size!(v, entry.size, "SHM eviction candidate");
+                                    shm_eviction_candidates.remove(&k);
+                                    k
+                                }
+                                None => {
+                                    panic!("No more SHM eviction candidates");
+                                }
+                            }
+                        };
+                        if let Some(seg) = host_mem_free_segments.pop() {
+                            check_size!(seg, entry.size, "Host mem segment");
+                            shm_to_backend.insert(evicted_buf_id, BufferLocation::HostMem);
+                        } else {
+                            shm_to_backend.insert(evicted_buf_id, BufferLocation::Storage);
+                        }
                     };
                     migration_entries.push(spec_entry);
                     accu_size += entry.size;
@@ -317,6 +338,10 @@ pub(super) mod tests {
         }
         fn storage_contains(&self, buf_id: &BufferId) -> bool {
             self.storage_map.contains_key(buf_id)
+        }
+
+        fn shm_buffer_ids(&self) -> HashMap<BufferId, u64> {
+            self.shm_map.clone()
         }
 
         fn shm_free_segments(&self) -> Vec<u64> {
