@@ -74,6 +74,10 @@ impl InDataReadyRx {
     pub async fn recv(&mut self) -> Option<(BufferId, BufferLocation)> {
         self.inner.recv().await
     }
+
+    pub async fn try_recv(&mut self) -> Option<(BufferId, BufferLocation)> {
+        self.inner.try_recv().ok()
+    }
 }
 
 pub(super) fn create_out_data_ready_channel(

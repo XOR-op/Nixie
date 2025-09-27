@@ -8,7 +8,7 @@ use nihil_common::MAX_ALLOCATION_SIZE;
 
 use crate::{
     error::HybridBufferError,
-    runtime::migration::{AllocationInfo, BufferId},
+    runtime::migration::{AllocationCapacity, AllocationInfo, BufferId},
 };
 
 pub struct StorageBufferManager {
@@ -78,7 +78,7 @@ impl StorageBufferManager {
             .contains_key(buffer_id)
     }
 
-    pub fn dump_buffers(&self) -> HashMap<BufferId, u64> {
+    pub fn dump_buffers(&self) -> HashMap<BufferId, AllocationCapacity> {
         self.inner
             .lock()
             .unwrap()

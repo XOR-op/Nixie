@@ -332,6 +332,11 @@ async fn device_to_host_transfer(
     gpu_mem_token_tx: mpsc::UnboundedSender<MigrationResponse>,
     out_data_ready_tx: OutDataReadyTx,
 ) {
+    let total = out_from_gpu
+        .iter()
+        .map(|(_, _, _, entries)| entries.len())
+        .sum::<usize>();
+    let mut moved_cnt = 0;
     for (out_from_gpu_pid, device, rpc_client, out_from_gpu_entries) in out_from_gpu {
         // Migrate each entry
         for out_from_gpu_entry in out_from_gpu_entries {
@@ -342,7 +347,7 @@ async fn device_to_host_transfer(
                 size: out_from_gpu_entry.size,
             };
             // Reserve shared memory for the migration
-            let timeout = Duration::from_secs(30);
+            let timeout = Duration::from_secs(35);
             if let Ok(offset) = shm_buffer_mgr
                 .reserve_with_timeout(&src_buffer_id, Some(timeout))
                 .await
@@ -362,11 +367,14 @@ async fn device_to_host_transfer(
                 } else {
                     tracing::warn!("Failed to complete D2H migration RPC to source process");
                 }
+                moved_cnt += 1;
             } else {
                 tracing::warn!(
-                    "Failed to reserve shared memory for migration: {:?} for timeout {:?}",
+                    "Failed to reserve shared memory for migration: {:?} for timeout {:?}; moved {}/{}",
                     src_buffer_id,
-                    timeout
+                    timeout,
+                    moved_cnt,
+                    total
                 );
                 // early return for debugging purpose
                 return;
@@ -507,12 +515,34 @@ async fn hostmem_to_shm_transfer(
     shm_buffer_mgr: Arc<ShmBufferManager>,
     hostmem_buffer_mgr: Arc<HostMemBufferManager>,
 ) {
+    let mut moved_cnt = 0;
+    let total = host_mem_to_shm.len();
+    let timeout = Duration::from_secs(45);
     for buffer_id in host_mem_to_shm {
-        let shm_buf_offset = shm_buffer_mgr.reserve(&buffer_id).await;
+        let Ok(shm_buf_offset) = shm_buffer_mgr
+            .reserve_with_timeout(&buffer_id, Some(timeout))
+            .await
+        else {
+            tracing::warn!(
+                "Failed to reserve shm for buffer {:?} after {:?}; moved {}/{}",
+                buffer_id,
+                timeout,
+                moved_cnt,
+                total
+            );
+            return;
+        };
         let buf = unsafe { get_buffer_ref_mut(&shm_buffer_mgr, &buffer_id, shm_buf_offset) };
         panic_on_error!(hostmem_buffer_mgr.load_to(&buffer_id, buf));
         warn_on_send_error!(in_data_ready_tx.send(buffer_id, BufferLocation::HostMem));
+        moved_cnt += 1;
+        tracing::debug!(
+            "[Ongoing] Moved {}/{} buffers from hostmem to shm",
+            moved_cnt,
+            total
+        );
     }
+    tracing::debug!("Moved {}/{} buffers from hostmem to shm", moved_cnt, total);
 }
 
 async fn storage_to_shm_transfer(
@@ -595,16 +625,23 @@ async fn shm_to_backend_transfer(
             break;
         };
         if let Some(expected_location) = next_shm_handling.remove(&buf_id) {
-            let location = panic_on_error!(
-                shm_to_backend_transfer_inner(
-                    &buf_id,
-                    &shm_buffer_mgr,
-                    &hostmem_buffer_mgr,
-                    &storage_buffer_mgr
-                )
-                .await
-            );
-            check_location(&buf_id, expected_location, location);
+            let shm_buffer_mgr = shm_buffer_mgr.clone();
+            let hostmem_buffer_mgr = hostmem_buffer_mgr.clone();
+            let storage_buffer_mgr = storage_buffer_mgr.clone();
+            // spawn for multithreading
+            // TODO: profiling
+            tokio::spawn(async move {
+                let location = panic_on_error!(
+                    shm_to_backend_transfer_inner(
+                        &buf_id,
+                        &shm_buffer_mgr,
+                        &hostmem_buffer_mgr,
+                        &storage_buffer_mgr
+                    )
+                    .await
+                );
+                check_location(&buf_id, expected_location, location);
+            });
         } else {
             tracing::warn!(
                 "Received unexpected buffer ID to {:?}: {:?}",

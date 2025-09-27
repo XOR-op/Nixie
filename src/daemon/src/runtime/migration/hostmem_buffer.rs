@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use bytes::BytesMut;
 use nihil_common::MAX_ALLOCATION_SIZE;
 
-use crate::{error::HybridBufferError, runtime::migration::BufferLocation};
+use crate::{
+    error::HybridBufferError,
+    runtime::migration::{AllocationCapacity, BufferLocation},
+};
 
 use super::BufferId;
 
@@ -90,7 +93,7 @@ impl HostMemBufferManager {
     }
 
     /// Returns: a list of length of free memory segments in bytes.
-    pub fn free_mem_segments(&self) -> Vec<u64> {
+    pub fn free_mem_segments(&self) -> Vec<AllocationCapacity> {
         let inner = self.inner.lock().unwrap();
         let mut free_count = inner.free_mem_buffers.len() as u64;
         if inner.free_mem_buffers.len()
@@ -104,7 +107,7 @@ impl HostMemBufferManager {
             .collect()
     }
 
-    pub fn dump_buffers(&self) -> HashMap<BufferId, u64> {
+    pub fn dump_buffers(&self) -> HashMap<BufferId, AllocationCapacity> {
         self.inner
             .lock()
             .unwrap()

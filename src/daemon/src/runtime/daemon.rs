@@ -24,8 +24,8 @@ use crate::{
         ProcCtlReq,
         daemon_server::DaemonServer,
         migration::{
-            BufferId, DataManagerHandle, HostMemBufferManager, ShmBufferManager,
-            StorageBufferManager,
+            AllocationCapacity, BufferId, DataManagerHandle, HostMemBufferManager,
+            ShmBufferManager, StorageBufferManager,
         },
         schedule::control::ScheduleControlReq,
     },
@@ -293,7 +293,9 @@ impl Controllable for ControllableDaemon {
     }
 
     async fn data_details(self, _context: Context) -> DataManagerMetadata {
-        fn to_meta(buffers: HashMap<BufferId, u64>) -> Vec<control::ProcessDataMeta> {
+        fn to_meta(
+            buffers: HashMap<BufferId, AllocationCapacity>,
+        ) -> Vec<control::ProcessDataMeta> {
             let mut procs = HashMap::<i32, Vec<control::DataBlockMeta>>::new();
             for (buf_id, size) in buffers {
                 let entry = procs.entry(buf_id.pid).or_default();

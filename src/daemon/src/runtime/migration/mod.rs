@@ -38,3 +38,6 @@ pub struct DataManagerHandle {
     pub hostmem: Arc<HostMemBufferManager>,
     pub storage: Arc<StorageBufferManager>,
 }
+
+pub type Offset = u64;
+pub type AllocationCapacity = u64;

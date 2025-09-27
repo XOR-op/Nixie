@@ -6,7 +6,7 @@ use crate::{
     control::ProcessResidualData,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        migration::{BufferId, BufferLocation, DataManagerHandle},
+        migration::{AllocationCapacity, BufferId, BufferLocation, DataManagerHandle},
     },
 };
 
@@ -27,10 +27,10 @@ pub(crate) trait AbstractDataHandle: Clone {
     fn hostmem_contains(&self, buf_id: &BufferId) -> bool;
     fn storage_contains(&self, buf_id: &BufferId) -> bool;
 
-    fn shm_buffer_ids(&self) -> HashMap<BufferId, u64>;
+    fn shm_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity>;
 
-    fn shm_free_segments(&self) -> Vec<u64>;
-    fn hostmem_free_segments(&self) -> Vec<u64>;
+    fn shm_free_segments(&self) -> Vec<AllocationCapacity>;
+    fn hostmem_free_segments(&self) -> Vec<AllocationCapacity>;
 }
 
 impl AbstractDataHandle for DataManagerHandle {
@@ -40,18 +40,18 @@ impl AbstractDataHandle for DataManagerHandle {
     fn storage_contains(&self, buf_id: &BufferId) -> bool {
         self.storage.contains(buf_id)
     }
-    fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<u64> {
+    fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<AllocationCapacity> {
         self.shm.get_buffer(buf_id).map(|info| info.block_size)
     }
 
-    fn shm_buffer_ids(&self) -> HashMap<BufferId, u64> {
+    fn shm_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity> {
         self.shm.dump_buffers()
     }
 
-    fn shm_free_segments(&self) -> Vec<u64> {
+    fn shm_free_segments(&self) -> Vec<AllocationCapacity> {
         self.shm.free_segments()
     }
-    fn hostmem_free_segments(&self) -> Vec<u64> {
+    fn hostmem_free_segments(&self) -> Vec<AllocationCapacity> {
         self.hostmem.free_mem_segments()
     }
 }
@@ -322,15 +322,15 @@ pub(super) mod tests {
 
     #[derive(Clone)]
     struct MockManager {
-        shm_map: HashMap<BufferId, u64>,
-        hostmem_map: HashMap<BufferId, u64>,
-        storage_map: HashMap<BufferId, u64>,
+        shm_map: HashMap<BufferId, AllocationCapacity>,
+        hostmem_map: HashMap<BufferId, AllocationCapacity>,
+        storage_map: HashMap<BufferId, AllocationCapacity>,
         shm_capacity: u64,
         hostmem_capacity: u64,
     }
 
     impl AbstractDataHandle for MockManager {
-        fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<u64> {
+        fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<AllocationCapacity> {
             self.shm_map.get(buf_id).copied()
         }
         fn hostmem_contains(&self, buf_id: &BufferId) -> bool {
@@ -340,16 +340,16 @@ pub(super) mod tests {
             self.storage_map.contains_key(buf_id)
         }
 
-        fn shm_buffer_ids(&self) -> HashMap<BufferId, u64> {
+        fn shm_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity> {
             self.shm_map.clone()
         }
 
-        fn shm_free_segments(&self) -> Vec<u64> {
+        fn shm_free_segments(&self) -> Vec<AllocationCapacity> {
             let free_cnt = (self.shm_capacity - self.shm_map.values().sum::<u64>())
                 / MAX_ALLOCATION_SIZE as u64;
             vec![MAX_ALLOCATION_SIZE as u64; free_cnt as usize]
         }
-        fn hostmem_free_segments(&self) -> Vec<u64> {
+        fn hostmem_free_segments(&self) -> Vec<AllocationCapacity> {
             let free_cnt = (self.hostmem_capacity - self.hostmem_map.values().sum::<u64>())
                 / MAX_ALLOCATION_SIZE as u64;
             vec![MAX_ALLOCATION_SIZE as u64; free_cnt as usize]

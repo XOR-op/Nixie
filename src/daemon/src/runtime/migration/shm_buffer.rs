@@ -7,15 +7,14 @@ use std::{
 use nihil_common::{MAX_ALLOCATION_SIZE, shm_buffer::ShmBuffer};
 use tokio::sync::oneshot;
 
+use crate::runtime::migration::{AllocationCapacity, Offset};
+
 use super::{AllocationInfo, BufferId};
 
 pub struct ShmBufferManager {
     shm_buffer: ShmBuffer,
     inner: Mutex<ShmBufferInner>,
 }
-
-type Offset = u64;
-type AllocationCapacity = u64;
 
 struct ShmBufferInner {
     bookkeeping: HashMap<BufferId, AllocationInfo>,
@@ -82,7 +81,7 @@ impl ShmBufferManager {
     }
 
     /// Returns: a list of lengths of free segments
-    pub fn free_segments(&self) -> Vec<u64> {
+    pub fn free_segments(&self) -> Vec<AllocationCapacity> {
         self.inner
             .lock()
             .unwrap()
@@ -96,7 +95,7 @@ impl ShmBufferManager {
         unsafe { self.shm_buffer.at_offset(offset, size) }
     }
 
-    pub fn dump_buffers(&self) -> HashMap<BufferId, u64> {
+    pub fn dump_buffers(&self) -> HashMap<BufferId, AllocationCapacity> {
         self.inner
             .lock()
             .unwrap()
@@ -138,6 +137,14 @@ impl ShmBufferManager {
                 tokio::select! {
                     _ = rx => {},
                     _ = tokio::time::sleep(timeout) => {
+                        let inner = self.inner.lock().unwrap();
+                        let pending_len = inner.pending_reservations.len();
+                        tracing::debug!(
+                            "Reservation timeout for buffer {:?}, pending reservations: {}, free size = {}",
+                            buf_id,
+                            pending_len,
+                            inner.avail_addrs.values().sum::<u64>()
+                        );
                         return Err(());
                     }
                 }
