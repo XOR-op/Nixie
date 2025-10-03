@@ -135,3 +135,35 @@ impl OutDataReadyRx {
         None
     }
 }
+
+#[derive(Clone)]
+pub(super) struct RequestForSpaceTx {
+    inner: mpsc::UnboundedSender<()>,
+}
+
+impl RequestForSpaceTx {
+    pub fn request(&self, n: usize) {
+        for _ in 0..n {
+            if let Err(_) = self.inner.send(()) {
+                tracing::warn!("Failed to request shm space");
+            }
+        }
+    }
+}
+pub(super) struct RequestForSpaceRx {
+    inner: mpsc::UnboundedReceiver<()>,
+}
+
+impl RequestForSpaceRx {
+    pub async fn listen(&mut self) -> Option<()> {
+        self.inner.recv().await
+    }
+}
+
+pub(super) fn create_request_for_space_channel() -> (RequestForSpaceTx, RequestForSpaceRx) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    (
+        RequestForSpaceTx { inner: tx },
+        RequestForSpaceRx { inner: rx },
+    )
+}

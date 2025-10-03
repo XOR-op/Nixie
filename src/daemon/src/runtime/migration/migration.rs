@@ -19,8 +19,8 @@ use crate::{
         migration::{
             BufferLocation, DataManagerHandle,
             channel::{
-                InDataReadyRx, InDataReadyTx, OutDataReadyRx, OutDataReadyTx,
-                create_data_ready_channel,
+                InDataReadyRx, InDataReadyTx, OutDataReadyRx, OutDataReadyTx, RequestForSpaceRx,
+                RequestForSpaceTx, create_data_ready_channel, create_request_for_space_channel,
             },
             hostmem_buffer::HostMemBufferManager,
             storage_buffer::StorageBufferManager,
@@ -91,7 +91,7 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
             storage_to_host_mem.is_empty() && host_mem_to_storage.is_empty(),
             "not implemented yet"
         );
-        let res = Self {
+        Self {
             out_from_gpu,
             into_gpu,
             storage_to_shm,
@@ -100,9 +100,7 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
             storage_to_hostmem: storage_to_host_mem,
             hostmem_to_storage: host_mem_to_storage,
             data_manager,
-        };
-        tracing::debug!("Created migration task: {}", res.json_summary());
-        res
+        }
     }
 
     pub fn json_summary(&self) -> String {
@@ -191,6 +189,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                 .into_iter(),
             self.shm_to_backend.clone(),
         );
+        let (req_shm_tx, req_shm_rx) = create_request_for_space_channel();
         let mut task_handles = Vec::new();
         for (device, (in_rx, out_tx)) in device_junction {
             let src_list = src_per_device.remove(&device).unwrap_or_default();
@@ -210,6 +209,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                 .unwrap_or_else(|| todo!("Handle missing device mapping"));
             largest_transfer_size =
                 largest_transfer_size.max(dst_entries.iter().map(|e| e.size).sum::<u64>());
+            let req_shm_tx = req_shm_tx.clone();
             task_handles.push(tokio::spawn(async move {
                 Self::run_for_device(
                     device,
@@ -218,6 +218,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                     shm_buffer_mgr,
                     in_rx,
                     out_tx,
+                    req_shm_tx,
                 )
                 .await;
             }));
@@ -233,6 +234,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                     in_tx,
                     shm_buffer_mgr,
                     hostmem_buffer_mgr,
+                    req_shm_tx,
                 )
                 .await
             })
@@ -255,11 +257,13 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
 
         task_handles.push(tokio::spawn(async move {
             shm_to_backend_transfer(
+                self.into_gpu.0,
                 self.shm_to_backend,
                 out_rx,
                 self.data_manager.shm.clone(),
                 self.data_manager.hostmem.clone(),
                 self.data_manager.storage.clone(),
+                req_shm_rx,
             )
             .await
         }));
@@ -296,6 +300,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         shm_buffer_mgr: Arc<ShmBufferManager>,
         in_data_ready_rx: InDataReadyRx,
         out_data_ready_tx: OutDataReadyTx,
+        req_shm_tx: RequestForSpaceTx,
     ) {
         let (transfer_token_tx, transfer_token_rx) =
             tokio::sync::mpsc::unbounded_channel::<MigrationResponse>();
@@ -314,6 +319,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             shm_buffer_mgr,
             transfer_token_tx,
             out_data_ready_tx,
+            req_shm_tx,
         )
         .await;
         let _ = h2d_handle.await;
@@ -331,6 +337,7 @@ async fn device_to_host_transfer(
     shm_buffer_mgr: Arc<ShmBufferManager>,
     gpu_mem_token_tx: mpsc::UnboundedSender<MigrationResponse>,
     out_data_ready_tx: OutDataReadyTx,
+    req_for_shm: RequestForSpaceTx,
 ) {
     let total = out_from_gpu
         .iter()
@@ -339,6 +346,7 @@ async fn device_to_host_transfer(
     let mut moved_cnt = 0;
     for (out_from_gpu_pid, device, rpc_client, out_from_gpu_entries) in out_from_gpu {
         // Migrate each entry
+        let timeout = Duration::from_secs(5);
         for out_from_gpu_entry in out_from_gpu_entries {
             let src_buffer_id = BufferId {
                 pid: out_from_gpu_pid,
@@ -346,52 +354,62 @@ async fn device_to_host_transfer(
                 block_id: out_from_gpu_entry.handle_idx,
                 size: out_from_gpu_entry.size,
             };
-            // Reserve shared memory for the migration
-            let timeout = Duration::from_secs(35);
-            if let Ok(offset) = shm_buffer_mgr
-                .reserve_with_timeout(&src_buffer_id, Some(timeout))
+            let offset = match shm_buffer_mgr
+                .reserve_with_max_pending(&src_buffer_id, 0, Some(Duration::from_secs(30)))
                 .await
             {
-                let args = MigrationArgs {
-                    host_buffer_offset: offset,
-                    size: out_from_gpu_entry.size,
-                    device,
-                    handle_idx: out_from_gpu_entry.handle_idx,
-                    host_to_device: false,
-                };
-                // Send migration request to the source process
-                if let Ok(resp) = rpc_client.migrate(tarpc::context::current(), args).await {
-                    warn_on_send_error!(gpu_mem_token_tx.send(resp));
-                    // Rx may close early if no shm to backend transfer is needed
-                    let _ = out_data_ready_tx.send(src_buffer_id);
-                } else {
-                    tracing::warn!("Failed to complete D2H migration RPC to source process");
+                Ok(offset) => offset,
+                Err(_) => {
+                    // No shm is available given the plan; we need to notify shm -> backend to free up space
+                    req_for_shm.request(1);
+                    match shm_buffer_mgr
+                        .reserve_with_timeout(&src_buffer_id, Some(timeout))
+                        .await
+                    {
+                        Ok(offset) => offset,
+                        Err(_) => {
+                            tracing::warn!(
+                                "Failed to reserve shared memory for migration: {:?} for timeout {:?}; moved {}/{}",
+                                src_buffer_id,
+                                timeout,
+                                moved_cnt,
+                                total
+                            );
+                            // early return for debugging purpose
+                            return;
+                        }
+                    }
                 }
-                moved_cnt += 1;
+            };
+
+            let args = MigrationArgs {
+                host_buffer_offset: offset,
+                size: out_from_gpu_entry.size,
+                device,
+                handle_idx: out_from_gpu_entry.handle_idx,
+                host_to_device: false,
+            };
+            // Send migration request to the source process
+            if let Ok(resp) = rpc_client.migrate(tarpc::context::current(), args).await {
+                // Rx may close early if the client is requiring space for allocation
+                let _ = gpu_mem_token_tx.send(resp);
+                // Rx may close early if no shm to backend transfer is needed
+                let _ = out_data_ready_tx.send(src_buffer_id);
             } else {
-                tracing::warn!(
-                    "Failed to reserve shared memory for migration: {:?} for timeout {:?}; moved {}/{}",
-                    src_buffer_id,
-                    timeout,
-                    moved_cnt,
-                    total
-                );
-                // early return for debugging purpose
-                return;
+                tracing::warn!("Failed to complete D2H migration RPC to source process");
             }
+            moved_cnt += 1;
         }
     }
     drop(gpu_mem_token_tx); // close the channel
+    tracing::trace!("D2H migration moved {} buffers", total);
 }
 
-macro_rules! xfer_fallback {
-    ($res:expr, $pending_set:expr) => {
-        if let Err(failed_buf_id) = $res {
-            tracing::warn!(
-                "Failed to transfer buffer {:?} to device; enqueued",
-                failed_buf_id
-            );
-            $pending_set.insert(failed_buf_id);
+macro_rules! warn_no_buffer_id {
+    ($res:expr) => {
+        if let Err(buf_id) = $res {
+            tracing::warn!("Buffer ID {:?} not found in shm buffer manager", buf_id);
+            return;
         }
     };
 }
@@ -419,54 +437,48 @@ async fn host_to_device_transfer(
         });
 
     let mut accu_length = 0;
-    let mut next_entry = dst_entries.pop();
-    while let Some(d2h_resp) = gpu_mem_token_rx.recv().await {
-        accu_length += d2h_resp.size;
-        if let Some(buffer_id) = next_entry.take() {
-            if accu_length >= buffer_id.size {
-                accu_length -= buffer_id.size;
-                xfer_fallback!(
-                    host_to_device_transfer_inner(
-                        buffer_id,
-                        dst_device,
-                        &dst_rpc_client,
-                        &shm_buffer_mgr,
-                    )
-                    .await,
-                    pending_dst_entries
-                );
-                next_entry = dst_entries.pop();
+    #[allow(unused_assignments)]
+    let mut next_entry = None;
+    loop {
+        next_entry = dst_entries.pop();
+        if next_entry.is_none() {
+            // get next entry when dst_entries is depleted
+            while !pending_dst_entries.is_empty()
+                && let Some((buffer_id, _)) = data_available_rx.recv().await
+            {
+                if pending_dst_entries.remove(&buffer_id) {
+                    next_entry = Some(buffer_id);
+                } else {
+                    tracing::warn!("Received unexpected buffer ID to H2D: {:?}", buffer_id);
+                }
+            }
+            if next_entry.is_none() {
+                // no more entries to process
+                return;
             }
         }
-    }
-    // If there are remaining entries, we need to handle them
-    while let Some(buffer_id) = next_entry {
-        xfer_fallback!(
-            host_to_device_transfer_inner(buffer_id, dst_device, &dst_rpc_client, &shm_buffer_mgr)
-                .await,
-            pending_dst_entries
-        );
-        next_entry = dst_entries.pop();
-    }
-
-    // Now we need to process the pending entries
-    while !pending_dst_entries.is_empty()
-        && let Some((buffer_id, _)) = data_available_rx.recv().await
-    {
-        if pending_dst_entries.remove(&buffer_id) {
-            if let Err(buf_id) = host_to_device_transfer_inner(
-                buffer_id,
+        let buffer_id = next_entry.as_ref().unwrap();
+        // get gpu tokens if we need
+        if !gpu_mem_token_rx.is_closed() {
+            if let Some(d2h_resp) = gpu_mem_token_rx.recv().await {
+                accu_length += d2h_resp.size;
+                if accu_length >= buffer_id.size {
+                    accu_length -= buffer_id.size;
+                } else {
+                    // no enough vram; wait for more
+                    continue;
+                }
+            }
+        }
+        warn_no_buffer_id!(
+            host_to_device_transfer_inner(
+                next_entry.take().unwrap(),
                 dst_device,
                 &dst_rpc_client,
                 &shm_buffer_mgr,
             )
             .await
-            {
-                tracing::warn!("Failed to transfer buffer {:?} to device", buf_id);
-            }
-        } else {
-            tracing::warn!("Received unexpected buffer ID to H2D: {:?}", buffer_id);
-        }
+        );
     }
 }
 
@@ -514,23 +526,37 @@ async fn hostmem_to_shm_transfer(
     in_data_ready_tx: InDataReadyTx,
     shm_buffer_mgr: Arc<ShmBufferManager>,
     hostmem_buffer_mgr: Arc<HostMemBufferManager>,
+    req_for_shm: RequestForSpaceTx,
 ) {
     let mut moved_cnt = 0;
     let total = host_mem_to_shm.len();
-    let timeout = Duration::from_secs(45);
+    let timeout = Duration::from_secs(5);
     for buffer_id in host_mem_to_shm {
-        let Ok(shm_buf_offset) = shm_buffer_mgr
-            .reserve_with_timeout(&buffer_id, Some(timeout))
+        let shm_buf_offset = match shm_buffer_mgr
+            .reserve_with_max_pending(&buffer_id, 0, Some(Duration::from_secs(30)))
             .await
-        else {
-            tracing::warn!(
-                "Failed to reserve shm for buffer {:?} after {:?}; moved {}/{}",
-                buffer_id,
-                timeout,
-                moved_cnt,
-                total
-            );
-            return;
+        {
+            Ok(offset) => offset,
+            Err(_) => {
+                // No shm is available given the plan; we need to notify shm -> backend to free up space
+                req_for_shm.request(1);
+                match shm_buffer_mgr
+                    .reserve_with_timeout(&buffer_id, Some(timeout))
+                    .await
+                {
+                    Ok(offset) => offset,
+                    Err(_) => {
+                        tracing::warn!(
+                            "Failed to reserve shm for buffer {:?} after {:?}; moved {}/{}",
+                            buffer_id,
+                            timeout,
+                            moved_cnt,
+                            total
+                        );
+                        return;
+                    }
+                }
+            }
         };
         let buf = unsafe { get_buffer_ref_mut(&shm_buffer_mgr, &buffer_id, shm_buf_offset) };
         panic_on_error!(hostmem_buffer_mgr.load_to(&buffer_id, buf));
@@ -542,7 +568,9 @@ async fn hostmem_to_shm_transfer(
             total
         );
     }
-    tracing::debug!("Moved {}/{} buffers from hostmem to shm", moved_cnt, total);
+    if total > 0 {
+        tracing::debug!("Moved {}/{} buffers from hostmem to shm", moved_cnt, total);
+    }
 }
 
 async fn storage_to_shm_transfer(
@@ -574,11 +602,13 @@ async fn storage_to_shm_transfer(
 }
 
 async fn shm_to_backend_transfer(
+    incoming_pid: i32,
     shm_to_hybrid: HashMap<BufferId, BufferLocation>,
     mut out_data_ready_rx: OutDataReadyRx,
     shm_buffer_mgr: Arc<ShmBufferManager>,
     hostmem_buffer_mgr: Arc<HostMemBufferManager>,
     storage_buffer_mgr: Arc<StorageBufferManager>,
+    mut req_for_shm_rx: RequestForSpaceRx,
 ) {
     fn check_location(buffer_id: &BufferId, expected: BufferLocation, actual: BufferLocation) {
         if expected != actual {
@@ -649,6 +679,31 @@ async fn shm_to_backend_transfer(
                 buf_id
             );
         }
+    }
+    while let Some(()) = req_for_shm_rx.listen().await {
+        // Release space for error in plan
+        let Some((buf_id, _)) = shm_buffer_mgr.find(|buf_id, _| buf_id.pid != incoming_pid) else {
+            tracing::warn!(
+                "No buffer can be released to satisfy shm space request for pid {}",
+                incoming_pid
+            );
+            continue;
+        };
+        tracing::debug!(
+            "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {}",
+            buf_id.pid,
+            pretty_size(buf_id.size),
+            incoming_pid
+        );
+        panic_on_error!(
+            shm_to_backend_transfer_inner(
+                &buf_id,
+                &shm_buffer_mgr,
+                &hostmem_buffer_mgr,
+                &storage_buffer_mgr
+            )
+            .await
+        );
     }
 }
 

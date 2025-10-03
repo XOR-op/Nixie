@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::Mutex,
     time::Duration,
 };
@@ -19,7 +19,7 @@ pub struct ShmBufferManager {
 struct ShmBufferInner {
     bookkeeping: HashMap<BufferId, AllocationInfo>,
     avail_addrs: BTreeMap<Offset, AllocationCapacity>,
-    pending_reservations: Vec<oneshot::Sender<()>>,
+    pending_reservations: VecDeque<oneshot::Sender<()>>,
 }
 
 impl ShmBufferInner {
@@ -43,7 +43,7 @@ impl ShmBufferInner {
     fn notify_reservation(inner: &mut std::sync::MutexGuard<'_, Self>, mut cnt: usize) {
         // TODO: better scheduling strategy
         while cnt > 0
-            && let Some(tx) = inner.pending_reservations.pop()
+            && let Some(tx) = inner.pending_reservations.pop_front()
         {
             let _ = tx.send(());
             cnt -= 1;
@@ -71,7 +71,7 @@ impl ShmBufferManager {
             inner: Mutex::new(ShmBufferInner {
                 bookkeeping: HashMap::new(),
                 avail_addrs,
-                pending_reservations: Vec::new(),
+                pending_reservations: VecDeque::new(),
             }),
         })
     }
@@ -117,45 +117,91 @@ impl ShmBufferManager {
         ShmBufferInner::reserve_inner(&mut inner, buf_id)
     }
 
+    async fn handle_timeout(
+        &self,
+        rx: oneshot::Receiver<()>,
+        buf_id: &BufferId,
+        timeout: Option<Duration>,
+    ) -> Result<(), ()> {
+        // wait for notification or timeout
+        if let Some(timeout) = timeout {
+            tokio::select! {
+                _ = rx => return Ok(()),
+                _ = tokio::time::sleep(timeout) => {
+                    let inner = self.inner.lock().unwrap();
+                    let pending_len = inner.pending_reservations.len();
+                    tracing::debug!(
+                        "Reservation timeout for buffer {:?}, pending reservations: {}, free size = {}",
+                        buf_id,
+                        pending_len,
+                        inner.avail_addrs.values().sum::<u64>()
+                    );
+                    return Err(());
+                }
+            }
+        } else {
+            let _ = rx.await;
+            Ok(())
+        }
+    }
+
+    // Returns Err if the number of pending requests exceeds max_pending
+    pub async fn reserve_with_max_pending(
+        &self,
+        buf_id: &BufferId,
+        max_pending: usize,
+        timeout: Option<Duration>,
+    ) -> Result<u64, ()> {
+        loop {
+            let rx = {
+                let (tx, rx) = oneshot::channel();
+                let mut inner = self.inner.lock().unwrap();
+                if let Some(res) = ShmBufferInner::reserve_inner(&mut inner, buf_id) {
+                    return Ok(res);
+                }
+                if inner.pending_reservations.len() > max_pending {
+                    return Err(());
+                }
+                inner.pending_reservations.push_back(tx);
+                rx
+            };
+            self.handle_timeout(rx, buf_id, timeout).await?;
+        }
+    }
+
     pub async fn reserve_with_timeout(
         &self,
         buf_id: &BufferId,
         timeout: Option<Duration>,
     ) -> Result<u64, ()> {
         loop {
-            let (tx, rx) = oneshot::channel();
-            {
+            let rx = {
+                let (tx, rx) = oneshot::channel();
                 let mut inner = self.inner.lock().unwrap();
                 if let Some(res) = ShmBufferInner::reserve_inner(&mut inner, buf_id) {
                     return Ok(res);
                 }
-                inner.pending_reservations.push(tx);
-            }
-
-            // wait for notification or timeout
-            if let Some(timeout) = timeout {
-                tokio::select! {
-                    _ = rx => {},
-                    _ = tokio::time::sleep(timeout) => {
-                        let inner = self.inner.lock().unwrap();
-                        let pending_len = inner.pending_reservations.len();
-                        tracing::debug!(
-                            "Reservation timeout for buffer {:?}, pending reservations: {}, free size = {}",
-                            buf_id,
-                            pending_len,
-                            inner.avail_addrs.values().sum::<u64>()
-                        );
-                        return Err(());
-                    }
-                }
-            } else {
-                let _ = rx.await;
-            }
+                inner.pending_reservations.push_back(tx);
+                rx
+            };
+            self.handle_timeout(rx, buf_id, timeout).await?;
         }
     }
 
     pub async fn reserve(&self, buf_id: &BufferId) -> u64 {
         self.reserve_with_timeout(buf_id, None).await.unwrap()
+    }
+
+    pub fn find<F>(&self, func: F) -> Option<(BufferId, AllocationInfo)>
+    where
+        F: Fn(&BufferId, &AllocationInfo) -> bool,
+    {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .bookkeeping
+            .iter()
+            .find(|(buf_id, info)| func(buf_id, info))
+            .map(|(buf_id, info)| (buf_id.clone(), info.clone()))
     }
 
     pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {

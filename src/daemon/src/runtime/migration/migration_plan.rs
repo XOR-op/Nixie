@@ -155,6 +155,11 @@ where
     // for every dst device
     // TODO: better policy to allocate shm buffer to each device evenly
     for (global_id, into_gpu_required_size) in into_gpu_requirement {
+        tracing::debug!(
+            "Device {:?} requires {} of data to migrate in",
+            global_id,
+            nihil_common::general::pretty_size(into_gpu_required_size)
+        );
         let mut accu_size = 0;
         // for every src process
         for (out_from_gpu_pid, out_from_gpu_entries, rpc_client, dev_mapping) in out_from_gpu.iter()
@@ -243,6 +248,7 @@ where
         data_manager,
     );
     tests::check_task_no_deadlock(&result);
+    tracing::debug!("Created migration task: {}", result.json_summary());
     result
 }
 
