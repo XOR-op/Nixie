@@ -130,7 +130,7 @@ impl ShmBufferManager {
                 _ = tokio::time::sleep(timeout) => {
                     let inner = self.inner.lock().unwrap();
                     let pending_len = inner.pending_reservations.len();
-                    tracing::debug!(
+                    tracing::warn!(
                         "Reservation timeout for buffer {:?}, pending reservations: {}, free size = {}",
                         buf_id,
                         pending_len,

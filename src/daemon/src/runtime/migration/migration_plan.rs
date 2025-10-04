@@ -92,8 +92,8 @@ where
     let mut storage_to_shm = Vec::new();
     let mut shm_to_backend = HashMap::new();
     // TODO: use these two to reduce migration time
-    let storage_to_hostmem = Vec::new();
-    let hostmem_to_storage = Vec::new();
+    // let storage_to_hostmem = Vec::new();
+    // let hostmem_to_storage = Vec::new();
 
     let mut shm_eviction_candidates = data_manager.shm_buffer_ids();
     shm_eviction_candidates.retain(|k, _| k.pid != into_gpu.0);
@@ -243,8 +243,8 @@ where
         storage_to_shm,
         hostmem_to_shm,
         shm_to_backend,
-        storage_to_hostmem,
-        hostmem_to_storage,
+        // storage_to_hostmem,
+        // hostmem_to_storage,
         data_manager,
     );
     tests::check_task_no_deadlock(&result);

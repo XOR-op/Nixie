@@ -83,22 +83,22 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
         storage_to_shm: Vec<BufferId>,
         host_mem_to_shm: Vec<BufferId>,
         shm_to_backend: HashMap<BufferId, BufferLocation>,
-        storage_to_host_mem: Vec<BufferId>,
-        host_mem_to_storage: Vec<BufferId>,
+        // storage_to_host_mem: Vec<BufferId>,
+        // host_mem_to_storage: Vec<BufferId>,
         data_manager: Handle,
     ) -> Self {
-        assert!(
-            storage_to_host_mem.is_empty() && host_mem_to_storage.is_empty(),
-            "not implemented yet"
-        );
+        // assert!(
+        //     storage_to_host_mem.is_empty() && host_mem_to_storage.is_empty(),
+        //     "not implemented yet"
+        // );
         Self {
             out_from_gpu,
             into_gpu,
             storage_to_shm,
             hostmem_to_shm: host_mem_to_shm,
             shm_to_backend,
-            storage_to_hostmem: storage_to_host_mem,
-            hostmem_to_storage: host_mem_to_storage,
+            storage_to_hostmem: Vec::new(),
+            hostmem_to_storage: Vec::new(),
             data_manager,
         }
     }
@@ -112,37 +112,66 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
             .flatten()
             .map(|e| e.size)
             .sum::<u64>();
+        let income_pid_str = format!("{}", self.into_gpu.0);
+        // size per pid
         let out_from_gpu_size = self
             .out_from_gpu
             .iter()
-            .flat_map(|(_, spec, _, _)| spec.device_map.values().flatten())
-            .map(|e| e.size)
-            .sum::<u64>();
+            .map(|(pid, specs, _, _)| {
+                (
+                    format!("{}", pid),
+                    pretty_size(
+                        specs
+                            .device_map
+                            .values()
+                            .flatten()
+                            .map(|e| e.size)
+                            .sum::<u64>(),
+                    ),
+                )
+            })
+            .collect::<HashMap<_, _>>();
         let mut data = HashMap::new();
-        data.insert("shm -> gpu", pretty_size(into_gpu_size));
-        data.insert("gpu -> shm", pretty_size(out_from_gpu_size));
+        data.insert(
+            "shm -> gpu",
+            HashMap::from([(income_pid_str.clone(), pretty_size(into_gpu_size))]),
+        );
+        data.insert("gpu -> shm", out_from_gpu_size);
         if self.hostmem_to_shm.len() > 0 {
             let hostmem_to_shm_size = self.hostmem_to_shm.iter().map(|b| b.size).sum::<u64>();
-            data.insert("hostmem -> shm", pretty_size(hostmem_to_shm_size));
+            data.insert(
+                "hostmem -> shm",
+                HashMap::from([(income_pid_str.clone(), pretty_size(hostmem_to_shm_size))]),
+            );
         }
         if self.storage_to_shm.len() > 0 {
             let storage_to_shm_size = self.storage_to_shm.iter().map(|b| b.size).sum::<u64>();
-            data.insert("storage -> shm", pretty_size(storage_to_shm_size));
+            data.insert(
+                "storage -> shm",
+                HashMap::from([(income_pid_str.clone(), pretty_size(storage_to_shm_size))]),
+            );
         }
         if self.shm_to_backend.len() > 0 {
-            let shm_to_backend_size = self.shm_to_backend.keys().map(|b| b.size).sum::<u64>();
-            data.insert("shm -> backend", pretty_size(shm_to_backend_size));
+            let shm_to_backend_mapping = self
+                .shm_to_backend
+                .keys()
+                .map(|b| (format!("{}", b.pid), b.size))
+                .into_group_map()
+                .into_iter()
+                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .collect::<HashMap<_, _>>();
+            data.insert("shm -> backend", shm_to_backend_mapping);
         }
-        if self.storage_to_hostmem.len() > 0 {
-            let storage_to_hostmem_size =
-                self.storage_to_hostmem.iter().map(|b| b.size).sum::<u64>();
-            data.insert("storage -> hostmem", pretty_size(storage_to_hostmem_size));
-        }
-        if self.hostmem_to_storage.len() > 0 {
-            let hostmem_to_storage_size =
-                self.hostmem_to_storage.iter().map(|b| b.size).sum::<u64>();
-            data.insert("hostmem -> storage", pretty_size(hostmem_to_storage_size));
-        }
+        // if self.storage_to_hostmem.len() > 0 {
+        //     let storage_to_hostmem_size =
+        //         self.storage_to_hostmem.iter().map(|b| b.size).sum::<u64>();
+        //     data.insert("storage -> hostmem", pretty_size(storage_to_hostmem_size));
+        // }
+        // if self.hostmem_to_storage.len() > 0 {
+        //     let hostmem_to_storage_size =
+        //         self.hostmem_to_storage.iter().map(|b| b.size).sum::<u64>();
+        //     data.insert("hostmem -> storage", pretty_size(hostmem_to_storage_size));
+        // }
         serde_json::to_string(&data).unwrap_or_default()
     }
 }
@@ -457,6 +486,12 @@ async fn host_to_device_transfer(
                 && let Some((buffer_id, _)) = data_available_rx.recv().await
             {
                 if pending_dst_entries.remove(&buffer_id) {
+                    tracing::trace!(
+                        "To H2D: {{\"pid\": {}, \"block_id\":,\"{}\"  \"size\": \"{}\"}}",
+                        buffer_id.pid,
+                        buffer_id.block_id,
+                        pretty_size(buffer_id.size)
+                    );
                     next_entry = Some(buffer_id);
                     pending_processed += 1;
                 } else {
@@ -465,7 +500,14 @@ async fn host_to_device_transfer(
             }
             if next_entry.is_none() {
                 // no more entries to process
-                tracing::trace!("H2D migration moved {} buffers", dst_count + pending_count);
+                tracing::trace!(
+                    "H2D migration moved ({}+{})/({}+{}) buffers; token_not_enough = {}",
+                    dst_processed,
+                    pending_processed,
+                    dst_count,
+                    pending_count,
+                    token_not_enough
+                );
                 return;
             }
         } else {
@@ -579,12 +621,15 @@ async fn hostmem_to_shm_transfer(
         };
         let buf = unsafe { get_buffer_ref_mut(&shm_buffer_mgr, &buffer_id, shm_buf_offset) };
         panic_on_error!(hostmem_buffer_mgr.load_to(&buffer_id, buf));
-        warn_on_send_error!(in_data_ready_tx.send(buffer_id, BufferLocation::HostMem));
+        warn_on_send_error!(in_data_ready_tx.send(buffer_id.clone(), BufferLocation::HostMem));
         moved_cnt += 1;
-        tracing::debug!(
-            "[Ongoing] Moved {}/{} buffers from hostmem to shm",
+        tracing::trace!(
+            "[Ongoing] Moved {}/{} buffers from hostmem to shm: {{\"pid\": {}, \"block_id\":,\"{}\"  \"size\": \"{}\"}}",
             moved_cnt,
-            total
+            total,
+            buffer_id.pid,
+            buffer_id.block_id,
+            pretty_size(buffer_id.size)
         );
     }
     if total > 0 {
