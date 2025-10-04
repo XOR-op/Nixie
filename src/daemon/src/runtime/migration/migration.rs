@@ -375,7 +375,7 @@ async fn device_to_host_transfer(
                                 moved_cnt,
                                 total
                             );
-                            // early return for debugging purpose
+                            tokio::time::sleep(Duration::from_secs(3600)).await;
                             return;
                         }
                     }
@@ -414,6 +414,7 @@ macro_rules! warn_no_buffer_id {
     };
 }
 
+#[allow(unused_variables)]
 async fn host_to_device_transfer(
     global_id: GlobalDeviceId,
     into_gpu: (
@@ -439,33 +440,50 @@ async fn host_to_device_transfer(
     let mut accu_length = 0;
     #[allow(unused_assignments)]
     let mut next_entry = None;
+
+    let mut dst_processed = 0;
+    let mut pending_processed = 0;
+    let mut token_received = 0;
+    let mut token_not_enough = 0;
+    let dst_count = dst_entries.len();
+    let pending_count = pending_dst_entries.len();
+
     loop {
         next_entry = dst_entries.pop();
         if next_entry.is_none() {
             // get next entry when dst_entries is depleted
-            while !pending_dst_entries.is_empty()
+            while next_entry.is_none()
+                && !pending_dst_entries.is_empty()
                 && let Some((buffer_id, _)) = data_available_rx.recv().await
             {
                 if pending_dst_entries.remove(&buffer_id) {
                     next_entry = Some(buffer_id);
+                    pending_processed += 1;
                 } else {
                     tracing::warn!("Received unexpected buffer ID to H2D: {:?}", buffer_id);
                 }
             }
             if next_entry.is_none() {
                 // no more entries to process
+                tracing::trace!("H2D migration moved {} buffers", dst_count + pending_count);
                 return;
             }
+        } else {
+            dst_processed += 1;
         }
         let buffer_id = next_entry.as_ref().unwrap();
         // get gpu tokens if we need
         if !gpu_mem_token_rx.is_closed() {
             if let Some(d2h_resp) = gpu_mem_token_rx.recv().await {
                 accu_length += d2h_resp.size;
+
+                token_received += 1;
+
                 if accu_length >= buffer_id.size {
                     accu_length -= buffer_id.size;
                 } else {
                     // no enough vram; wait for more
+                    token_not_enough += 1;
                     continue;
                 }
             }
@@ -553,6 +571,7 @@ async fn hostmem_to_shm_transfer(
                             moved_cnt,
                             total
                         );
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
                         return;
                     }
                 }
