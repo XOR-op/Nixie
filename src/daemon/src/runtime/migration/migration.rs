@@ -466,9 +466,14 @@ async fn host_to_device_transfer(
             }
         });
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum BufferSource {
+        Ready,
+        Pending,
+    }
+
     let mut accu_length = 0;
-    #[allow(unused_assignments)]
-    let mut next_entry = None;
+    let mut next_entry = dst_entries.pop().map(|i| (i, BufferSource::Ready));
 
     let mut dst_processed = 0;
     let mut pending_processed = 0;
@@ -478,7 +483,6 @@ async fn host_to_device_transfer(
     let pending_count = pending_dst_entries.len();
 
     loop {
-        next_entry = dst_entries.pop();
         if next_entry.is_none() {
             // get next entry when dst_entries is depleted
             while next_entry.is_none()
@@ -492,8 +496,7 @@ async fn host_to_device_transfer(
                         buffer_id.block_id,
                         pretty_size(buffer_id.size)
                     );
-                    next_entry = Some(buffer_id);
-                    pending_processed += 1;
+                    next_entry = Some((buffer_id, BufferSource::Pending));
                 } else {
                     tracing::warn!("Received unexpected buffer ID to H2D: {:?}", buffer_id);
                 }
@@ -510,10 +513,9 @@ async fn host_to_device_transfer(
                 );
                 return;
             }
-        } else {
-            dst_processed += 1;
         }
-        let buffer_id = next_entry.as_ref().unwrap();
+
+        let (buffer_id, buf_source) = next_entry.as_ref().unwrap();
         // get gpu tokens if we need
         if !gpu_mem_token_rx.is_closed() {
             if let Some(d2h_resp) = gpu_mem_token_rx.recv().await {
@@ -530,15 +532,20 @@ async fn host_to_device_transfer(
                 }
             }
         }
+        match buf_source {
+            BufferSource::Ready => dst_processed += 1,
+            BufferSource::Pending => pending_processed += 1,
+        }
         warn_no_buffer_id!(
             host_to_device_transfer_inner(
-                next_entry.take().unwrap(),
+                next_entry.take().unwrap().0,
                 dst_device,
                 &dst_rpc_client,
                 &shm_buffer_mgr,
             )
             .await
         );
+        next_entry = dst_entries.pop().map(|i| (i, BufferSource::Ready));
     }
 }
 
