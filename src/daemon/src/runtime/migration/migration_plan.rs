@@ -1,6 +1,9 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE, shm};
+use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE};
 
 use crate::{
     control::ProcessResidualData,
@@ -11,6 +14,31 @@ use crate::{
 };
 
 use super::migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MigrationRequirement {
+    from: BufferLocation,
+    to: BufferLocation,
+    size: u64,
+    allow_incomplete: bool, // if true, allow moving with less than size
+}
+
+impl MigrationRequirement {
+    pub(crate) fn new(
+        from: BufferLocation,
+        to: BufferLocation,
+        size: u64,
+        allow_incomplete: bool,
+    ) -> Self {
+        assert_ne!(from, to, "From and to endpoints must be different");
+        Self {
+            from,
+            to,
+            size,
+            allow_incomplete,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum DeviceRequestArgs {
@@ -28,6 +56,7 @@ pub(crate) trait AbstractDataHandle: Clone {
     fn storage_contains(&self, buf_id: &BufferId) -> bool;
 
     fn shm_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity>;
+    fn hostmem_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity>;
 
     fn shm_free_segments(&self) -> Vec<AllocationCapacity>;
     fn hostmem_free_segments(&self) -> Vec<AllocationCapacity>;
@@ -48,6 +77,10 @@ impl AbstractDataHandle for DataManagerHandle {
         self.shm.dump_buffers()
     }
 
+    fn hostmem_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity> {
+        self.hostmem.dump_buffers()
+    }
+
     fn shm_free_segments(&self) -> Vec<AllocationCapacity> {
         self.shm.free_segments()
     }
@@ -60,7 +93,10 @@ macro_rules! check_size {
     ($given:expr, $expected:expr, $msg:expr
     ) => {
         if $given < $expected {
-            panic!("{} {} is smaller than expected {}", $msg, $given, $expected);
+            panic!(
+                "TODO: {} {} is smaller than expected {}, which not implemented",
+                $msg, $given, $expected
+            );
         }
     };
 }
@@ -91,9 +127,6 @@ where
     let mut hostmem_to_shm = Vec::new();
     let mut storage_to_shm = Vec::new();
     let mut shm_to_backend = HashMap::new();
-    // TODO: use these two to reduce migration time
-    // let storage_to_hostmem = Vec::new();
-    // let hostmem_to_storage = Vec::new();
 
     let mut shm_eviction_candidates = data_manager.shm_buffer_ids();
     shm_eviction_candidates.retain(|k, _| k.pid != into_gpu.0);
@@ -232,27 +265,219 @@ where
 
     let result = DataMigrationTask::new(
         out_of_gpu_list,
-        (
+        Some((
             into_gpu.0,
             MigrationSpec {
                 device_map: into_gpu_entries,
             },
             into_gpu.2,
             Arc::clone(&into_gpu.3),
-        ),
+        )),
         storage_to_shm,
         hostmem_to_shm,
         shm_to_backend,
-        // storage_to_hostmem,
-        // hostmem_to_storage,
+        Vec::new(), // storage_to_hostmem
+        Vec::new(), // hostmem_to_storage
         data_manager,
     );
-    tests::check_task_no_deadlock(&result);
     tracing::debug!("Created migration task: {}", result.json_summary());
     result
 }
 
-// #[cfg(test)]
+/// Create a migration task that only organizes data out of GPU
+pub(crate) fn organizes_task<Client, Handle>(
+    requests: Vec<(i32, Vec<MigrationRequirement>)>,
+    data_manager: Handle,
+) -> Option<DataMigrationTask<Client, Handle>>
+where
+    Client: Clone,
+    Handle: AbstractDataHandle,
+{
+    let in_requests_pids: HashSet<_, std::hash::RandomState> =
+        HashSet::from_iter(requests.iter().map(|(pid, _)| *pid));
+    assert_eq!(in_requests_pids.len(), requests.len(), "duplicated pids");
+    let mut shm_free_segments = data_manager.shm_free_segments();
+    let mut host_mem_free_segments = data_manager.hostmem_free_segments();
+
+    let mut hostmem_to_shm = Vec::new();
+    let mut storage_to_shm = Vec::new();
+    let mut shm_to_backend = HashMap::new();
+    let mut hostmem_to_storage = Vec::new();
+    let mut storage_to_hostmem = Vec::new();
+
+    let mut shm_eviction_candidates = data_manager.shm_buffer_ids();
+    let mut hostmem_eviction_candidates = data_manager.hostmem_buffer_ids();
+
+    // decide which buffer to be moved based on requests
+    for (pid, directions) in requests.into_iter() {
+        for moving in directions.iter() {
+            if moving.from == BufferLocation::Gpu || moving.to == BufferLocation::Gpu {
+                tracing::error!("Cannot organize data from/to GPU");
+                return None;
+            }
+
+            let (eviction_candiates, free_segments) = match moving.from {
+                BufferLocation::Shm => (&mut shm_eviction_candidates, &mut shm_free_segments),
+                BufferLocation::HostMem => (
+                    &mut hostmem_eviction_candidates,
+                    &mut host_mem_free_segments,
+                ),
+                BufferLocation::Storage => continue,
+                BufferLocation::Gpu => {
+                    tracing::error!("Cannot organize data from GPU");
+                    return None;
+                }
+            };
+
+            // select eligible buffers to be moved
+            let mut removed = HashMap::new();
+            let mut accu_size = 0;
+            for (buf_id, len) in eviction_candiates.iter().filter(|(k, _)| k.pid == pid) {
+                if accu_size >= moving.size {
+                    break;
+                }
+                removed.insert(buf_id.clone(), *len);
+                accu_size += buf_id.size;
+            }
+            if accu_size < moving.size && !moving.allow_incomplete {
+                tracing::warn!(
+                    "Not enough data to organize for pid {}: required {}, but only {}",
+                    pid,
+                    moving.size,
+                    accu_size
+                );
+                return None;
+            }
+            for (being_removed, _) in removed.iter() {
+                eviction_candiates.remove(being_removed);
+            }
+
+            // add back the freed segments
+            free_segments.extend(removed.values());
+
+            // add to the corresponding move list
+            let removed: Vec<BufferId> = removed.into_keys().collect();
+            match (moving.from, moving.to) {
+                (BufferLocation::Shm, dest) => {
+                    for buf_id in removed.into_iter() {
+                        shm_to_backend.insert(buf_id, dest);
+                    }
+                }
+                (BufferLocation::HostMem, BufferLocation::Shm) => hostmem_to_shm.extend(removed),
+                (BufferLocation::HostMem, BufferLocation::Storage) => {
+                    hostmem_to_storage.extend(removed)
+                }
+                (BufferLocation::Storage, BufferLocation::Shm) => storage_to_shm.extend(removed),
+                (BufferLocation::Storage, BufferLocation::HostMem) => {
+                    storage_to_hostmem.extend(removed)
+                }
+                _ => {
+                    tracing::warn!(
+                        "Unsupported migration direction: {:?} -> {:?}",
+                        moving.from,
+                        moving.to
+                    );
+                    return None;
+                }
+            }
+        }
+        // remove all remaining entries for this pid
+        shm_eviction_candidates.retain(|k, _| k.pid != pid);
+        hostmem_eviction_candidates.retain(|k, _| k.pid != pid);
+    }
+
+    assert!(
+        shm_eviction_candidates
+            .keys()
+            .all(|k| !in_requests_pids.contains(&k.pid))
+    );
+    assert!(
+        hostmem_eviction_candidates
+            .keys()
+            .all(|k| !in_requests_pids.contains(&k.pid))
+    );
+
+    // decide if we can satisfy the requests with enough space
+    // 1. we find out how much more space we need in SHM and host mem
+    let mut shm_not_enough = Vec::new();
+    let mut hostmem_not_enough = Vec::new();
+    for entry in storage_to_shm.iter().chain(hostmem_to_shm.iter()) {
+        if let Some(seg) = shm_free_segments.pop() {
+            // TODO: support variable segment sizes
+            check_size!(seg, entry.size, "SHM free segment");
+        } else {
+            shm_not_enough.push(entry.size);
+        }
+    }
+    for entry in storage_to_hostmem
+        .iter()
+        .chain(shm_to_backend.iter().filter_map(|(b, loc)| {
+            if *loc == BufferLocation::HostMem {
+                Some(b)
+            } else {
+                None
+            }
+        }))
+    {
+        if let Some(seg) = host_mem_free_segments.pop() {
+            // TODO: support variable segment sizes
+            check_size!(seg, entry.size, "Host mem segment");
+        } else {
+            hostmem_not_enough.push(entry.size);
+        }
+    }
+    // 2. we try to evict data out of SHM and host mem to make space
+    if !(shm_not_enough.is_empty() && hostmem_not_enough.is_empty()) {
+        for size in shm_not_enough.into_iter() {
+            // move from shm to host mem or storage
+            let Some((victim, victim_size)) = shm_eviction_candidates
+                .iter()
+                .next()
+                .map(|(k, v)| (k.clone(), *v))
+            else {
+                tracing::warn!("Not enough SHM space to organize data");
+                return None;
+            };
+            check_size!(victim_size, size, "SHM eviction candidate");
+            shm_eviction_candidates.remove(&victim);
+            if let Some(seg) = host_mem_free_segments.pop() {
+                check_size!(seg, size, "Host mem segment");
+                shm_to_backend.insert(victim, BufferLocation::HostMem);
+            } else {
+                shm_to_backend.insert(victim, BufferLocation::Storage);
+            }
+        }
+        for size in hostmem_not_enough.into_iter() {
+            // move from host mem to storage
+            let Some((victim, victim_size)) = hostmem_eviction_candidates
+                .iter()
+                .next()
+                .map(|(k, v)| (k.clone(), *v))
+            else {
+                tracing::warn!("Not enough host mem space to organize data");
+                return None;
+            };
+            check_size!(victim_size, size, "Host mem eviction candidate");
+            hostmem_eviction_candidates.remove(&victim);
+            hostmem_to_storage.push(victim);
+        }
+    }
+
+    let result = DataMigrationTask::new(
+        Vec::new(),
+        None,
+        storage_to_shm,
+        hostmem_to_shm,
+        shm_to_backend,
+        storage_to_hostmem,
+        hostmem_to_storage,
+        data_manager,
+    );
+    tracing::debug!("Created organize task: {}", result.json_summary());
+    Some(result)
+}
+
+#[cfg(test)]
 pub(super) mod tests {
     use colored::Colorize;
     use nihil_common::{ProcessLocalDeviceId, general::pretty_size};
@@ -348,6 +573,10 @@ pub(super) mod tests {
 
         fn shm_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity> {
             self.shm_map.clone()
+        }
+
+        fn hostmem_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity> {
+            self.hostmem_map.clone()
         }
 
         fn shm_free_segments(&self) -> Vec<AllocationCapacity> {

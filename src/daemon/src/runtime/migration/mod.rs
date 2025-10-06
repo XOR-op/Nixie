@@ -28,6 +28,8 @@ pub struct AllocationInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum BufferLocation {
+    Gpu,
+    Shm,
     HostMem,
     Storage,
 }

@@ -64,7 +64,7 @@ pub struct MigrationSpec {
 pub struct DataMigrationTask<Client, Handle> {
     // movement involving client processes
     pub(super) out_from_gpu: Vec<(i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>)>,
-    pub(super) into_gpu: (i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>),
+    pub(super) into_gpu: Option<(i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>)>,
 
     // reorganization of buffers within daemon
     pub(super) storage_to_shm: Vec<BufferId>,
@@ -79,12 +79,12 @@ pub struct DataMigrationTask<Client, Handle> {
 impl<Client, Handle> DataMigrationTask<Client, Handle> {
     pub fn new(
         out_from_gpu: Vec<(i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>)>,
-        into_gpu: (i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>),
+        into_gpu: Option<(i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>)>,
         storage_to_shm: Vec<BufferId>,
         host_mem_to_shm: Vec<BufferId>,
         shm_to_backend: HashMap<BufferId, BufferLocation>,
-        // storage_to_host_mem: Vec<BufferId>,
-        // host_mem_to_storage: Vec<BufferId>,
+        storage_to_hostmem: Vec<BufferId>,
+        hostmem_to_storage: Vec<BufferId>,
         data_manager: Handle,
     ) -> Self {
         // assert!(
@@ -97,8 +97,8 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
             storage_to_shm,
             hostmem_to_shm: host_mem_to_shm,
             shm_to_backend,
-            storage_to_hostmem: Vec::new(),
-            hostmem_to_storage: Vec::new(),
+            storage_to_hostmem,
+            hostmem_to_storage,
             data_manager,
         }
     }
@@ -106,13 +106,22 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
     pub fn json_summary(&self) -> String {
         let into_gpu_size = self
             .into_gpu
-            .1
-            .device_map
-            .values()
-            .flatten()
-            .map(|e| e.size)
-            .sum::<u64>();
-        let income_pid_str = format!("{}", self.into_gpu.0);
+            .as_ref()
+            .map(|into_gpu| {
+                into_gpu
+                    .1
+                    .device_map
+                    .values()
+                    .flatten()
+                    .map(|e| e.size)
+                    .sum::<u64>()
+            })
+            .unwrap_or_default();
+        let income_pid_str = self
+            .into_gpu
+            .as_ref()
+            .map(|(pid, _, _, _)| format!("{}", *pid))
+            .unwrap_or("N/A".to_string());
         // size per pid
         let out_from_gpu_size = self
             .out_from_gpu
@@ -209,41 +218,47 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                 ));
             }
         }
-        let (in_tx, device_junction, out_rx) = create_data_ready_channel(
-            src_per_device
-                .keys()
-                .chain(self.into_gpu.1.device_map.keys())
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                .into_iter(),
-            self.shm_to_backend.clone(),
-        );
+
+        let (in_tx, device_junction, out_rx) = {
+            let incoming_dev_map = self
+                .into_gpu
+                .as_ref()
+                .map(|(_, spec, _, _)| spec.device_map.clone())
+                .unwrap_or_default();
+            create_data_ready_channel(
+                src_per_device
+                    .keys()
+                    .chain(incoming_dev_map.keys())
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter(),
+                self.shm_to_backend.clone(),
+            )
+        };
         let (req_shm_tx, req_shm_rx) = create_request_for_space_channel();
         let mut task_handles = Vec::new();
         for (device, (in_rx, out_tx)) in device_junction {
             let src_list = src_per_device.remove(&device).unwrap_or_default();
-            let dst_entries = self
-                .into_gpu
-                .1
-                .device_map
-                .remove(&device)
-                .unwrap_or_default();
-            // Run migration for each device
             let shm_buffer_mgr = self.data_manager.shm.clone();
-            let rpc_client = self.into_gpu.2.clone();
-            let device_id = self
-                .into_gpu
-                .3
-                .real_to_visible(device)
-                .unwrap_or_else(|| todo!("Handle missing device mapping"));
-            largest_transfer_size =
-                largest_transfer_size.max(dst_entries.iter().map(|e| e.size).sum::<u64>());
             let req_shm_tx = req_shm_tx.clone();
+            let into_gpu = self.into_gpu.as_mut().map(|into_gpu| {
+                let dst_entries = into_gpu.1.device_map.remove(&device).unwrap_or_default();
+                // Run migration for each device
+                let rpc_client = into_gpu.2.clone();
+                let device_id = into_gpu
+                    .3
+                    .real_to_visible(device)
+                    .unwrap_or_else(|| todo!("Handle missing device mapping"));
+                largest_transfer_size =
+                    largest_transfer_size.max(dst_entries.iter().map(|e| e.size).sum::<u64>());
+                (into_gpu.0, device_id, rpc_client, dst_entries)
+            });
+
             task_handles.push(tokio::spawn(async move {
                 Self::run_for_device(
                     device,
                     src_list,
-                    (self.into_gpu.0, device_id, rpc_client, dst_entries),
+                    into_gpu,
                     shm_buffer_mgr,
                     in_rx,
                     out_tx,
@@ -257,12 +272,13 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             let shm_buffer_mgr = self.data_manager.shm.clone();
             let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
             let in_tx = in_tx.clone();
+            let req_shm_tx = req_shm_tx.clone();
             tokio::spawn(async move {
-                hostmem_to_shm_transfer(
+                backend_to_shm_transfer(
                     self.hostmem_to_shm,
                     in_tx,
                     shm_buffer_mgr,
-                    hostmem_buffer_mgr,
+                    BackendManager::HostMem(hostmem_buffer_mgr),
                     req_shm_tx,
                 )
                 .await
@@ -274,11 +290,12 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             let storage_buffer_mgr = self.data_manager.storage.clone();
             let in_tx = in_tx.clone();
             tokio::spawn(async move {
-                storage_to_shm_transfer(
+                backend_to_shm_transfer(
                     self.storage_to_shm,
                     in_tx,
                     shm_buffer_mgr,
-                    storage_buffer_mgr,
+                    BackendManager::Storage(storage_buffer_mgr),
+                    req_shm_tx,
                 )
                 .await
             })
@@ -286,7 +303,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
 
         task_handles.push(tokio::spawn(async move {
             shm_to_backend_transfer(
-                self.into_gpu.0,
+                self.into_gpu.as_ref().map(|(pid, _, _, _)| *pid),
                 self.shm_to_backend,
                 out_rx,
                 self.data_manager.shm.clone(),
@@ -320,12 +337,12 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             SidecarClient,
             Vec<MigrationSpecEntry>,
         )>,
-        into_gpu: (
+        into_gpu: Option<(
             i32,
             ProcessLocalDeviceId,
             SidecarClient,
             Vec<MigrationSpecEntry>,
-        ),
+        )>,
         shm_buffer_mgr: Arc<ShmBufferManager>,
         in_data_ready_rx: InDataReadyRx,
         out_data_ready_tx: OutDataReadyTx,
@@ -334,13 +351,15 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         let (transfer_token_tx, transfer_token_rx) =
             tokio::sync::mpsc::unbounded_channel::<MigrationResponse>();
         // H2D direction
-        let h2d_handle = tokio::spawn(host_to_device_transfer(
-            global_id,
-            into_gpu,
-            shm_buffer_mgr.clone(),
-            transfer_token_rx,
-            in_data_ready_rx,
-        ));
+        let h2d_handle = into_gpu.map(|into_gpu| {
+            tokio::spawn(host_to_device_transfer(
+                global_id,
+                into_gpu,
+                shm_buffer_mgr.clone(),
+                transfer_token_rx,
+                in_data_ready_rx,
+            ))
+        });
         // D2H direction
         device_to_host_transfer(
             global_id,
@@ -351,7 +370,9 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             req_shm_tx,
         )
         .await;
-        let _ = h2d_handle.await;
+        if let Some(h2d_handle) = h2d_handle {
+            let _ = h2d_handle.await;
+        }
     }
 }
 
@@ -588,11 +609,16 @@ async fn host_to_device_transfer_inner(
     Ok(())
 }
 
-async fn hostmem_to_shm_transfer(
+enum BackendManager {
+    HostMem(Arc<HostMemBufferManager>),
+    Storage(Arc<StorageBufferManager>),
+}
+
+async fn backend_to_shm_transfer(
     host_mem_to_shm: Vec<BufferId>,
     in_data_ready_tx: InDataReadyTx,
     shm_buffer_mgr: Arc<ShmBufferManager>,
-    hostmem_buffer_mgr: Arc<HostMemBufferManager>,
+    backend_mgr: BackendManager,
     req_for_shm: RequestForSpaceTx,
 ) {
     let mut moved_cnt = 0;
@@ -626,9 +652,32 @@ async fn hostmem_to_shm_transfer(
                 }
             }
         };
-        let buf = unsafe { get_buffer_ref_mut(&shm_buffer_mgr, &buffer_id, shm_buf_offset) };
-        panic_on_error!(hostmem_buffer_mgr.load_to(&buffer_id, buf));
-        warn_on_send_error!(in_data_ready_tx.send(buffer_id.clone(), BufferLocation::HostMem));
+        let buf = unsafe {
+            get_buffer_ref_mut(
+                convert_to_static(&shm_buffer_mgr), // safety: the lifetime of the buffer will not exceed the end of the block
+                &buffer_id,
+                shm_buf_offset,
+            )
+        };
+        match &backend_mgr {
+            BackendManager::HostMem(mgr) => {
+                panic_on_error!(mgr.load_to(&buffer_id, buf));
+                warn_on_send_error!(
+                    in_data_ready_tx.send(buffer_id.clone(), BufferLocation::HostMem)
+                );
+            }
+            BackendManager::Storage(mgr) => {
+                let buf_id = buffer_id.clone();
+                let mgr = mgr.clone();
+                panic_on_error!(panic_on_error!(
+                    tokio::task::spawn_blocking(move || mgr.load_to(&buf_id, buf)).await
+                ));
+                warn_on_send_error!(
+                    in_data_ready_tx.send(buffer_id.clone(), BufferLocation::Storage)
+                );
+            }
+        }
+
         moved_cnt += 1;
         tracing::trace!(
             "[Ongoing] Moved {}/{} buffers from hostmem to shm: {{\"pid\": {}, \"block_id\":,\"{}\"  \"size\": \"{}\"}}",
@@ -644,36 +693,8 @@ async fn hostmem_to_shm_transfer(
     }
 }
 
-async fn storage_to_shm_transfer(
-    storage_to_shm: Vec<BufferId>,
-    in_data_ready_tx: InDataReadyTx,
-    shm_buffer_mgr: Arc<ShmBufferManager>,
-    storage_buffer_mgr: Arc<StorageBufferManager>,
-) {
-    for buffer_id in storage_to_shm {
-        let shm_buf_offset = shm_buffer_mgr.reserve(&buffer_id).await;
-        // Safety: the lifetime of the buffer will not exceed the end of the block
-        let buf = unsafe {
-            get_buffer_ref_mut(
-                convert_to_static(&shm_buffer_mgr),
-                &buffer_id,
-                shm_buf_offset,
-            )
-        };
-        {
-            let storage_buffer_mgr = storage_buffer_mgr.clone();
-            let buffer_id = buffer_id.clone();
-            panic_on_error!(panic_on_error!(
-                tokio::task::spawn_blocking(move || storage_buffer_mgr.load_to(&buffer_id, buf))
-                    .await
-            ));
-        }
-        warn_on_send_error!(in_data_ready_tx.send(buffer_id, BufferLocation::Storage));
-    }
-}
-
 async fn shm_to_backend_transfer(
-    incoming_pid: i32,
+    incoming_pid: Option<i32>,
     shm_to_hybrid: HashMap<BufferId, BufferLocation>,
     mut out_data_ready_rx: OutDataReadyRx,
     shm_buffer_mgr: Arc<ShmBufferManager>,
@@ -693,6 +714,13 @@ async fn shm_to_backend_transfer(
                 BufferLocation::Storage => {
                     tracing::warn!(
                         "Buffer {:?} expected to be in storage, but found in host memory",
+                        buffer_id
+                    );
+                }
+                other => {
+                    tracing::error!(
+                        "Unexpected buffer location: {:?} for {:?}",
+                        other,
                         buffer_id
                     );
                 }
@@ -753,15 +781,17 @@ async fn shm_to_backend_transfer(
     }
     while let Some(()) = req_for_shm_rx.listen().await {
         // Release space for error in plan
-        let Some((buf_id, _)) = shm_buffer_mgr.find(|buf_id, _| buf_id.pid != incoming_pid) else {
+        let Some((buf_id, _)) =
+            shm_buffer_mgr.find(|buf_id, _| incoming_pid.is_none_or(|x| x != buf_id.pid))
+        else {
             tracing::warn!(
-                "No buffer can be released to satisfy shm space request for pid {}",
+                "No buffer can be released to satisfy shm space request for pid {:?}",
                 incoming_pid
             );
             continue;
         };
         tracing::debug!(
-            "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {}",
+            "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {:?}",
             buf_id.pid,
             pretty_size(buf_id.size),
             incoming_pid
