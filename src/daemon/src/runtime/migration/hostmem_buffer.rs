@@ -14,7 +14,7 @@ pub struct HostMemBufferManager {
     inner: std::sync::Mutex<HostMemBufferInner>,
 }
 
-struct BlockMemBuffer(BytesMut);
+pub(crate) struct BlockMemBuffer(pub BytesMut);
 
 impl BlockMemBuffer {
     pub fn new() -> Self {
@@ -29,6 +29,7 @@ impl HostMemBufferManager {
             free_mem_buffers: Vec::new(),
             max_mem_buffer_count: in_mem_size / MAX_ALLOCATION_SIZE,
             extra_burst_mem_buffer_count: extra_burst_size / MAX_ALLOCATION_SIZE,
+            borrowed_count: 0,
         };
         Self {
             inner: std::sync::Mutex::new(inner),
@@ -71,6 +72,27 @@ impl HostMemBufferManager {
         } else {
             Err(HybridBufferError::NoBufferId)
         }
+    }
+
+    pub fn pop_buffer(&self, buffer_id: Option<&BufferId>) -> Option<BlockMemBuffer> {
+        let mut inner = self.inner.lock().unwrap();
+        let res = if let Some(buffer_id) = buffer_id {
+            inner.mem_bookkeeping.remove(buffer_id)
+        } else {
+            inner.alloc_buffer()
+        };
+
+        if res.is_some() {
+            inner.borrowed_count += 1;
+        }
+        res
+    }
+
+    pub fn put_back_mem(&self, buffer: BlockMemBuffer) {
+        let inner = &mut *self.inner.lock().unwrap();
+        assert!(inner.borrowed_count > 0);
+        inner.borrowed_count -= 1;
+        inner.put_back_mem(buffer);
     }
 
     pub fn release_process_residual(&self, pid: i32) {
@@ -127,6 +149,8 @@ struct HostMemBufferInner {
     free_mem_buffers: Vec<BlockMemBuffer>,
     max_mem_buffer_count: usize,
     extra_burst_mem_buffer_count: usize,
+
+    borrowed_count: usize,
 }
 
 impl HostMemBufferInner {
@@ -134,7 +158,7 @@ impl HostMemBufferInner {
         if let Some(buffer) = self.free_mem_buffers.pop() {
             Some(buffer)
         } else if self.mem_bookkeeping.len()
-            < self.max_mem_buffer_count + self.extra_burst_mem_buffer_count
+            < self.max_mem_buffer_count + self.extra_burst_mem_buffer_count + self.borrowed_count
         {
             let new_buffer = BlockMemBuffer::new();
             Some(new_buffer)

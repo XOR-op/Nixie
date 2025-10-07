@@ -268,51 +268,88 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             }));
         }
         // interact with host mem and storage
-        task_handles.push({
-            let shm_buffer_mgr = self.data_manager.shm.clone();
-            let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
-            let in_tx = in_tx.clone();
-            let req_shm_tx = req_shm_tx.clone();
-            tokio::spawn(async move {
-                backend_to_shm_transfer(
-                    self.hostmem_to_shm,
-                    in_tx,
-                    shm_buffer_mgr,
-                    BackendManager::HostMem(hostmem_buffer_mgr),
-                    req_shm_tx,
+        if !self.hostmem_to_shm.is_empty() {
+            task_handles.push({
+                let shm_buffer_mgr = self.data_manager.shm.clone();
+                let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
+                let in_tx = in_tx.clone();
+                let req_shm_tx = req_shm_tx.clone();
+                tokio::spawn(async move {
+                    backend_to_shm_transfer(
+                        self.hostmem_to_shm,
+                        in_tx,
+                        shm_buffer_mgr,
+                        BackendManager::HostMem(hostmem_buffer_mgr),
+                        req_shm_tx,
+                    )
+                    .await
+                })
+            });
+        }
+
+        if !self.storage_to_hostmem.is_empty() {
+            task_handles.push({
+                let shm_buffer_mgr = self.data_manager.shm.clone();
+                let storage_buffer_mgr = self.data_manager.storage.clone();
+                let in_tx = in_tx.clone();
+                tokio::spawn(async move {
+                    backend_to_shm_transfer(
+                        self.storage_to_shm,
+                        in_tx,
+                        shm_buffer_mgr,
+                        BackendManager::Storage(storage_buffer_mgr),
+                        req_shm_tx,
+                    )
+                    .await
+                })
+            });
+        }
+
+        if !self.shm_to_backend.is_empty() {
+            task_handles.push(tokio::spawn(async move {
+                shm_to_backend_transfer(
+                    self.into_gpu.as_ref().map(|(pid, _, _, _)| *pid),
+                    self.shm_to_backend,
+                    out_rx,
+                    self.data_manager.shm.clone(),
+                    self.data_manager.hostmem.clone(),
+                    self.data_manager.storage.clone(),
+                    req_shm_rx,
                 )
                 .await
-            })
-        });
+            }));
+        }
 
-        task_handles.push({
-            let shm_buffer_mgr = self.data_manager.shm.clone();
-            let storage_buffer_mgr = self.data_manager.storage.clone();
-            let in_tx = in_tx.clone();
-            tokio::spawn(async move {
-                backend_to_shm_transfer(
-                    self.storage_to_shm,
-                    in_tx,
-                    shm_buffer_mgr,
-                    BackendManager::Storage(storage_buffer_mgr),
-                    req_shm_tx,
-                )
-                .await
-            })
-        });
+        if !self.hostmem_to_storage.is_empty() {
+            task_handles.push({
+                let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
+                let storage_buffer_mgr = self.data_manager.storage.clone();
+                tokio::spawn(async move {
+                    hostmem_to_storage_transfer(
+                        self.hostmem_to_storage,
+                        hostmem_buffer_mgr,
+                        storage_buffer_mgr,
+                    )
+                    .await
+                })
+            });
+        }
 
-        task_handles.push(tokio::spawn(async move {
-            shm_to_backend_transfer(
-                self.into_gpu.as_ref().map(|(pid, _, _, _)| *pid),
-                self.shm_to_backend,
-                out_rx,
-                self.data_manager.shm.clone(),
-                self.data_manager.hostmem.clone(),
-                self.data_manager.storage.clone(),
-                req_shm_rx,
-            )
-            .await
-        }));
+        if !self.storage_to_hostmem.is_empty() {
+            task_handles.push({
+                let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
+                let storage_buffer_mgr = self.data_manager.storage.clone();
+                tokio::spawn(async move {
+                    storage_to_hostmem_transfer(
+                        self.storage_to_hostmem,
+                        hostmem_buffer_mgr,
+                        storage_buffer_mgr,
+                    )
+                    .await
+                })
+            });
+        }
+
         let ts_start = std::time::Instant::now();
         // Wait for all tasks to complete
         let _ = futures::future::join_all(task_handles).await;
@@ -805,6 +842,56 @@ async fn shm_to_backend_transfer(
             )
             .await
         );
+    }
+}
+
+async fn hostmem_to_storage_transfer(
+    list: Vec<BufferId>,
+    hostmem_mgr: Arc<HostMemBufferManager>,
+    storage_mgr: Arc<StorageBufferManager>,
+) {
+    for buffer_id in list {
+        let Some(buf) = hostmem_mgr.pop_buffer(Some(&buffer_id)) else {
+            tracing::warn!(
+                "Buffer ID {:?} not found in host memory buffer manager",
+                buffer_id
+            );
+            continue;
+        };
+        let storage_mgr = storage_mgr.clone();
+        let buf = panic_on_error!(
+            tokio::task::spawn_blocking(move || {
+                panic_on_error!(storage_mgr.store(&buffer_id, &buf.0));
+                buf
+            })
+            .await
+        );
+        hostmem_mgr.put_back_mem(buf);
+    }
+}
+
+async fn storage_to_hostmem_transfer(
+    list: Vec<BufferId>,
+    hostmem_mgr: Arc<HostMemBufferManager>,
+    storage_mgr: Arc<StorageBufferManager>,
+) {
+    for buffer_id in list {
+        let Some(mut buf) = hostmem_mgr.pop_buffer(None) else {
+            tracing::warn!(
+                "No free buffer in host memory buffer manager to load buffer ID {:?}",
+                buffer_id
+            );
+            continue;
+        };
+        let storage_mgr = storage_mgr.clone();
+        let buf = panic_on_error!(
+            tokio::task::spawn_blocking(move || {
+                panic_on_error!(storage_mgr.load_to(&buffer_id, &mut buf.0));
+                buf
+            })
+            .await
+        );
+        hostmem_mgr.put_back_mem(buf);
     }
 }
 
