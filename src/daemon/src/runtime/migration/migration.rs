@@ -306,14 +306,16 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         }
 
         if !self.shm_to_backend.is_empty() {
+            let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
+            let storage_buffer_mgr = self.data_manager.storage.clone();
             task_handles.push(tokio::spawn(async move {
                 shm_to_backend_transfer(
                     self.into_gpu.as_ref().map(|(pid, _, _, _)| *pid),
                     self.shm_to_backend,
                     out_rx,
                     self.data_manager.shm.clone(),
-                    self.data_manager.hostmem.clone(),
-                    self.data_manager.storage.clone(),
+                    hostmem_buffer_mgr,
+                    storage_buffer_mgr,
                     req_shm_rx,
                 )
                 .await
