@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use control::client::ControlClient;
+use control::{client::ControlClient, parse::parse_move_ops};
+
+use crate::control::parse::MoveOperation;
 
 mod config;
 mod control;
@@ -25,19 +27,10 @@ macro_rules! check_error {
     };
 }
 
-#[derive(clap::ValueEnum, Debug, Parser, Clone, Copy, Default)]
-enum DeviceArgs {
-    Cpu,
-    #[default]
-    Gpu,
-}
-
 #[derive(Debug, Parser)]
 struct PrefetchArgs {
-    #[arg(short, long)]
-    pub dest: DeviceArgs,
-    #[command(flatten)]
-    pub proc: ProcArgs,
+    #[arg(value_parser = parse_move_ops)]
+    pub move_ops: Vec<MoveOperation>,
 }
 
 #[derive(Debug, Parser)]
@@ -95,7 +88,7 @@ enum Args {
     Config(ConfigArgs),
 }
 
-#[derive(Debug, Parser, Clone, Copy)]
+#[derive(Debug, Parser, Clone, Copy, PartialEq, Eq)]
 struct ProcArgs {
     #[arg(short, long, conflicts_with = "idx")]
     pub pid: Option<i32>,
@@ -126,23 +119,15 @@ fn main() {
     rt.block_on(async {
         match args {
             Args::Prefetch(args) => {
-                let client =
-                    check_error!(ControlClient::new(control::CONTROL_PATH, args.proc).await);
-                client
-                    .prefetch(matches!(args.dest, DeviceArgs::Gpu))
-                    .await
-                    .unwrap();
+                let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
+                client.prefetch(args).await.unwrap();
             }
             Args::List(args) => {
-                let client = check_error!(
-                    ControlClient::new(control::CONTROL_PATH, ProcArgs::empty()).await
-                );
+                let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 client.list_processes(args.verbose).await.unwrap();
             }
             Args::Config(args) => {
-                let client = check_error!(
-                    ControlClient::new(control::CONTROL_PATH, ProcArgs::empty()).await
-                );
+                let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 match args {
                     ConfigArgs::Show => {
                         client.show_config().await.unwrap();
@@ -153,9 +138,7 @@ fn main() {
                 }
             }
             Args::Usage(args) => {
-                let client = check_error!(
-                    ControlClient::new(control::CONTROL_PATH, ProcArgs::empty()).await
-                );
+                let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 client.data_details(args.verbose).await.unwrap();
             }
             Args::Daemon(_) => unreachable!(),

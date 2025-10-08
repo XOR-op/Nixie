@@ -1,4 +1,5 @@
 pub mod client;
+pub(crate) mod parse;
 
 use std::{collections::HashMap, num::NonZeroU32};
 
@@ -7,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{Config, ConfigurableArgs},
-    runtime::{ClientState, Priority},
+    runtime::{ClientState, Priority, migration::BufferLocation},
 };
 
 pub static CONTROL_PATH: &str = "/tmp/nihilphase-ctl.sock";
@@ -20,17 +21,26 @@ pub(crate) trait Controllable {
 
     async fn data_details() -> DataManagerMetadata;
 
-    async fn prefetch(args: PrefetchMsg);
+    async fn prefetch(args: PrefetchArgs) -> Result<PrefetchResponse, ()>;
 
     async fn update_config(config: ConfigurableArgs);
 
     async fn get_config() -> Config;
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PrefetchArgs {
+    pub list: Vec<PrefetchMsg>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PrefetchResponse;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PrefetchMsg {
     pub pid: i32,
-    pub to_gpu: bool,
+    pub from: BufferLocation,
+    pub to: BufferLocation,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

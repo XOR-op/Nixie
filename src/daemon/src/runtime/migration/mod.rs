@@ -9,6 +9,7 @@ use std::{num::NonZeroU32, sync::Arc};
 
 pub use hostmem_buffer::HostMemBufferManager;
 use nihil_common::GlobalDeviceId;
+use serde::{Deserialize, Serialize};
 pub use shm_buffer::ShmBufferManager;
 pub use storage_buffer::StorageBufferManager;
 
@@ -26,9 +27,9 @@ pub struct AllocationInfo {
     block_size: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum BufferLocation {
-    Gpu,
+    Gpu(GlobalDeviceId),
     Shm,
     HostMem,
     Storage,

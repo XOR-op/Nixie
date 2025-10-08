@@ -7,6 +7,18 @@ pub enum NihilphaseError {
     Daemon(#[from] DaemonError),
     #[error("Uvm: {0}")]
     Uvm(#[from] UvmError),
+    #[error("Client: {0}")]
+    Client(#[from] ClientError),
+}
+
+#[derive(Debug, Error)]
+pub enum ClientError {
+    #[error("{0}: RPC error {1}")]
+    ClientRpc(&'static str, tarpc::client::RpcError),
+    #[error("{0}: Invalid arguments")]
+    Args(String),
+    #[error("{0}: IO error {1}")]
+    Io(&'static str, std::io::Error),
 }
 
 #[derive(Debug, Error)]
@@ -15,8 +27,6 @@ pub enum DaemonError {
     Io(&'static str, std::io::Error),
     #[error("{0}: error with {1}")]
     Errno(&'static str, nix::errno::Errno),
-    #[error("{0}: RPC error {1}")]
-    ClientRpc(&'static str, tarpc::client::RpcError),
     #[error("{0}: CUDA error {1:?}")]
     Cuda(&'static str, cudarc::driver::sys::cudaError_enum),
     #[error("{0}: NVML error {1}")]

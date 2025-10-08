@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::{
     config::{Config, ConfigurableArgs, init_config, update_config},
-    control::{self, Controllable, DataManagerMetadata, PrefetchMsg},
+    control::{self, Controllable, DataManagerMetadata, PrefetchArgs, PrefetchResponse},
     error::{DaemonError, NihilphaseError},
     runtime::{
         ProcCtlReq,
@@ -244,7 +244,7 @@ impl Daemon {
 struct ControllableDaemon {
     data: Arc<DaemonData>,
     data_mgr_handle: DataManagerHandle,
-    prefetch_tx: mpsc::UnboundedSender<(i32, ActivityUpdate)>,
+    prefetch_tx: mpsc::UnboundedSender<CallParameter<PrefetchArgs, PrefetchResponse>>,
 }
 
 impl Controllable for ControllableDaemon {
@@ -269,19 +269,17 @@ impl Controllable for ControllableDaemon {
         results.into_iter().flatten().collect()
     }
 
-    async fn prefetch(self, _context: Context, args: PrefetchMsg) {
+    async fn prefetch(self, _context: Context, args: PrefetchArgs) -> Result<PrefetchResponse, ()> {
         let guard = self.data.processes.read().await;
-        if !guard.contains_key(&args.pid) {
-            tracing::warn!("Process with pid {} not found", args.pid);
-            return;
+        for msg in &args.list {
+            if !guard.contains_key(&msg.pid) {
+                tracing::warn!("Process with pid {} not found", msg.pid);
+                return Err(());
+            }
         }
-        if !args.to_gpu {
-            tracing::warn!("Prefetching to CPU is not supported yet");
-            return;
-        }
-        let _ = self
-            .prefetch_tx
-            .send((args.pid, ActivityUpdate::RequestScheduling));
+        let (para, ret_rx) = CallParameter::new(args);
+        self.prefetch_tx.send(para).map_err(|_| ())?;
+        ret_rx.await.ok_or(())
     }
 
     async fn update_config(self, _context: Context, config: ConfigurableArgs) {

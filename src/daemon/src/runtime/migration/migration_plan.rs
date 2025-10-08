@@ -311,7 +311,9 @@ where
     // decide which buffer to be moved based on requests
     for (pid, directions) in requests.into_iter() {
         for moving in directions.iter() {
-            if moving.from == BufferLocation::Gpu || moving.to == BufferLocation::Gpu {
+            if matches!(moving.from, BufferLocation::Gpu(_))
+                || matches!(moving.to, BufferLocation::Gpu(_))
+            {
                 tracing::error!("Cannot organize data from/to GPU");
                 return None;
             }
@@ -323,7 +325,7 @@ where
                     &mut host_mem_free_segments,
                 ),
                 BufferLocation::Storage => continue,
-                BufferLocation::Gpu => {
+                BufferLocation::Gpu(_) => {
                     tracing::error!("Cannot organize data from GPU");
                     return None;
                 }

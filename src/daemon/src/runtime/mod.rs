@@ -1,6 +1,6 @@
 pub mod daemon;
 mod daemon_server;
-mod migration;
+pub mod migration;
 pub mod proc_ctl;
 mod schedule;
 pub mod shm;

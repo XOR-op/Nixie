@@ -4,75 +4,95 @@ use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::{ProcArgs, UpdateConfigArgs, error::DaemonError};
+use crate::{UpdateConfigArgs, control::PrefetchResponse, error::ClientError};
 use nihil_common::general::pretty_size;
 
-use super::{ControllableClient, PrefetchMsg};
+use super::ControllableClient;
 
 pub(crate) struct ControlClient {
     client: ControllableClient,
-    pid: i32,
 }
 
 impl ControlClient {
-    pub async fn new(path: &str, pid: ProcArgs) -> Result<Self, DaemonError> {
+    pub async fn new(path: &str) -> Result<Self, ClientError> {
         let conn = tokio::net::UnixStream::connect(path)
             .await
-            .map_err(|e| DaemonError::Io("Failed to connect to control socket", e))?;
+            .map_err(|e| ClientError::Io("Failed to connect to control socket", e))?;
         let conn = tarpc::serde_transport::new(
             LengthDelimitedCodec::builder().new_framed(conn),
             Cbor::default(),
         );
         let client = ControllableClient::new(Default::default(), conn).spawn();
-        match pid {
-            ProcArgs {
-                pid: Some(pid),
-                idx: None,
-            } => Ok(Self { client, pid }),
-            ProcArgs {
-                pid: None,
-                idx: Some(idx),
-            } => {
-                let r = client
-                    .list_pid(tarpc::context::current())
-                    .await
-                    .map_err(|e| DaemonError::ClientRpc("list_pid", e))?;
-                if let Some(pid) = r.get(idx as usize) {
-                    Ok(Self { client, pid: *pid })
-                } else {
-                    Err(DaemonError::Errno(
-                        "Invalid process index",
-                        nix::errno::Errno::EINVAL,
-                    ))
-                }
-            }
-            _ => Err(DaemonError::Errno(
-                "-p(--pid) or -i(--idx) must be specified amd cannot be used together",
-                nix::errno::Errno::EINVAL,
-            )),
-        }
+        Ok(Self { client })
     }
 
-    pub async fn prefetch(&self, to_gpu: bool) -> Result<(), DaemonError> {
-        self.client
-            .prefetch(
-                tarpc::context::current(),
-                PrefetchMsg {
-                    pid: self.pid,
-                    to_gpu,
-                },
-            )
+    async fn get_pid_list(&self) -> Result<Vec<i32>, ClientError> {
+        let r = self
+            .client
+            .list_pid(tarpc::context::current())
             .await
-            .map_err(|e| DaemonError::ClientRpc("prefetch", e))?;
-        Ok(())
+            .map_err(|e| ClientError::ClientRpc("list_pid", e))?;
+        Ok(r)
     }
 
-    pub async fn list_processes(&self, verbose: bool) -> Result<(), DaemonError> {
+    pub async fn prefetch(
+        &self,
+        args: crate::PrefetchArgs,
+    ) -> Result<PrefetchResponse, ClientError> {
+        let pid_list = self.get_pid_list().await?;
+        let processed_args = crate::control::PrefetchArgs {
+            list: args
+                .move_ops
+                .into_iter()
+                .map(|msg| {
+                    let pid = if let Some(pid) = msg.pid.pid {
+                        if !pid_list.contains(&pid) {
+                            return Err(ClientError::Args(format!(
+                                "Process with pid {} not found",
+                                pid
+                            )));
+                        }
+                        pid
+                    } else if let Some(idx) = msg.pid.idx {
+                        if idx == 0 || (idx as usize) > pid_list.len() {
+                            return Err(ClientError::Args(format!(
+                                "Process index {} out of range",
+                                idx
+                            )));
+                        }
+                        pid_list[idx as usize - 1]
+                    } else {
+                        return Err(ClientError::Args(
+                            "Either pid or idx must be specified".to_string(),
+                        ));
+                    };
+                    Ok(crate::control::PrefetchMsg {
+                        pid,
+                        from: msg.src,
+                        to: msg.dest,
+                        size: msg.size,
+                    })
+                })
+                .collect::<Result<Vec<_>, ClientError>>()?,
+        };
+        if self
+            .client
+            .prefetch(tarpc::context::current(), processed_args)
+            .await
+            .map_err(|e| ClientError::ClientRpc("prefetch", e))?
+            .is_err()
+        {
+            eprintln!("{}", "Prefetch request failed".red());
+        }
+        Ok(PrefetchResponse)
+    }
+
+    pub async fn list_processes(&self, verbose: bool) -> Result<(), ClientError> {
         let processes = self
             .client
             .list_processes(tarpc::context::current())
             .await
-            .map_err(|e| DaemonError::ClientRpc("list_processes", e))?;
+            .map_err(|e| ClientError::ClientRpc("list_processes", e))?;
         // print info
         println!("Active processes: {}", processes.len());
         for process in processes {
@@ -126,12 +146,12 @@ impl ControlClient {
         Ok(())
     }
 
-    pub async fn data_details(&self, verbose: bool) -> Result<(), DaemonError> {
+    pub async fn data_details(&self, verbose: bool) -> Result<(), ClientError> {
         let data_meta = self
             .client
             .data_details(tarpc::context::current())
             .await
-            .map_err(|e| DaemonError::ClientRpc("data_details", e))?;
+            .map_err(|e| ClientError::ClientRpc("data_details", e))?;
         let shm_used = data_meta
             .shm
             .iter()
@@ -220,29 +240,28 @@ impl ControlClient {
         Ok(())
     }
 
-    pub async fn show_config(&self) -> Result<(), DaemonError> {
+    pub async fn show_config(&self) -> Result<(), ClientError> {
         let config = self
             .client
             .get_config(tarpc::context::current())
             .await
-            .map_err(|e| DaemonError::ClientRpc("get_config", e))?;
+            .map_err(|e| ClientError::ClientRpc("get_config", e))?;
         println!("Config: {:?}", config);
         Ok(())
     }
 
-    pub async fn update_config(&self, args: UpdateConfigArgs) -> Result<(), DaemonError> {
+    pub async fn update_config(&self, args: UpdateConfigArgs) -> Result<(), ClientError> {
         let mut config = self
             .client
             .get_config(tarpc::context::current())
             .await
-            .map_err(|e| DaemonError::ClientRpc("update_config, failed to get", e))?;
+            .map_err(|e| ClientError::ClientRpc("update_config, failed to get", e))?;
         if let Some(device_threshold) = args.device_threshold {
             if (0.0..=1.0).contains(&device_threshold) {
                 config.device_threshold = device_threshold;
             } else {
-                return Err(DaemonError::Errno(
-                    "device_threshold must be in [0, 1]",
-                    nix::errno::Errno::EINVAL,
+                return Err(ClientError::Args(
+                    "device_threshold must be in [0, 1]".to_string(),
                 ));
             }
         }
@@ -270,7 +289,7 @@ impl ControlClient {
         self.client
             .update_config(tarpc::context::current(), config.to_configurable_args())
             .await
-            .map_err(|e| DaemonError::ClientRpc("update_config, failed to update", e))?;
+            .map_err(|e| ClientError::ClientRpc("update_config, failed to update", e))?;
         Ok(())
     }
 }

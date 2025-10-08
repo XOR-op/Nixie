@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     config::load_config,
-    control::{ProcessResidualData, ProcessResidualRequest},
+    control::{PrefetchArgs, PrefetchResponse, ProcessResidualData, ProcessResidualRequest},
     error::ScheduleError,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
@@ -49,7 +49,7 @@ pub(super) enum ActiveClientState {
 pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
     rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
-    prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+    prefetch_rx: mpsc::UnboundedReceiver<CallParameter<PrefetchArgs, PrefetchResponse>>,
     control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
@@ -60,7 +60,7 @@ impl Scheduler {
     pub fn new(
         list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
         rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
-        prefetch_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+        prefetch_rx: mpsc::UnboundedReceiver<CallParameter<PrefetchArgs, PrefetchResponse>>,
         control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
         data_manager: DataManagerHandle,
     ) -> Self {
@@ -84,8 +84,8 @@ impl Scheduler {
                 Some((pid, data)) = self.rpc_data_rx.recv() => {
                     self.received_data(pid, data, &mut last_polled).await;
                 }
-                Some((pid, data)) = self.prefetch_rx.recv() => {
-                    self.received_prioritized_data(pid, data, &mut last_polled).await;
+                Some(para) = self.prefetch_rx.recv() => {
+                    todo!("Implement prefetch handling");
                 }
                 Some(req) = self.control_msg_rx.recv() =>{
                     self.handle_ctrl(req).await;
