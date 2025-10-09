@@ -171,16 +171,28 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .collect::<HashMap<_, _>>();
             data.insert("shm -> backend", shm_to_backend_mapping);
         }
-        // if self.storage_to_hostmem.len() > 0 {
-        //     let storage_to_hostmem_size =
-        //         self.storage_to_hostmem.iter().map(|b| b.size).sum::<u64>();
-        //     data.insert("storage -> hostmem", pretty_size(storage_to_hostmem_size));
-        // }
-        // if self.hostmem_to_storage.len() > 0 {
-        //     let hostmem_to_storage_size =
-        //         self.hostmem_to_storage.iter().map(|b| b.size).sum::<u64>();
-        //     data.insert("hostmem -> storage", pretty_size(hostmem_to_storage_size));
-        // }
+        if self.storage_to_hostmem.len() > 0 {
+            let storage_to_hostmem_mapping = self
+                .storage_to_hostmem
+                .iter()
+                .map(|b| (format!("{}", b.pid), b.size))
+                .into_group_map()
+                .into_iter()
+                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .collect::<HashMap<_, _>>();
+            data.insert("storage -> hostmem", storage_to_hostmem_mapping);
+        }
+        if self.hostmem_to_storage.len() > 0 {
+            let hostmem_to_storage_mapping = self
+                .hostmem_to_storage
+                .iter()
+                .map(|b| (format!("{}", b.pid), b.size))
+                .into_group_map()
+                .into_iter()
+                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .collect::<HashMap<_, _>>();
+            data.insert("hostmem -> storage", hostmem_to_storage_mapping);
+        }
         serde_json::to_string(&data).unwrap_or_default()
     }
 }
@@ -292,6 +304,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                 let shm_buffer_mgr = self.data_manager.shm.clone();
                 let storage_buffer_mgr = self.data_manager.storage.clone();
                 let in_tx = in_tx.clone();
+                let req_shm_tx = req_shm_tx.clone();
                 tokio::spawn(async move {
                     backend_to_shm_transfer(
                         self.storage_to_shm,
@@ -351,6 +364,8 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                 })
             });
         }
+        drop(in_tx);
+        drop(req_shm_tx);
 
         let ts_start = std::time::Instant::now();
         // Wait for all tasks to complete
@@ -766,6 +781,9 @@ async fn shm_to_backend_transfer(
             }
         }
     }
+
+    let mut extra_move = 0;
+
     let mut next_shm_handling = HashMap::new();
     for (buf_id, expected_location) in shm_to_hybrid {
         let location = match shm_to_backend_transfer_inner(
@@ -835,6 +853,8 @@ async fn shm_to_backend_transfer(
             pretty_size(buf_id.size),
             incoming_pid
         );
+        extra_move += 1;
+
         panic_on_error!(
             shm_to_backend_transfer_inner(
                 &buf_id,
@@ -845,6 +865,10 @@ async fn shm_to_backend_transfer(
             .await
         );
     }
+    tracing::trace!(
+        "Shm to backend migration completed with {} extra moves",
+        extra_move
+    );
 }
 
 async fn hostmem_to_storage_transfer(
