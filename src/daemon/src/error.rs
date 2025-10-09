@@ -69,4 +69,6 @@ pub enum ScheduleError {
     InvalidClient(i32),
     #[error("{0} Failed to send RPC to {1}: {2}")]
     RpcError(&'static str, i32, tarpc::client::RpcError),
+    #[error("Invalid prefetch request: {0}")]
+    InvalidPrefetchRequest(String),
 }

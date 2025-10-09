@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use itertools::Itertools;
 use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
@@ -21,7 +22,9 @@ use crate::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
             DataManagerHandle,
-            migration_plan::{DeviceRequestArgs, two_processes_task},
+            migration_plan::{
+                DeviceRequestArgs, MigrationRequirement, local_prefetch_task, two_processes_task,
+            },
         },
         schedule::{
             PriorityLevel,
@@ -85,7 +88,7 @@ impl Scheduler {
                     self.received_data(pid, data, &mut last_polled).await;
                 }
                 Some(para) = self.prefetch_rx.recv() => {
-                    todo!("Implement prefetch handling");
+                    self.received_prefetch_request(para, &mut last_polled).await;
                 }
                 Some(req) = self.control_msg_rx.recv() =>{
                     self.handle_ctrl(req).await;
@@ -112,6 +115,15 @@ impl Scheduler {
                 ret_tx.ret(GetStateResponse { state, priority });
             }
         }
+    }
+
+    async fn received_prefetch_request(
+        &mut self,
+        param: CallParameter<PrefetchArgs, PrefetchResponse>,
+        last_polled: &mut Instant,
+    ) {
+        self.sched_queue.push_prefetch(param);
+        self.poll_queue(last_polled).await;
     }
 
     async fn received_prioritized_data(
@@ -142,11 +154,6 @@ impl Scheduler {
         }
         self.sched_queue.update_active(self.active_client);
         if let Some(req) = self.sched_queue.schedule_pop(self.active_client) {
-            // tracing::trace!(
-            //     "Handling request from process {}: {}",
-            //     req.pid(),
-            //     req.req_type()
-            // );
             match req {
                 GenericRequest::Idle(req) => match req.request_type {
                     IdleRequestType::Idle => self.handle_activity_idle(req.pid),
@@ -170,6 +177,22 @@ impl Scheduler {
                             e
                         );
                     }
+                }
+                GenericRequest::Prefetch(req) => {
+                    let should_reset_last_active = match self.active_client {
+                        ActiveClientState::LastActive { pid, .. } => {
+                            req.parameter.param.list.iter().any(|r| r.pid == pid)
+                        }
+                        _ => false,
+                    };
+                    if should_reset_last_active {
+                        self.active_client = ActiveClientState::None;
+                        tracing::trace!("Clearing active client due to prefetch request");
+                    }
+                    let (param, ret_tx) = req.parameter.into_parts();
+                    let res = self.handle_prefetch_request(param).await;
+                    // TODO: handle error
+                    ret_tx.ret(res.unwrap_or(PrefetchResponse));
                 }
             }
         }
@@ -310,6 +333,56 @@ impl Scheduler {
         // prevent thrashing
         self.sched_queue.cooldown(Some(cooldown));
         Ok(())
+    }
+
+    async fn handle_prefetch_request(
+        &self,
+        prefetch_args: PrefetchArgs,
+    ) -> Result<PrefetchResponse, ScheduleError> {
+        if let ActiveClientState::Active { pid, .. } = self.active_client
+            && prefetch_args.list.iter().any(|req| req.pid == pid)
+        {
+            return Err(ScheduleError::InvalidPrefetchRequest(format!(
+                "Cannot prefetch for the active process {}",
+                pid
+            )));
+        }
+
+        let Some(task) = local_prefetch_task::<SidecarClient, DataManagerHandle>(
+            prefetch_args
+                .list
+                .into_iter()
+                .map(|e| {
+                    (
+                        e.pid,
+                        MigrationRequirement {
+                            from: e.from,
+                            to: e.to,
+                            size: e.size,
+                            allow_incomplete: true,
+                        },
+                    )
+                })
+                .sorted_by(|a, b| a.0.cmp(&b.0))
+                .fold(Vec::new(), |mut acc, item| {
+                    if let Some(last) = acc.last_mut() {
+                        if last.0 == item.0 {
+                            last.1.push(item.1);
+                            return acc;
+                        }
+                    }
+                    acc.push((item.0, vec![item.1]));
+                    acc
+                }),
+            self.data_manager.clone(),
+        ) else {
+            let error_msg = "Cannot create prefetch task";
+            tracing::warn!("{}", error_msg);
+            return Err(ScheduleError::InvalidPrefetchRequest(error_msg.to_string()));
+        };
+        task.run().await;
+
+        Ok(PrefetchResponse)
     }
 
     async fn perform_migration(

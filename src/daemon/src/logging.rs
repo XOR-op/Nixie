@@ -27,11 +27,11 @@ impl FormatTime for SystemTime {
 
 #[derive(Debug, Clone)]
 pub struct ExactLevelFilter {
-    level: tracing::Level,
+    level: Vec<tracing::Level>,
 }
 
 impl ExactLevelFilter {
-    pub fn new(level: tracing::Level) -> Self {
+    pub fn new(level: Vec<tracing::Level>) -> Self {
         Self { level }
     }
 }
@@ -45,7 +45,7 @@ impl<S> tracing_subscriber::layer::Filter<S> for ExactLevelFilter {
     ) -> bool {
         // The filter's logic: return true only if the metadata's level
         // is an exact match with the one we've configured.
-        *meta.level() == self.level
+        self.level.contains(meta.level())
     }
 }
 
@@ -65,7 +65,10 @@ pub fn init_tracing() {
     let file_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(temp_file_handle)
-        .with_filter(ExactLevelFilter::new(tracing::Level::TRACE));
+        .with_filter(ExactLevelFilter::new(vec![
+            tracing::Level::TRACE,
+            tracing::Level::DEBUG,
+        ]));
     // .with_filter(LevelFilter::TRACE);
     tracing_subscriber::registry()
         .with(file_layer)

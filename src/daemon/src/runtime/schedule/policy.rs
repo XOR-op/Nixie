@@ -3,7 +3,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nihil_common::ActivityUpdate;
+use nihil_common::{ActivityUpdate, general::CallParameter};
+
+use crate::control::{PrefetchArgs, PrefetchResponse};
 
 use super::{Priority, scheduler::ActiveClientState};
 
@@ -29,17 +31,25 @@ pub struct IdleRequest {
     pub request_type: IdleRequestType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+pub struct PrefetchRequest {
+    pub time: Instant,
+    pub parameter: CallParameter<PrefetchArgs, PrefetchResponse>,
+}
+
+#[derive(Debug)]
 pub enum GenericRequest {
     Idle(IdleRequest),
     Schedule(SchedRequest),
+    Prefetch(PrefetchRequest),
 }
 
 impl GenericRequest {
-    pub fn pid(&self) -> i32 {
+    pub fn pid(&self) -> Option<i32> {
         match self {
-            GenericRequest::Idle(req) => req.pid,
-            GenericRequest::Schedule(req) => req.pid,
+            GenericRequest::Idle(req) => Some(req.pid),
+            GenericRequest::Schedule(req) => Some(req.pid),
+            GenericRequest::Prefetch(_) => None,
         }
     }
 
@@ -47,6 +57,7 @@ impl GenericRequest {
         match self {
             GenericRequest::Idle(_) => "Idle",
             GenericRequest::Schedule(_) => "Schedule",
+            GenericRequest::Prefetch(_) => "Prefetch",
         }
     }
 }
@@ -54,6 +65,7 @@ impl GenericRequest {
 pub struct ScheduleQueue {
     sched_req: VecDeque<SchedRequest>,
     idle_req_queue: VecDeque<IdleRequest>,
+    prefetch_queue: VecDeque<PrefetchRequest>,
     clients: HashMap<i32, ClientStatistics>,
     cooldown_until: Instant,
     active_client: ActiveClientState,
@@ -65,6 +77,7 @@ impl ScheduleQueue {
         Self {
             sched_req: VecDeque::new(),
             idle_req_queue: VecDeque::new(),
+            prefetch_queue: VecDeque::new(),
             clients: HashMap::new(),
             cooldown_until: Instant::now(),
             active_client: ActiveClientState::None,
@@ -173,11 +186,20 @@ impl ScheduleQueue {
         }
     }
 
+    pub fn push_prefetch(&mut self, parameter: CallParameter<PrefetchArgs, PrefetchResponse>) {
+        self.prefetch_queue.push_back(PrefetchRequest {
+            time: Instant::now(),
+            parameter,
+        });
+    }
+
     pub fn schedule_pop(&mut self, active_client: ActiveClientState) -> Option<GenericRequest> {
         self.update_priority();
         self.compute_prioritization();
         if let Some(front) = self.idle_req_queue.pop_front() {
             return Some(GenericRequest::Idle(front));
+        } else if let Some(prefetch_req) = self.prefetch_queue.pop_front() {
+            return Some(GenericRequest::Prefetch(prefetch_req));
         }
         let will_preempt = self.compute_preemption(active_client);
         if Instant::now() < self.cooldown_until || !will_preempt {

@@ -17,10 +17,10 @@ use super::migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MigrationRequirement {
-    from: BufferLocation,
-    to: BufferLocation,
-    size: u64,
-    allow_incomplete: bool, // if true, allow moving with less than size
+    pub from: BufferLocation,
+    pub to: BufferLocation,
+    pub size: u64,
+    pub allow_incomplete: bool, // if true, allow moving with less than size
 }
 
 impl MigrationRequirement {
@@ -112,6 +112,7 @@ where
     Client: Clone,
     Handle: AbstractDataHandle,
 {
+    let profiling_timestamp_start = std::time::Instant::now();
     let mut out_of_gpu_list = Vec::new();
     let into_gpu_requirement = match &into_gpu.1 {
         DeviceRequestArgs::ResidualData(process_residual_data) => process_residual_data
@@ -280,12 +281,18 @@ where
         Vec::new(), // hostmem_to_storage
         data_manager,
     );
-    tracing::debug!("Created migration task: {}", result.json_summary());
+
+    let elapsed = profiling_timestamp_start.elapsed();
+    tracing::debug!(
+        "Created migration task: {} for {} us",
+        result.json_summary(),
+        elapsed.as_micros()
+    );
     result
 }
 
 /// Create a migration task that only organizes data out of GPU
-pub(crate) fn organizes_task<Client, Handle>(
+pub(crate) fn local_prefetch_task<Client, Handle>(
     requests: Vec<(i32, Vec<MigrationRequirement>)>,
     data_manager: Handle,
 ) -> Option<DataMigrationTask<Client, Handle>>
@@ -293,6 +300,7 @@ where
     Client: Clone,
     Handle: AbstractDataHandle,
 {
+    let profiling_timestamp_start = std::time::Instant::now();
     let in_requests_pids: HashSet<_, std::hash::RandomState> =
         HashSet::from_iter(requests.iter().map(|(pid, _)| *pid));
     assert_eq!(in_requests_pids.len(), requests.len(), "duplicated pids");
@@ -475,7 +483,13 @@ where
         hostmem_to_storage,
         data_manager,
     );
-    tracing::debug!("Created organize task: {}", result.json_summary());
+
+    let elapsed = profiling_timestamp_start.elapsed();
+    tracing::debug!(
+        "Created organize task: {} with {} us",
+        result.json_summary(),
+        elapsed.as_micros()
+    );
     Some(result)
 }
 

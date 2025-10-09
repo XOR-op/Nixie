@@ -28,6 +28,14 @@ pub struct CallParameter<P, R> {
     ret_tx: mpsc::Sender<R>,
 }
 
+impl<P: std::fmt::Debug, R> std::fmt::Debug for CallParameter<P, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallParameter")
+            .field("param", &self.param)
+            .finish()
+    }
+}
+
 impl<P, R> CallParameter<P, R> {
     pub fn new(param: P) -> (Self, CallFuture<R>) {
         let (tx, rx) = mpsc::channel(1);
