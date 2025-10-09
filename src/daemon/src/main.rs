@@ -30,7 +30,7 @@ macro_rules! check_error {
 #[derive(Debug, Parser)]
 struct PrefetchArgs {
     #[arg(value_parser = parse_move_ops)]
-    pub move_ops: Vec<MoveOperation>,
+    pub move_ops: std::vec::Vec<MoveOperation>, // qualify as std::vec::Vec to make clap happy; see https://github.com/clap-rs/clap/issues/4808
 }
 
 #[derive(Debug, Parser)]
