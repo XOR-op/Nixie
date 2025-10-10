@@ -74,18 +74,33 @@ impl HostMemBufferManager {
         }
     }
 
-    pub fn pop_buffer(&self, buffer_id: Option<&BufferId>) -> Option<BlockMemBuffer> {
+    pub fn pop_buffer(&self, buffer_id: &BufferId) -> Option<BlockMemBuffer> {
         let mut inner = self.inner.lock().unwrap();
-        let res = if let Some(buffer_id) = buffer_id {
-            inner.mem_bookkeeping.remove(buffer_id)
-        } else {
-            inner.alloc_buffer()
-        };
+        let res = inner.mem_bookkeeping.remove(buffer_id)?;
+        inner.borrowed_count += 1;
+        Some(res)
+    }
 
-        if res.is_some() {
-            inner.borrowed_count += 1;
+    pub fn allocate_empty_buffer(&self) -> Option<BlockMemBuffer> {
+        let mut inner = self.inner.lock().unwrap();
+        let mut res = inner.alloc_buffer()?;
+        if res.0.capacity() < MAX_ALLOCATION_SIZE {
+            res.0.resize(MAX_ALLOCATION_SIZE, 0);
         }
-        res
+        // Safety: We just resized the buffer to MAX_ALLOCATION_SIZE, so it's safe to set the length.
+        unsafe {
+            res.0.set_len(MAX_ALLOCATION_SIZE);
+        }
+        inner.borrowed_count += 1;
+        Some(res)
+    }
+
+    pub fn return_associated_buffer(&self, buffer_id: BufferId, buffer: BlockMemBuffer) {
+        let mut inner = self.inner.lock().unwrap();
+        assert!(inner.borrowed_count > 0);
+        assert_eq!(buffer.0.len(), buffer_id.size as usize);
+        inner.borrowed_count -= 1;
+        inner.mem_bookkeeping.insert(buffer_id, buffer);
     }
 
     pub fn put_back_mem(&self, buffer: BlockMemBuffer) {
@@ -117,15 +132,11 @@ impl HostMemBufferManager {
     /// Returns: a list of length of free memory segments in bytes.
     pub fn free_mem_segments(&self) -> Vec<AllocationCapacity> {
         let inner = self.inner.lock().unwrap();
-        let mut free_count = inner.free_mem_buffers.len() as u64;
-        if inner.free_mem_buffers.len()
-            < inner.max_mem_buffer_count + inner.extra_burst_mem_buffer_count
-        {
-            free_count += (inner.max_mem_buffer_count + inner.extra_burst_mem_buffer_count
-                - inner.free_mem_buffers.len()) as u64;
-        }
+        let free_count = (inner.max_mem_buffer_count + inner.extra_burst_mem_buffer_count)
+            .saturating_sub(inner.mem_bookkeeping.len() + inner.borrowed_count);
+
         (0..free_count)
-            .map(|i| i * MAX_ALLOCATION_SIZE as u64)
+            .map(|_| MAX_ALLOCATION_SIZE as u64)
             .collect()
     }
 

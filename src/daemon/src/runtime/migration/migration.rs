@@ -141,24 +141,36 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
             })
             .collect::<HashMap<_, _>>();
         let mut data = HashMap::new();
-        data.insert(
-            "shm -> gpu",
-            HashMap::from([(income_pid_str.clone(), pretty_size(into_gpu_size))]),
-        );
-        data.insert("gpu -> shm", out_from_gpu_size);
-        if self.hostmem_to_shm.len() > 0 {
-            let hostmem_to_shm_size = self.hostmem_to_shm.iter().map(|b| b.size).sum::<u64>();
+        if self.into_gpu.is_some() {
             data.insert(
-                "hostmem -> shm",
-                HashMap::from([(income_pid_str.clone(), pretty_size(hostmem_to_shm_size))]),
+                "shm -> gpu",
+                HashMap::from([(income_pid_str.clone(), pretty_size(into_gpu_size))]),
             );
         }
+        if self.out_from_gpu.len() > 0 {
+            data.insert("gpu -> shm", out_from_gpu_size);
+        }
+        if self.hostmem_to_shm.len() > 0 {
+            let hostmem_to_shm_mapping = self
+                .hostmem_to_shm
+                .iter()
+                .map(|b| (format!("{}", b.pid), b.size))
+                .into_group_map()
+                .into_iter()
+                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .collect::<HashMap<_, _>>();
+            data.insert("hostmem -> shm", hostmem_to_shm_mapping);
+        }
         if self.storage_to_shm.len() > 0 {
-            let storage_to_shm_size = self.storage_to_shm.iter().map(|b| b.size).sum::<u64>();
-            data.insert(
-                "storage -> shm",
-                HashMap::from([(income_pid_str.clone(), pretty_size(storage_to_shm_size))]),
-            );
+            let storage_to_shm_mapping = self
+                .storage_to_shm
+                .iter()
+                .map(|b| (format!("{}", b.pid), b.size))
+                .into_group_map()
+                .into_iter()
+                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .collect::<HashMap<_, _>>();
+            data.insert("storage -> shm", storage_to_shm_mapping);
         }
         if self.shm_to_backend.len() > 0 {
             let shm_to_backend_mapping = self
@@ -877,7 +889,7 @@ async fn hostmem_to_storage_transfer(
     storage_mgr: Arc<StorageBufferManager>,
 ) {
     for buffer_id in list {
-        let Some(buf) = hostmem_mgr.pop_buffer(Some(&buffer_id)) else {
+        let Some(buf) = hostmem_mgr.pop_buffer(&buffer_id) else {
             tracing::warn!(
                 "Buffer ID {:?} not found in host memory buffer manager",
                 buffer_id
@@ -902,7 +914,7 @@ async fn storage_to_hostmem_transfer(
     storage_mgr: Arc<StorageBufferManager>,
 ) {
     for buffer_id in list {
-        let Some(mut buf) = hostmem_mgr.pop_buffer(None) else {
+        let Some(mut buf) = hostmem_mgr.allocate_empty_buffer() else {
             tracing::warn!(
                 "No free buffer in host memory buffer manager to load buffer ID {:?}",
                 buffer_id
@@ -910,14 +922,17 @@ async fn storage_to_hostmem_transfer(
             continue;
         };
         let storage_mgr = storage_mgr.clone();
-        let buf = panic_on_error!(
+        let buf_id = buffer_id.clone();
+        let mut buf = panic_on_error!(
             tokio::task::spawn_blocking(move || {
-                panic_on_error!(storage_mgr.load_to(&buffer_id, &mut buf.0));
+                panic_on_error!(storage_mgr.load_to(&buf_id, &mut buf.0));
                 buf
             })
             .await
         );
-        hostmem_mgr.put_back_mem(buf);
+        // Resize the buffer to the actual size
+        buf.0.resize(buffer_id.size as usize, 0);
+        hostmem_mgr.return_associated_buffer(buffer_id, buf);
     }
 }
 

@@ -54,13 +54,17 @@ impl ControlClient {
                         }
                         pid
                     } else if let Some(idx) = msg.pid.idx {
-                        if idx == 0 || (idx as usize) > pid_list.len() {
+                        if (idx as usize) >= pid_list.len() {
                             return Err(ClientError::Args(format!(
                                 "Process index {} out of range",
                                 idx
                             )));
                         }
-                        pid_list[idx as usize - 1]
+                        println!(
+                            "Process index {} mapped to pid {}",
+                            idx, pid_list[idx as usize]
+                        );
+                        pid_list[idx as usize]
                     } else {
                         return Err(ClientError::Args(
                             "Either pid or idx must be specified".to_string(),
