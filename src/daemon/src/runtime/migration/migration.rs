@@ -217,7 +217,17 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
     }
 
     pub async fn run(mut self) {
-        let mut largest_transfer_size = 0;
+        let mut largest_transfer_size = [
+            self.hostmem_to_shm.iter().map(|b| b.size).sum::<u64>(),
+            self.storage_to_shm.iter().map(|b| b.size).sum::<u64>(),
+            self.shm_to_backend.keys().map(|b| b.size).sum::<u64>(),
+            self.storage_to_hostmem.iter().map(|b| b.size).sum::<u64>(),
+            self.hostmem_to_storage.iter().map(|b| b.size).sum::<u64>(),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+
         // clustering by global device ID
         let mut src_per_device: HashMap<
             GlobalDeviceId,
@@ -311,7 +321,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             });
         }
 
-        if !self.storage_to_hostmem.is_empty() {
+        if !self.storage_to_shm.is_empty() {
             task_handles.push({
                 let shm_buffer_mgr = self.data_manager.shm.clone();
                 let storage_buffer_mgr = self.data_manager.storage.clone();
@@ -598,6 +608,16 @@ async fn host_to_device_transfer(
                     pending_count,
                     token_not_enough
                 );
+                if dst_processed != dst_count || pending_processed != pending_count {
+                    tracing::warn!(
+                        "H2D migration incomplete: moved ({}+{})/({}+{}) buffers; token_not_enough = {}",
+                        dst_processed,
+                        pending_processed,
+                        dst_count,
+                        pending_count,
+                        token_not_enough
+                    );
+                }
                 return;
             }
         }
@@ -746,7 +766,7 @@ async fn backend_to_shm_transfer(
 
         moved_cnt += 1;
         tracing::trace!(
-            "[Ongoing] Moved {}/{} buffers from hostmem to shm: {{\"pid\": {}, \"block_id\":,\"{}\"  \"size\": \"{}\"}}",
+            "[Ongoing] Moved {}/{} buffers from backend to shm: {{\"pid\": {}, \"block_id\":,\"{}\"  \"size\": \"{}\"}}",
             moved_cnt,
             total,
             buffer_id.pid,
@@ -755,7 +775,7 @@ async fn backend_to_shm_transfer(
         );
     }
     if total > 0 {
-        tracing::debug!("Moved {}/{} buffers from hostmem to shm", moved_cnt, total);
+        tracing::debug!("Moved {}/{} buffers from backend to shm", moved_cnt, total);
     }
 }
 
@@ -772,7 +792,7 @@ async fn shm_to_backend_transfer(
         if expected != actual {
             match expected {
                 BufferLocation::HostMem => {
-                    tracing::warn!(
+                    tracing::debug!(
                         "Buffer {:?} expected to be in host memory, but found in storage",
                         buffer_id
                     );
@@ -803,6 +823,7 @@ async fn shm_to_backend_transfer(
             &shm_buffer_mgr,
             &hostmem_buffer_mgr,
             &storage_buffer_mgr,
+            expected_location,
         )
         .await
         {
@@ -834,7 +855,8 @@ async fn shm_to_backend_transfer(
                         &buf_id,
                         &shm_buffer_mgr,
                         &hostmem_buffer_mgr,
-                        &storage_buffer_mgr
+                        &storage_buffer_mgr,
+                        expected_location
                     )
                     .await
                 );
@@ -867,12 +889,14 @@ async fn shm_to_backend_transfer(
         );
         extra_move += 1;
 
+        // always try to move to hostmem first
         panic_on_error!(
             shm_to_backend_transfer_inner(
                 &buf_id,
                 &shm_buffer_mgr,
                 &hostmem_buffer_mgr,
-                &storage_buffer_mgr
+                &storage_buffer_mgr,
+                BufferLocation::HostMem
             )
             .await
         );
@@ -975,6 +999,7 @@ async fn shm_to_backend_transfer_inner(
     shm_buffer_mgr: &ShmBufferManager,
     hostmem_buffer_mgr: &HostMemBufferManager,
     storage_buffer_mgr: &Arc<StorageBufferManager>,
+    mut target_loc: BufferLocation,
 ) -> Result<BufferLocation, HybridBufferError> {
     let buf_offset = shm_buffer_mgr
         .get_buffer(&buffer_id)
@@ -983,18 +1008,24 @@ async fn shm_to_backend_transfer_inner(
     // Safety: the lifetime of the buffer will not exceed the end of the block
     let buf_ref =
         unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), buffer_id, buf_offset) };
-    let mut target_loc = BufferLocation::HostMem;
-    match hostmem_buffer_mgr.store(buffer_id, buf_ref) {
-        Ok(_) => {}
-        Err(HybridBufferError::MemoryExhausted) => {
-            let buf_id = buffer_id.clone();
-            let storage_buffer_mgr = storage_buffer_mgr.clone();
-            tokio::task::spawn_blocking(move || storage_buffer_mgr.store(&buf_id, buf_ref))
-                .await??;
-            target_loc = BufferLocation::Storage;
+    assert!(target_loc == BufferLocation::HostMem || target_loc == BufferLocation::Storage);
+
+    if target_loc == BufferLocation::HostMem {
+        match hostmem_buffer_mgr.store(buffer_id, buf_ref) {
+            Ok(_) => {}
+            Err(HybridBufferError::MemoryExhausted) => {
+                target_loc = BufferLocation::Storage;
+            }
+            Err(e) => return Err(e),
         }
-        Err(e) => return Err(e),
     }
+
+    if target_loc == BufferLocation::Storage {
+        let buf_id = buffer_id.clone();
+        let storage_buffer_mgr = storage_buffer_mgr.clone();
+        tokio::task::spawn_blocking(move || storage_buffer_mgr.store(&buf_id, buf_ref)).await??;
+    }
+
     shm_buffer_mgr
         .release(buffer_id)
         .expect("BufferId released twice");
