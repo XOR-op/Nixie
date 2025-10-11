@@ -12,28 +12,22 @@ use crate::error::DaemonError;
 pub struct Config {
     pub device_memory_mb: Vec<u64>,
     pub device_threshold: f64,
-    pub schedule_delay: Option<Duration>,
-    pub preempt_delay: Option<Duration>,
     pub schedule_cooldown: Option<Duration>,
 }
 
 impl Config {
     pub fn to_configurable_args(&self) -> ConfigurableArgs {
         ConfigurableArgs {
-            schedule_delay: self.schedule_delay,
             schedule_cooldown: self.schedule_cooldown,
             device_threshold: Some(self.device_threshold),
-            preempt_delay: self.preempt_delay,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigurableArgs {
-    pub schedule_delay: Option<Duration>,
     pub schedule_cooldown: Option<Duration>,
     pub device_threshold: Option<f64>,
-    pub preempt_delay: Option<Duration>,
 }
 
 static CONFIG: RwLock<Option<Arc<Config>>> = RwLock::new(None);
@@ -66,8 +60,6 @@ pub fn init_config(config_path: Option<PathBuf>) -> Result<(), DaemonError> {
     let mut config = Config {
         device_memory_mb,
         device_threshold: 0.95,
-        schedule_delay: None,
-        preempt_delay: None,
         schedule_cooldown: None,
     };
 
@@ -96,10 +88,8 @@ pub fn update_config(config: ConfigurableArgs) {
 }
 
 fn update_config_from(config: &mut Config, args: ConfigurableArgs) {
-    config.schedule_delay = args.schedule_delay;
     config.schedule_cooldown = args.schedule_cooldown;
     if let Some(device_threshold) = args.device_threshold {
         config.device_threshold = device_threshold;
     }
-    config.preempt_delay = args.preempt_delay;
 }

@@ -271,25 +271,11 @@ impl ControlClient {
                 ));
             }
         }
-        if let Some(schedule_delay) = args.schedule_delay {
-            if schedule_delay == 0 {
-                config.schedule_delay = None;
-            } else {
-                config.schedule_delay = Some(Duration::from_millis(schedule_delay as u64));
-            }
-        }
         if let Some(schedule_cooldown) = args.schedule_cooldown {
             if schedule_cooldown == 0 {
                 config.schedule_cooldown = None;
             } else {
                 config.schedule_cooldown = Some(Duration::from_millis(schedule_cooldown as u64));
-            }
-        }
-        if let Some(preempt_delay) = args.preempt_delay {
-            if preempt_delay == 0 {
-                config.preempt_delay = None;
-            } else {
-                config.preempt_delay = Some(Duration::from_millis(preempt_delay as u64));
             }
         }
         self.client
