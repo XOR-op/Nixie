@@ -571,15 +571,15 @@ async fn host_to_device_transfer(
         Pending,
     }
 
+    let dst_count = dst_entries.len();
+    let pending_count = pending_dst_entries.len();
     let mut accu_length = 0;
     let mut next_entry = dst_entries.pop().map(|i| (i, BufferSource::Ready));
 
-    let mut dst_processed = next_entry.is_some() as usize;
+    let mut dst_processed = 0;
     let mut pending_processed = 0;
     let mut token_received = 0;
     let mut token_not_enough = 0;
-    let dst_count = dst_entries.len();
-    let pending_count = pending_dst_entries.len();
 
     loop {
         if next_entry.is_none() {
@@ -625,6 +625,7 @@ async fn host_to_device_transfer(
         }
 
         let (buffer_id, buf_source) = next_entry.as_ref().unwrap();
+        let buf_source = *buf_source;
         // get gpu tokens if we need
         if !gpu_mem_token_rx.is_closed()
             && let Some(d2h_resp) = gpu_mem_token_rx.recv().await
@@ -641,10 +642,6 @@ async fn host_to_device_transfer(
                 continue;
             }
         }
-        match buf_source {
-            BufferSource::Ready => dst_processed += 1,
-            BufferSource::Pending => pending_processed += 1,
-        }
         warn_no_buffer_id!(
             host_to_device_transfer_inner(
                 next_entry.take().unwrap().0,
@@ -654,6 +651,10 @@ async fn host_to_device_transfer(
             )
             .await
         );
+        match buf_source {
+            BufferSource::Ready => dst_processed += 1,
+            BufferSource::Pending => pending_processed += 1,
+        }
         next_entry = dst_entries.pop().map(|i| (i, BufferSource::Ready));
     }
 }
