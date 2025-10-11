@@ -45,7 +45,7 @@ pub(super) fn get_allowed_devices_mem() -> Result<HashMap<GlobalDeviceId, u64>, 
     let mut mem_info = HashMap::with_capacity(dev_count as usize);
     for dev_id in 0..dev_count {
         let device_handle =
-            device::get(dev_id as i32).map_err(|e| DaemonError::Cuda("get device", e.0))?;
+            device::get(dev_id).map_err(|e| DaemonError::Cuda("get device", e.0))?;
         let mem = unsafe { device::total_mem(device_handle) }
             .map_err(|e| DaemonError::Cuda("get total memory", e.0))?;
         let mem = mem * 95 / 100; // reserve 5% for system use

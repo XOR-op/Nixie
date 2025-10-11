@@ -140,7 +140,7 @@ pub(super) struct RequestForSpaceTx {
 impl RequestForSpaceTx {
     pub fn request(&self, n: usize) {
         for _ in 0..n {
-            if let Err(_) = self.inner.send(()) {
+            if self.inner.send(()).is_err() {
                 tracing::warn!("Failed to request shm space");
             }
         }

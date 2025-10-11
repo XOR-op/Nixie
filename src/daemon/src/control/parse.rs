@@ -52,7 +52,7 @@ fn parse_move_op(s: &str) -> Result<Vec<MoveOperation>, String> {
 
     // Split by comma for micro op
     rest.split(',')
-        .map(|part| parse_move_op_microop(pid.clone(), part.trim()))
+        .map(|part| parse_move_op_microop(pid, part.trim()))
         .collect::<Result<Vec<_>, _>>()
 }
 
@@ -84,7 +84,7 @@ fn parse_buffer_location(s: &str) -> Result<BufferLocation, String> {
             let id = id_str
                 .parse::<i32>()
                 .map_err(|_| format!("Invalid GPU ID: '{}'", id_str))?;
-            if !(id >= 0 && id < 8) {
+            if !(0..8).contains(&id) {
                 return Err(format!("GPU ID out of range (0-7): '{}'", id));
             }
             Ok(BufferLocation::Gpu(GlobalDeviceId(id)))
@@ -103,7 +103,7 @@ fn parse_size(s: &str) -> Result<u64, String> {
         return Err("Size string is empty".to_string());
     }
 
-    let (num_str, unit) = s.chars().partition::<String, _>(|c| c.is_digit(10));
+    let (num_str, unit) = s.chars().partition::<String, _>(|c| c.is_ascii_digit());
     if num_str.is_empty() {
         return Err(format!("Invalid size number in '{}'", s));
     }

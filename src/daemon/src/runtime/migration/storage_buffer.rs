@@ -36,7 +36,7 @@ impl StorageBufferManager {
 
     pub fn store(&self, buffer_id: &BufferId, data: &[u8]) -> Result<(), HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
-        if data.len() > MAX_ALLOCATION_SIZE as usize {
+        if data.len() > MAX_ALLOCATION_SIZE  {
             return Err(HybridBufferError::InvalidInputBuffer);
         }
 

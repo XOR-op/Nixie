@@ -127,7 +127,7 @@ impl ShmBufferManager {
         // wait for notification or timeout
         if let Some(timeout) = timeout {
             tokio::select! {
-                _ = rx => return Ok(()),
+                _ = rx => Ok(()),
                 _ = tokio::time::sleep(timeout) => {
                     let inner = self.inner.lock().unwrap();
                     let pending_len = inner.pending_reservations.len();
@@ -137,7 +137,7 @@ impl ShmBufferManager {
                         pending_len,
                         inner.avail_addrs.values().sum::<u64>()
                     );
-                    return Err(());
+                    Err(())
                 }
             }
         } else {

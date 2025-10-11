@@ -77,6 +77,7 @@ pub struct DataMigrationTask<Client, Handle> {
 }
 
 impl<Client, Handle> DataMigrationTask<Client, Handle> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         out_from_gpu: Vec<(i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>)>,
         into_gpu: Option<(i32, MigrationSpec, Client, Arc<DeviceOrdinalMapping>)>,
@@ -147,10 +148,10 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 HashMap::from([(income_pid_str.clone(), pretty_size(into_gpu_size))]),
             );
         }
-        if self.out_from_gpu.len() > 0 {
+        if !self.out_from_gpu.is_empty() {
             data.insert("gpu -> shm", out_from_gpu_size);
         }
-        if self.hostmem_to_shm.len() > 0 {
+        if !self.hostmem_to_shm.is_empty() {
             let hostmem_to_shm_mapping = self
                 .hostmem_to_shm
                 .iter()
@@ -161,7 +162,7 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .collect::<HashMap<_, _>>();
             data.insert("hostmem -> shm", hostmem_to_shm_mapping);
         }
-        if self.storage_to_shm.len() > 0 {
+        if !self.storage_to_shm.is_empty() {
             let storage_to_shm_mapping = self
                 .storage_to_shm
                 .iter()
@@ -172,7 +173,7 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .collect::<HashMap<_, _>>();
             data.insert("storage -> shm", storage_to_shm_mapping);
         }
-        if self.shm_to_backend.len() > 0 {
+        if !self.shm_to_backend.is_empty() {
             let shm_to_backend_mapping = self
                 .shm_to_backend
                 .keys()
@@ -183,7 +184,7 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .collect::<HashMap<_, _>>();
             data.insert("shm -> backend", shm_to_backend_mapping);
         }
-        if self.storage_to_hostmem.len() > 0 {
+        if !self.storage_to_hostmem.is_empty() {
             let storage_to_hostmem_mapping = self
                 .storage_to_hostmem
                 .iter()
@@ -194,7 +195,7 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .collect::<HashMap<_, _>>();
             data.insert("storage -> hostmem", storage_to_hostmem_mapping);
         }
-        if self.hostmem_to_storage.len() > 0 {
+        if !self.hostmem_to_storage.is_empty() {
             let hostmem_to_storage_mapping = self
                 .hostmem_to_storage
                 .iter()

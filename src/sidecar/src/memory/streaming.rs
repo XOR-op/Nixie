@@ -34,7 +34,7 @@ impl MemoryMigrationControl {
             count
         };
         let migrators = (0..device_cnt)
-            .map(|i| StreamingMemoryMigrator::new(i as i32))
+            .map(|i| StreamingMemoryMigrator::new(i))
             .collect();
         Self {
             migrators: Mutex::new(migrators),
@@ -142,7 +142,7 @@ impl StreamingMemoryMigrator {
                 assert_eq!(phy_handle.size, args.size as usize);
                 assert!(!phy_handle.on_gpu);
                 phy_handle.cu_handle = Some(cu_handle);
-                map_mem_handle(&phy_handle, &default_access_desc(args.device.0));
+                map_mem_handle(phy_handle, &default_access_desc(args.device.0));
                 phy_handle.on_gpu = true;
                 phy_handle.addr
             };
@@ -218,7 +218,7 @@ impl StreamingMemoryMigrator {
         )>,
     ) {
         set_device(device_id);
-        while let Some((event, args, ret_chan)) = req_queue.recv().ok() {
+        while let Ok((event, args, ret_chan)) = req_queue.recv() {
             // wait for the event to complete
             check_cu_err!(
                 unsafe { cudarc::driver::sys::cuEventSynchronize(event.0) },

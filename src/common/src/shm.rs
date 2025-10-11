@@ -1,5 +1,5 @@
 use core::{ffi::c_int, pin::Pin};
-use std::{num::NonZeroU32, u32};
+use std::num::NonZeroU32;
 
 use nix::libc;
 
@@ -23,6 +23,7 @@ pub struct HandleList {
 }
 
 impl AllocationTable {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             entry: ShmVec::new(),
@@ -40,6 +41,7 @@ impl ReInitializable for AllocationTable {
     }
 }
 impl HandleList {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let mut handles = [PhysicalMemoryHandle {
             addr: 0,
@@ -49,6 +51,7 @@ impl HandleList {
             on_gpu: false,
             valid: false,
         }; HANDLE_NUM];
+        #[allow(clippy::needless_range_loop)]
         for i in 1..HANDLE_NUM {
             handles[i].next_handle_idx = NonZeroU32::new(i as u32 + 1);
         }
@@ -297,20 +300,17 @@ impl<T: Default, const N: usize> ShmVec<T, N> {
             return None;
         }
         self.len -= 1;
-        Some(core::mem::replace(
-            &mut self.data[self.len as usize],
-            Default::default(),
-        ))
+        Some(core::mem::take(&mut self.data[self.len as usize]))
     }
 
     pub fn remove(&mut self, idx: usize) -> T {
         if idx >= self.len as usize {
             panic!("index out of bounds")
         }
-        let val = core::mem::replace(&mut self.data[idx], Default::default());
+        let val = core::mem::take(&mut self.data[idx]);
         self.len -= 1;
         for i in idx..self.len as usize {
-            self.data[i] = core::mem::replace(&mut self.data[i + 1], Default::default());
+            self.data[i] = core::mem::take(&mut self.data[i + 1]);
         }
         val
     }

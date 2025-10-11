@@ -391,19 +391,11 @@ impl DeviceOrdinalMapping {
     }
 
     pub fn real_to_visible(&self, real: GlobalDeviceId) -> Option<ProcessLocalDeviceId> {
-        if let Some(dev) = self.real_to_visible.get(&real) {
-            Some(*dev)
-        } else {
-            None
-        }
+        self.real_to_visible.get(&real).map(|dev| *dev)
     }
 
     pub fn visible_to_real(&self, visible: ProcessLocalDeviceId) -> Option<GlobalDeviceId> {
-        if let Some(dev) = self.visible_to_real.get(&visible) {
-            Some(*dev)
-        } else {
-            None
-        }
+        self.visible_to_real.get(&visible).map(|dev| *dev)
     }
 
     pub fn from_real_to_visible_map(map: HashMap<GlobalDeviceId, ProcessLocalDeviceId>) -> Self {
