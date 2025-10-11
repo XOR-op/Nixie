@@ -572,7 +572,7 @@ async fn host_to_device_transfer(
     let mut accu_length = 0;
     let mut next_entry = dst_entries.pop().map(|i| (i, BufferSource::Ready));
 
-    let mut dst_processed = 0;
+    let mut dst_processed = next_entry.is_some() as usize;
     let mut pending_processed = 0;
     let mut token_received = 0;
     let mut token_not_enough = 0;
