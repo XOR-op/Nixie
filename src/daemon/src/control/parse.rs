@@ -32,10 +32,10 @@ fn parse_move_op(s: &str) -> Result<Vec<MoveOperation>, String> {
             idx: None,
         },
         Err(_) => {
-            let new_pid_str = if pid_str.starts_with("idx") {
-                &pid_str[3..]
-            } else if pid_str.starts_with("i") {
-                &pid_str[1..]
+            let new_pid_str = if let Some(idx) = pid_str.strip_prefix("idx") {
+                idx
+            } else if let Some(idx) = pid_str.strip_prefix('i') {
+                idx
             } else {
                 pid_str
             };

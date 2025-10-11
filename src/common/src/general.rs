@@ -66,9 +66,9 @@ pub struct CallReturnChannel<R> {
     tx: mpsc::Sender<R>,
 }
 impl<R> CallReturnChannel<R> {
-    pub fn ret(self, ret: R) -> Result<(), ()> {
+    pub fn ret(self, ret: R) -> Result<(), mpsc::error::TrySendError<R>> {
         // should not panic
-        self.tx.try_send(ret).map_err(|_| ())
+        self.tx.try_send(ret)
     }
 }
 

@@ -279,7 +279,7 @@ impl<T: Default, const N: usize> ShmVec<T, N> {
         }
     }
 
-    pub unsafe fn reinit(&mut self) {
+    pub fn reinit(&mut self) {
         self.len = 0;
         self.data = unsafe { core::mem::zeroed() };
     }

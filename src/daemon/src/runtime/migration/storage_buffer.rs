@@ -21,6 +21,7 @@ impl StorageBufferManager {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(disk_path)
             .map_err(|e| HybridBufferError::IoError(e, "Failed to open disk file".to_string()))?;
         let inner = StorageBufferInner {

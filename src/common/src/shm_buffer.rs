@@ -63,6 +63,8 @@ impl ShmBuffer {
         })
     }
 
+    /// # Safety
+    /// The caller must ensure the shm buffer is valid
     pub unsafe fn at_offset(&self, offset: u64, size: usize) -> Option<*mut u8> {
         if offset + size as u64 > self.shm_size as u64 {
             return None;

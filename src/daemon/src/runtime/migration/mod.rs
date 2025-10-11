@@ -1,6 +1,6 @@
 mod channel;
 mod hostmem_buffer;
-mod migration;
+mod execution;
 pub(super) mod migration_plan;
 mod shm_buffer;
 mod storage_buffer;

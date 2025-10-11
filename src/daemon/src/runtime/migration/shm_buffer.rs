@@ -30,7 +30,7 @@ impl ShmBufferInner {
         let r = inner
             .avail_addrs
             .iter()
-            .find(|(_, size)| **size as u64 >= buf_id.size)?;
+            .find(|(_, size)| **size >= buf_id.size)?;
         tracing::trace!("ShmBuffer: available length = {}", inner.avail_addrs.len());
         let (addr, block_size) = (*r.0, *r.1);
         let len = inner.avail_addrs.remove(&addr);
@@ -56,7 +56,7 @@ impl ShmBufferInner {
 impl ShmBufferManager {
     pub fn new(shm_path: &str, shm_size: usize) -> Result<Self, std::io::Error> {
         assert!(
-            shm_size % MAX_ALLOCATION_SIZE == 0,
+            shm_size.is_multiple_of(MAX_ALLOCATION_SIZE),
             "Shared memory size must be a multiple of MAX_ALLOCATION_SIZE"
         );
         let shm_buffer = ShmBuffer::new(shm_path, shm_size, true)?;

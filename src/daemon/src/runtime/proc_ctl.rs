@@ -26,6 +26,7 @@ pub(crate) struct ProcessControl {
 }
 
 impl ProcessControl {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         peer_pid: i32,
         pid_fd: AsyncFd<OwnedFd>,

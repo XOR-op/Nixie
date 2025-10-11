@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-use super::migration::{DataMigrationTask, MigrationSpec, MigrationSpecEntry};
+use super::execution::{DataMigrationTask, MigrationSpec, MigrationSpecEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MigrationRequirement {
@@ -172,11 +172,11 @@ where
                                     );
                                     return None;
                                 }
-                                return Some(MigrationSpecEntry {
+                                Some(MigrationSpecEntry {
                                     size: data_entry.size,
                                     handle_idx: data_entry.handle_idx,
                                     ready_for_pcie_xfer: false,
-                                });
+                                })
                             }
                         })
                         .collect(),

@@ -32,8 +32,8 @@ pub(crate) fn sidecar_config() -> &'static SidecarConfig {
         if let Ok(content) = std::env::var("NIHIL_CFG") {
             for pair in content.split("/") {
                 let mut iter = pair.split(":");
-                if let Some(key) = iter.next() {
-                    if let Some(val) = iter.next() {
+                if let Some(key) = iter.next()
+                    && let Some(val) = iter.next() {
                         // valid key-value pair
                         match key.to_lowercase().as_str() {
                             "log_level" | "log" => {
@@ -68,7 +68,6 @@ pub(crate) fn sidecar_config() -> &'static SidecarConfig {
                             _ => {}
                         }
                     }
-                }
             }
             if cfg.log_level >= 2 {
                 eprintln!(

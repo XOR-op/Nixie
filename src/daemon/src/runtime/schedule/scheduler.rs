@@ -252,7 +252,7 @@ impl Scheduler {
                         .sched_queue
                         .get_client(incoming_pid)
                         // incoming client not exists, by default with the highest
-                        .map_or_else(|| PriorityLevel::max(), |c| c.priority.level());
+                        .map_or_else(PriorityLevel::max, |c| c.priority.level());
 
                     if let Some(client) = self.sched_queue.get_client_mut(pid) {
                         let preemption_reason = {
@@ -268,11 +268,10 @@ impl Scheduler {
                 Some((pid, true))
             }
             ActiveClientState::LastActive { pid, .. } => {
-                if pid != incoming_pid {
-                    if let Some(client) = self.sched_queue.get_client_mut(pid) {
+                if pid != incoming_pid
+                    && let Some(client) = self.sched_queue.get_client_mut(pid) {
                         client.make_idle(StopReason::LazyIdle);
                     }
-                }
                 Some((pid, false))
             }
         } {
@@ -369,12 +368,11 @@ impl Scheduler {
                 })
                 .sorted_by(|a, b| a.0.cmp(&b.0))
                 .fold(Vec::new(), |mut acc, item| {
-                    if let Some(last) = acc.last_mut() {
-                        if last.0 == item.0 {
+                    if let Some(last) = acc.last_mut()
+                        && last.0 == item.0 {
                             last.1.push(item.1);
                             return acc;
                         }
-                    }
                     acc.push((item.0, vec![item.1]));
                     acc
                 }),
@@ -425,7 +423,6 @@ impl Scheduler {
                     pid: incoming_pid,
                     on_gpu: false,
                     gpu_list: (0..MAX_GPUS)
-                        .into_iter()
                         .map(|i| GlobalDeviceId(i as i32))
                         .collect(),
                 });
@@ -474,7 +471,7 @@ impl Scheduler {
                 data_manager,
             );
             // for statistics
-            swap_out = task.get_out_from_gpu().get(0).map(|(_, spec, _, _)| {
+            swap_out = task.get_out_from_gpu().first().map(|(_, spec, _, _)| {
                 spec.device_map
                     .values()
                     .map(|entries| entries.iter().map(|entry| entry.size).sum::<u64>())
@@ -490,9 +487,8 @@ impl Scheduler {
         if let ActiveClientState::Active {
             pid: active_pid, ..
         } = self.active_client
-        {
-            if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                if active_pid == pid {
+            && let Some(client) = self.sched_queue.get_client_mut(pid)
+                && active_pid == pid {
                     client.make_resident_idle(StopReason::Idle);
                     self.active_client = ActiveClientState::LastActive {
                         pid,
@@ -502,8 +498,6 @@ impl Scheduler {
                     self.sched_queue.cooldown(None);
                     return;
                 }
-            }
-        }
         tracing::error!("Process {} becomes idle but is not active client", pid);
     }
 
@@ -511,19 +505,15 @@ impl Scheduler {
         if let ActiveClientState::Active {
             pid: active_pid, ..
         } = self.active_client
-        {
-            if let Some(client) = self.sched_queue.get_client_mut(pid) {
-                if active_pid == pid {
+            && let Some(client) = self.sched_queue.get_client_mut(pid)
+                && active_pid == pid {
                     client.make_resident_idle(StopReason::YieldAndPending);
                     self.active_client = ActiveClientState::LastActive {
                         pid,
                         last_active: Instant::now(),
                     };
                     self.sched_queue.cooldown(None);
-                    return;
                 }
-            }
-        }
         // it's ok that the incoming pid is not active, we just ignore it
     }
 }

@@ -19,6 +19,7 @@ use crate::{GENERIC_DATA, check_cu_err, warn_eprintln};
 macro_rules! generate_init_fn_as {
     ($func_type:ty, $func_name:expr, $init_func_name:ident) => {
         fn $init_func_name() -> $func_type {
+            #[allow(clippy::macro_metavars_in_unsafe)]
             unsafe {
                 let func = dlsym(RTLD_NEXT, $func_name.as_ptr());
                 if func.is_null() {

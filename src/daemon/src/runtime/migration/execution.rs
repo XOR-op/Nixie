@@ -230,6 +230,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         .unwrap_or(0);
 
         // clustering by global device ID
+        #[allow(clippy::type_complexity)]
         let mut src_per_device: HashMap<
             GlobalDeviceId,
             Vec<(
@@ -625,19 +626,19 @@ async fn host_to_device_transfer(
 
         let (buffer_id, buf_source) = next_entry.as_ref().unwrap();
         // get gpu tokens if we need
-        if !gpu_mem_token_rx.is_closed() {
-            if let Some(d2h_resp) = gpu_mem_token_rx.recv().await {
-                accu_length += d2h_resp.size;
+        if !gpu_mem_token_rx.is_closed()
+            && let Some(d2h_resp) = gpu_mem_token_rx.recv().await
+        {
+            accu_length += d2h_resp.size;
 
-                token_received += 1;
+            token_received += 1;
 
-                if accu_length >= buffer_id.size {
-                    accu_length -= buffer_id.size;
-                } else {
-                    // no enough vram; wait for more
-                    token_not_enough += 1;
-                    continue;
-                }
+            if accu_length >= buffer_id.size {
+                accu_length -= buffer_id.size;
+            } else {
+                // no enough vram; wait for more
+                token_not_enough += 1;
+                continue;
             }
         }
         match buf_source {
@@ -686,7 +687,11 @@ async fn host_to_device_transfer_inner(
         handle_idx: buffer_id.block_id,
         host_to_device: true,
     };
-    if let Ok(_) = rpc_client.migrate(tarpc::context::current(), args).await {
+    if rpc_client
+        .migrate(tarpc::context::current(), args)
+        .await
+        .is_ok()
+    {
         shm_buffer_mgr
             .release(&buffer_id)
             .expect("Failed to release buffer after migration");
@@ -961,6 +966,10 @@ async fn storage_to_hostmem_transfer(
     }
 }
 
+// Note: converting to &mut [u8] from an immutable reference is actually unsafe,
+// but we need this for partial ownership of the buffer.
+// The same buffer chunks should no be accessed concurrently. Just no compiler guarantee.
+#[allow(clippy::mut_from_ref)]
 unsafe fn get_buffer_ref_mut<'a>(
     shm_buffer_mgr: &'a ShmBufferManager,
     buffer_id: &BufferId,
@@ -991,7 +1000,7 @@ unsafe fn get_buffer_ref<'a>(
     }
 }
 
-unsafe fn convert_to_static<'a, T>(r: &'a T) -> &'static T {
+unsafe fn convert_to_static<T>(r: &T) -> &'static T {
     unsafe { &*(r as *const T) }
 }
 
@@ -1003,7 +1012,7 @@ async fn shm_to_backend_transfer_inner(
     mut target_loc: BufferLocation,
 ) -> Result<BufferLocation, HybridBufferError> {
     let buf_offset = shm_buffer_mgr
-        .get_buffer(&buffer_id)
+        .get_buffer(buffer_id)
         .ok_or(HybridBufferError::NoBufferId)?
         .addr;
     // Safety: the lifetime of the buffer will not exceed the end of the block
