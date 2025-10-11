@@ -6,10 +6,10 @@ use cudarc::driver::sys::cudaError_enum;
 use nihil_common::general::{CallParameter, CallReturnChannel};
 use nihil_common::{MAX_GPUS, MigrationArgs, MigrationResponse};
 
-use crate::global_shm_buffer;
 use crate::init::should_have_initialized;
 use crate::memory::{default_alloc_prop, map_mem_handle, unmap_and_release_mem_handle};
 use crate::{CuStreamWrapper, GENERIC_DATA, check_cu_err, set_device, warn_eprintln};
+use crate::{debug_eprintln, global_shm_buffer};
 
 use super::default_access_desc;
 
@@ -243,7 +243,9 @@ impl StreamingMemoryMigrator {
                 unmap_and_release_mem_handle(handle);
                 handle.on_gpu = false;
             }
-            ret_chan.ret(response);
+            if ret_chan.ret(response).is_err() {
+                debug_eprintln!("Failed to send migration response");
+            }
         }
     }
 }

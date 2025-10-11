@@ -79,9 +79,11 @@ impl ControlClient {
                 })
                 .collect::<Result<Vec<_>, ClientError>>()?,
         };
+        let mut rpc_ctx = tarpc::context::current();
+        rpc_ctx.deadline = std::time::Instant::now() + Duration::from_secs(120);
         if self
             .client
-            .prefetch(tarpc::context::current(), processed_args)
+            .prefetch(rpc_ctx, processed_args)
             .await
             .map_err(|e| ClientError::ClientRpc("prefetch", e))?
             .is_err()

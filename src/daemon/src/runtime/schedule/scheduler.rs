@@ -112,7 +112,9 @@ impl Scheduler {
                     Some((priority, state)) => (Some(state), Some(priority)),
                     None => (None, None),
                 };
-                ret_tx.ret(GetStateResponse { state, priority });
+                if ret_tx.ret(GetStateResponse { state, priority }).is_err() {
+                    tracing::warn!("Failed to send GetStateResponse");
+                }
             }
         }
     }
@@ -192,7 +194,9 @@ impl Scheduler {
                     let (param, ret_tx) = req.parameter.into_parts();
                     let res = self.handle_prefetch_request(param).await;
                     // TODO: handle error
-                    ret_tx.ret(res.unwrap_or(PrefetchResponse));
+                    if ret_tx.ret(res.unwrap_or(PrefetchResponse)).is_err() {
+                        tracing::warn!("Failed to send PrefetchResponse");
+                    }
                 }
             }
         }

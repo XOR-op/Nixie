@@ -154,10 +154,18 @@ impl ProcessControl {
                         result.insert(device, mem_list);
                     }
                 }
-                ret_chan.ret(ProcessResidualData {
-                    pid: self.peer_pid,
-                    allocations: result,
-                });
+                if ret_chan
+                    .ret(ProcessResidualData {
+                        pid: self.peer_pid,
+                        allocations: result,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!(
+                        "Failed to send ListProcessResidual response to pid {}",
+                        self.peer_pid
+                    );
+                }
             }
         }
     }

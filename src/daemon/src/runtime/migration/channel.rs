@@ -57,11 +57,7 @@ impl InDataReadyTx {
         if let Some(chan) = self.inners.get(&buffer_id.device_id) {
             chan.send((buffer_id, location))
         } else {
-            panic!(
-                "Invalid device id {} for device size = {}",
-                buffer_id.device_id.0,
-                self.inners.len()
-            );
+            Ok(())
         }
     }
 }
