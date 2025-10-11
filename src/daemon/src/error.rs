@@ -71,4 +71,6 @@ pub enum ScheduleError {
     RpcError(&'static str, i32, tarpc::client::RpcError),
     #[error("Invalid prefetch request: {0}")]
     InvalidPrefetchRequest(String),
+    #[error("Unavailable resource: {0}")]
+    Unavailable(String),
 }

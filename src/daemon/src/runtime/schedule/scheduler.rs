@@ -23,7 +23,7 @@ use crate::{
         migration::{
             DataManagerHandle,
             migration_plan::{
-                DeviceRequestArgs, MigrationRequirement, local_prefetch_task, two_processes_task,
+                DeviceRequestArgs, MigrationRequirement, local_prefetch_task, realtime_migrate_task,
             },
         },
         schedule::{
@@ -269,9 +269,10 @@ impl Scheduler {
             }
             ActiveClientState::LastActive { pid, .. } => {
                 if pid != incoming_pid
-                    && let Some(client) = self.sched_queue.get_client_mut(pid) {
-                        client.make_idle(StopReason::LazyIdle);
-                    }
+                    && let Some(client) = self.sched_queue.get_client_mut(pid)
+                {
+                    client.make_idle(StopReason::LazyIdle);
+                }
                 Some((pid, false))
             }
         } {
@@ -369,10 +370,11 @@ impl Scheduler {
                 .sorted_by(|a, b| a.0.cmp(&b.0))
                 .fold(Vec::new(), |mut acc, item| {
                     if let Some(last) = acc.last_mut()
-                        && last.0 == item.0 {
-                            last.1.push(item.1);
-                            return acc;
-                        }
+                        && last.0 == item.0
+                    {
+                        last.1.push(item.1);
+                        return acc;
+                    }
                     acc.push((item.0, vec![item.1]));
                     acc
                 }),
@@ -422,9 +424,7 @@ impl Scheduler {
                 let (para, fut) = CallParameter::new(ProcessResidualRequest {
                     pid: incoming_pid,
                     on_gpu: false,
-                    gpu_list: (0..MAX_GPUS)
-                        .map(|i| GlobalDeviceId(i as i32))
-                        .collect(),
+                    gpu_list: (0..MAX_GPUS).map(|i| GlobalDeviceId(i as i32)).collect(),
                 });
                 let _ = new_handle
                     .inst_tx()
@@ -460,7 +460,7 @@ impl Scheduler {
             )
             .await;
 
-            let task = two_processes_task(
+            let Some(task) = realtime_migrate_task(
                 (
                     incoming_pid,
                     incoming_request,
@@ -469,7 +469,11 @@ impl Scheduler {
                 ),
                 &others,
                 data_manager,
-            );
+            ) else {
+                return Err(ScheduleError::Unavailable(
+                    "Cannot create migration task".to_string(),
+                ));
+            };
             // for statistics
             swap_out = task.get_out_from_gpu().first().map(|(_, spec, _, _)| {
                 spec.device_map
@@ -488,16 +492,17 @@ impl Scheduler {
             pid: active_pid, ..
         } = self.active_client
             && let Some(client) = self.sched_queue.get_client_mut(pid)
-                && active_pid == pid {
-                    client.make_resident_idle(StopReason::Idle);
-                    self.active_client = ActiveClientState::LastActive {
-                        pid,
-                        last_active: Instant::now(),
-                    };
-                    tracing::debug!("Process {} becomes idle", pid);
-                    self.sched_queue.cooldown(None);
-                    return;
-                }
+            && active_pid == pid
+        {
+            client.make_resident_idle(StopReason::Idle);
+            self.active_client = ActiveClientState::LastActive {
+                pid,
+                last_active: Instant::now(),
+            };
+            tracing::debug!("Process {} becomes idle", pid);
+            self.sched_queue.cooldown(None);
+            return;
+        }
         tracing::error!("Process {} becomes idle but is not active client", pid);
     }
 
@@ -506,14 +511,15 @@ impl Scheduler {
             pid: active_pid, ..
         } = self.active_client
             && let Some(client) = self.sched_queue.get_client_mut(pid)
-                && active_pid == pid {
-                    client.make_resident_idle(StopReason::YieldAndPending);
-                    self.active_client = ActiveClientState::LastActive {
-                        pid,
-                        last_active: Instant::now(),
-                    };
-                    self.sched_queue.cooldown(None);
-                }
+            && active_pid == pid
+        {
+            client.make_resident_idle(StopReason::YieldAndPending);
+            self.active_client = ActiveClientState::LastActive {
+                pid,
+                last_active: Instant::now(),
+            };
+            self.sched_queue.cooldown(None);
+        }
         // it's ok that the incoming pid is not active, we just ignore it
     }
 }

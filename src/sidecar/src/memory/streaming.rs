@@ -33,9 +33,7 @@ impl MemoryMigrationControl {
             );
             count
         };
-        let migrators = (0..device_cnt)
-            .map(StreamingMemoryMigrator::new)
-            .collect();
+        let migrators = (0..device_cnt).map(StreamingMemoryMigrator::new).collect();
         Self {
             migrators: Mutex::new(migrators),
         }

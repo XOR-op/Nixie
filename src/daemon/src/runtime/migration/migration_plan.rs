@@ -103,11 +103,11 @@ macro_rules! check_size {
 
 /// Create a migration task that migrates data at the cost of others being moved out.
 /// `out_from_gpu`: the earlier in the list, the more likely to be moved out.
-pub(crate) fn two_processes_task<Client, Handle>(
+pub(crate) fn realtime_migrate_task<Client, Handle>(
     into_gpu: (i32, DeviceRequestArgs, Client, Arc<DeviceOrdinalMapping>),
     out_from_gpu: &[(i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>)],
     data_manager: Handle,
-) -> DataMigrationTask<Client, Handle>
+) -> Option<DataMigrationTask<Client, Handle>>
 where
     Client: Clone,
     Handle: AbstractDataHandle,
@@ -261,6 +261,7 @@ where
                 into_gpu_required_size,
                 accu_size
             );
+            return None;
         }
     }
 
@@ -288,7 +289,7 @@ where
         result.json_summary(),
         elapsed.as_micros()
     );
-    result
+    Some(result)
 }
 
 /// Create a migration task that only organizes data out of GPU
@@ -657,7 +658,7 @@ pub(super) mod tests {
             shm_capacity,
             hostmem_capacity,
         };
-        let task = two_processes_task(
+        let task = realtime_migrate_task(
             (
                 schedued_pid,
                 if let Some(size) = new_allocation {
@@ -711,7 +712,8 @@ pub(super) mod tests {
                 })
                 .collect::<Vec<_>>(),
             data_manager,
-        );
+        )
+        .unwrap();
         task
     }
 

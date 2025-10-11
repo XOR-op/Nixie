@@ -278,17 +278,19 @@ impl ScheduleQueue {
     // determine if preemption event needs to be generated
     fn compute_preemption(&mut self, active_client: ActiveClientState) -> bool {
         if let ActiveClientState::Active { pid, .. } = active_client
-            && let Some(front) = self.sched_req.front() {
-                if front.pid == pid {
-                    return true;
-                }
-                if let Some(active_stat) = self.clients.get(&pid)
-                    && let Some(front_stats) = self.clients.get(&front.pid) {
-                        // only preempt if the most front process has higher or equal priority
-                        return front_stats.priority.level() > active_stat.priority.level();
-                    }
-                return false;
+            && let Some(front) = self.sched_req.front()
+        {
+            if front.pid == pid {
+                return true;
             }
+            if let Some(active_stat) = self.clients.get(&pid)
+                && let Some(front_stats) = self.clients.get(&front.pid)
+            {
+                // only preempt if the most front process has higher or equal priority
+                return front_stats.priority.level() > active_stat.priority.level();
+            }
+            return false;
+        }
         true
     }
 }

@@ -33,41 +33,42 @@ pub(crate) fn sidecar_config() -> &'static SidecarConfig {
             for pair in content.split("/") {
                 let mut iter = pair.split(":");
                 if let Some(key) = iter.next()
-                    && let Some(val) = iter.next() {
-                        // valid key-value pair
-                        match key.to_lowercase().as_str() {
-                            "log_level" | "log" => {
-                                cfg.log_level = match val.to_lowercase().as_str() {
-                                    "0" | "none" => 0,
-                                    "1" | "warn" | "error" => 1,
-                                    "2" | "info" => 2,
-                                    "3" | "debug" => 3,
-                                    _ => DEFAULT_LOG_LEVEL,
-                                }
+                    && let Some(val) = iter.next()
+                {
+                    // valid key-value pair
+                    match key.to_lowercase().as_str() {
+                        "log_level" | "log" => {
+                            cfg.log_level = match val.to_lowercase().as_str() {
+                                "0" | "none" => 0,
+                                "1" | "warn" | "error" => 1,
+                                "2" | "info" => 2,
+                                "3" | "debug" => 3,
+                                _ => DEFAULT_LOG_LEVEL,
                             }
-                            "auto_dup" | "autodup" | "dup" => {
-                                cfg.auto_dup = match val.to_lowercase().as_str() {
-                                    "true" | "1" | "yes" => true,
-                                    "false" | "0" | "no" => false,
-                                    _ => DEFAULT_AUTO_DUP,
-                                }
-                            }
-                            "auto_dup_delay" | "autodup_delay" | "delay" => {
-                                cfg.auto_dup_delay = match val.parse() {
-                                    Ok(num) => num,
-                                    _ => DEFAULT_AUTO_DUP_DELAY,
-                                }
-                            }
-                            "auto_idle" | "autoidle" | "idle" => {
-                                cfg.auto_idle = match val.to_lowercase().as_str() {
-                                    "true" | "1" | "yes" => true,
-                                    "false" | "0" | "no" => false,
-                                    _ => DEFAULT_AUTO_IDLE,
-                                }
-                            }
-                            _ => {}
                         }
+                        "auto_dup" | "autodup" | "dup" => {
+                            cfg.auto_dup = match val.to_lowercase().as_str() {
+                                "true" | "1" | "yes" => true,
+                                "false" | "0" | "no" => false,
+                                _ => DEFAULT_AUTO_DUP,
+                            }
+                        }
+                        "auto_dup_delay" | "autodup_delay" | "delay" => {
+                            cfg.auto_dup_delay = match val.parse() {
+                                Ok(num) => num,
+                                _ => DEFAULT_AUTO_DUP_DELAY,
+                            }
+                        }
+                        "auto_idle" | "autoidle" | "idle" => {
+                            cfg.auto_idle = match val.to_lowercase().as_str() {
+                                "true" | "1" | "yes" => true,
+                                "false" | "0" | "no" => false,
+                                _ => DEFAULT_AUTO_IDLE,
+                            }
+                        }
+                        _ => {}
                     }
+                }
             }
             if cfg.log_level >= 2 {
                 eprintln!(
