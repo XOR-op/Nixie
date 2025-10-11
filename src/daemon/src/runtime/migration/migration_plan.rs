@@ -47,6 +47,8 @@ pub(crate) enum DeviceRequestArgs {
 }
 
 pub(crate) trait AbstractDataHandle: Clone {
+    fn gpu_free_space(&self, devices: &[GlobalDeviceId]) -> HashMap<GlobalDeviceId, u64>;
+
     fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<u64>;
 
     fn shm_contains(&self, buf_id: &BufferId) -> bool {
@@ -63,6 +65,28 @@ pub(crate) trait AbstractDataHandle: Clone {
 }
 
 impl AbstractDataHandle for DataManagerHandle {
+    fn gpu_free_space(&self, devices: &[GlobalDeviceId]) -> HashMap<GlobalDeviceId, u64> {
+        macro_rules! check_error {
+            ($expr:expr, $msg:expr) => {
+                match $expr {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!("{} failed with error: {}", $msg, e);
+                        return HashMap::new();
+                    }
+                }
+            };
+        }
+        let mut result = HashMap::new();
+        let nvml = crate::staticly::get_nvml();
+        for dev in devices.iter() {
+            let device = check_error!(nvml.device_by_index(dev.0 as u32), "device_by_index");
+            let mem_info = check_error!(device.memory_info(), "memory_info");
+            result.insert(*dev, mem_info.free);
+        }
+        result
+    }
+
     fn hostmem_contains(&self, buf_id: &BufferId) -> bool {
         self.hostmem.contains(buf_id)
     }
@@ -114,13 +138,40 @@ where
 {
     let profiling_timestamp_start = std::time::Instant::now();
     let mut out_of_gpu_list = Vec::new();
-    let into_gpu_requirement = match &into_gpu.1 {
-        DeviceRequestArgs::ResidualData(process_residual_data) => process_residual_data
-            .allocations
-            .iter()
-            .map(|(id, entries)| (*id, entries.iter().map(|entry| entry.size).sum::<u64>()))
-            .collect::<HashMap<_, _>>(),
-        DeviceRequestArgs::Allocation(allocation) => allocation.clone(),
+
+    let into_gpu_requirement = {
+        let in_gpu_list = match &into_gpu.1 {
+            DeviceRequestArgs::ResidualData(process_residual_data) => process_residual_data
+                .allocations
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            DeviceRequestArgs::Allocation(allocation) => {
+                allocation.keys().copied().collect::<Vec<_>>()
+            }
+        };
+        let gpu_free_space = data_manager.gpu_free_space(&in_gpu_list);
+        match &into_gpu.1 {
+            DeviceRequestArgs::ResidualData(process_residual_data) => process_residual_data
+                .allocations
+                .iter()
+                .map(|(id, entries)| {
+                    let sum_size = entries.iter().map(|entry| entry.size).sum::<u64>();
+                    let free_space = match gpu_free_space.get(id).copied() {
+                        Some(v) => v,
+                        None => {
+                            tracing::warn!("Device {:?} not found when checking free space", id);
+                            0
+                        }
+                    }
+                    // We reserve 2 blocks to avoid potential OOM due to API inaccuracy
+                    .saturating_sub(2 * MAX_ALLOCATION_SIZE as u64);
+                    let required_size = sum_size.saturating_sub(free_space);
+                    (*id, required_size)
+                })
+                .collect::<HashMap<_, _>>(),
+            DeviceRequestArgs::Allocation(allocation) => allocation.clone(),
+        }
     };
     let mut shm_free_segments = data_manager.shm_free_segments();
     let mut host_mem_free_segments = data_manager.hostmem_free_segments();
@@ -573,6 +624,7 @@ pub(super) mod tests {
         shm_map: HashMap<BufferId, AllocationCapacity>,
         hostmem_map: HashMap<BufferId, AllocationCapacity>,
         storage_map: HashMap<BufferId, AllocationCapacity>,
+        gpu_free_space: HashMap<GlobalDeviceId, u64>,
         shm_capacity: u64,
         hostmem_capacity: u64,
     }
@@ -605,6 +657,16 @@ pub(super) mod tests {
             let free_cnt = (self.hostmem_capacity - self.hostmem_map.values().sum::<u64>())
                 / MAX_ALLOCATION_SIZE as u64;
             vec![MAX_ALLOCATION_SIZE as u64; free_cnt as usize]
+        }
+
+        fn gpu_free_space(&self, devices: &[GlobalDeviceId]) -> HashMap<GlobalDeviceId, u64> {
+            let mut result = HashMap::new();
+            for dev in devices.iter() {
+                if let Some(size) = self.gpu_free_space.get(dev) {
+                    result.insert(*dev, *size);
+                }
+            }
+            result
         }
     }
 
@@ -655,6 +717,7 @@ pub(super) mod tests {
             shm_map,
             hostmem_map,
             storage_map,
+            gpu_free_space: HashMap::from([(GlobalDeviceId(0), gpu_capacity)]),
             shm_capacity,
             hostmem_capacity,
         };
