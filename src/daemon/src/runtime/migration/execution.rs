@@ -88,10 +88,6 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
         hostmem_to_storage: Vec<BufferId>,
         data_manager: Handle,
     ) -> Self {
-        // assert!(
-        //     storage_to_host_mem.is_empty() && host_mem_to_storage.is_empty(),
-        //     "not implemented yet"
-        // );
         Self {
             out_from_gpu,
             into_gpu,

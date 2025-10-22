@@ -545,6 +545,153 @@ where
     Some(result)
 }
 
+// we don't use free gpu space here, since that could interfere with the running job
+// should only involve GPU and SHM for simplicity
+pub(crate) fn gpu_prefetch_task<Client, Handle>(
+    current_pid: Option<i32>,
+    into_gpu: (i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>),
+    out_from_gpu: &[(i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>)],
+    data_manager: Handle,
+) -> Option<DataMigrationTask<Client, Handle>>
+where
+    Client: Clone,
+    Handle: AbstractDataHandle,
+{
+    if let Some(pid) = current_pid {
+        assert!(
+            out_from_gpu
+                .iter()
+                .all(|(out_pid, _, _, _)| *out_pid != pid)
+        );
+        assert!(into_gpu.0 != pid);
+    }
+    let profiling_timestamp_start = std::time::Instant::now();
+    // step 1: understand what data to be moved into
+    // for each device, we first get the available size for moving in
+    let out_of_gpu_available_size: HashMap<GlobalDeviceId, u64> = out_from_gpu
+        .iter()
+        .flat_map(|(_, residual_data, _, _)| residual_data.allocations.keys().copied())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .map(|dev_id| {
+            let total_size: u64 = out_from_gpu
+                .iter()
+                .filter_map(|(_, residual_data, _, _)| {
+                    residual_data
+                        .allocations
+                        .get(&dev_id)
+                        .map(|entries| entries.iter().map(|e| e.size).sum::<u64>())
+                })
+                .sum();
+            (dev_id, total_size)
+        })
+        .collect();
+
+    let into_gpu_entries = into_gpu
+        .1
+        .allocations
+        .iter()
+        .map(|(dev_id, entries)| {
+            let available_size = out_of_gpu_available_size.get(dev_id).copied().unwrap_or(0);
+            let mut accu_size = 0;
+            let mut migration_entries = Vec::new();
+            for entry in entries {
+                if accu_size + entry.size > available_size {
+                    continue; // check other entries
+                }
+                let spec_entry = MigrationSpecEntry {
+                    size: entry.size,
+                    handle_idx: entry.handle_idx,
+                    ready_for_pcie_xfer: true, // the buffer is on GPU
+                };
+
+                assert!(data_manager.shm_contains(&spec_entry.to_buffer_id(into_gpu.0, *dev_id)));
+
+                migration_entries.push(spec_entry);
+                accu_size += entry.size;
+            }
+            (*dev_id, migration_entries)
+        })
+        .collect::<HashMap<_, _>>();
+
+    let into_gpu_size: HashMap<GlobalDeviceId, u64> = into_gpu_entries
+        .iter()
+        .map(|(dev_id, entries)| (*dev_id, entries.iter().map(|e| e.size).sum::<u64>()))
+        .collect();
+
+    // step 2: decide data to be moved out from GPU
+    let mut out_of_gpu_list = Vec::new();
+    for (dev, required_size) in into_gpu_size.iter() {
+        if *required_size == 0 {
+            continue;
+        }
+        let mut accu_size = 0;
+        for (out_from_gpu_pid, out_from_gpu_entries, rpc_client, dev_mapping) in out_from_gpu.iter()
+        {
+            if let Some(entries) = out_from_gpu_entries.allocations.get(dev) {
+                let mut migration_entries = Vec::new();
+                // check per device per src process
+                for entry in entries {
+                    if accu_size >= *required_size {
+                        break;
+                    }
+                    let spec_entry = MigrationSpecEntry {
+                        size: entry.size,
+                        handle_idx: entry.handle_idx,
+                        ready_for_pcie_xfer: true, // the buffer is on GPU
+                    };
+                    migration_entries.push(spec_entry);
+                    accu_size += entry.size;
+                }
+                if !migration_entries.is_empty() {
+                    out_of_gpu_list.push((
+                        *out_from_gpu_pid,
+                        MigrationSpec {
+                            device_map: HashMap::from([(*dev, migration_entries)]),
+                        },
+                        rpc_client.clone(),
+                        Arc::clone(dev_mapping),
+                    ));
+                }
+            }
+        }
+        if accu_size < *required_size {
+            tracing::warn!(
+                "[Prefetch] Not enough data to migrate for device {:?}: required {}, but only {}",
+                dev,
+                required_size,
+                accu_size
+            );
+            return None;
+        }
+    }
+
+    let result = DataMigrationTask::new(
+        out_of_gpu_list,
+        Some((
+            into_gpu.0,
+            MigrationSpec {
+                device_map: into_gpu_entries,
+            },
+            into_gpu.2,
+            Arc::clone(&into_gpu.3),
+        )),
+        Vec::new(),     // storage_to_shm
+        Vec::new(),     // hostmem_to_shm
+        HashMap::new(), // shm_to_backend
+        Vec::new(),     // storage_to_hostmem
+        Vec::new(),     // hostmem_to_storage
+        data_manager,
+    );
+    let elapsed = profiling_timestamp_start.elapsed();
+    tracing::debug!(
+        "Created prefetch task: {} for {} us",
+        result.json_summary(),
+        elapsed.as_micros()
+    );
+    Some(result)
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use colored::Colorize;
