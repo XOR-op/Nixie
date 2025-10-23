@@ -395,9 +395,36 @@ impl Scheduler {
             let _ = new_handle
                 .inst_tx()
                 .send(ProcCtlReq::ListProcessResidual(para));
-            let res = fut
+            let res_cadidate = fut
                 .await
                 .expect("Failed to get incoming process residual data");
+
+            // match residuals and requests
+            let res = {
+                let mut res = HashMap::new();
+                for req in gpu_req {
+                    let BufferLocation::Gpu(dev_id) = req.to else {
+                        unreachable!();
+                    };
+                    if let Some(data) = res_cadidate.allocations.get(&dev_id) {
+                        let mut accu_size = 0;
+                        let mut entries = Vec::new();
+                        for entry in data.iter() {
+                            if accu_size >= req.size {
+                                break;
+                            }
+                            accu_size += entry.size;
+                            entries.push(entry.clone());
+                        }
+                        res.insert(dev_id, entries);
+                    }
+                }
+                ProcessResidualData {
+                    pid: in_pid,
+                    allocations: res,
+                }
+            };
+
             let devs = res.allocations.keys().cloned().collect();
             let mut others = collect_all_residuals(
                 control
@@ -438,39 +465,40 @@ impl Scheduler {
             gpu_task.run().await;
         }
 
-        let Some(task) = local_prefetch_task::<SidecarClient, DataManagerHandle>(
-            other_req
-                .into_iter()
-                .map(|e| {
-                    (
-                        e.pid,
-                        MigrationRequirement {
-                            from: e.from,
-                            to: e.to,
-                            size: e.size,
-                            allow_incomplete: true,
-                        },
-                    )
-                })
-                .sorted_by(|a, b| a.0.cmp(&b.0))
-                .fold(Vec::new(), |mut acc, item| {
-                    if let Some(last) = acc.last_mut()
-                        && last.0 == item.0
-                    {
-                        last.1.push(item.1);
-                        return acc;
-                    }
-                    acc.push((item.0, vec![item.1]));
-                    acc
-                }),
-            self.data_manager.clone(),
-        ) else {
-            let error_msg = "Cannot create prefetch task";
-            tracing::warn!("{}", error_msg);
-            return Err(ScheduleError::InvalidPrefetchRequest(error_msg.to_string()));
-        };
-        task.run().await;
-
+        if !other_req.is_empty() {
+            let Some(task) = local_prefetch_task::<SidecarClient, DataManagerHandle>(
+                other_req
+                    .into_iter()
+                    .map(|e| {
+                        (
+                            e.pid,
+                            MigrationRequirement {
+                                from: e.from,
+                                to: e.to,
+                                size: e.size,
+                                allow_incomplete: true,
+                            },
+                        )
+                    })
+                    .sorted_by(|a, b| a.0.cmp(&b.0))
+                    .fold(Vec::new(), |mut acc, item| {
+                        if let Some(last) = acc.last_mut()
+                            && last.0 == item.0
+                        {
+                            last.1.push(item.1);
+                            return acc;
+                        }
+                        acc.push((item.0, vec![item.1]));
+                        acc
+                    }),
+                self.data_manager.clone(),
+            ) else {
+                let error_msg = "Cannot create prefetch task";
+                tracing::warn!("{}", error_msg);
+                return Err(ScheduleError::InvalidPrefetchRequest(error_msg.to_string()));
+            };
+            task.run().await;
+        }
         Ok(PrefetchResponse)
     }
 

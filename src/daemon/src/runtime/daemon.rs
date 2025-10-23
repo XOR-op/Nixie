@@ -277,6 +277,7 @@ impl Controllable for ControllableDaemon {
                 return Err(());
             }
         }
+        drop(guard);
         let (para, ret_rx) = CallParameter::new(args);
         self.prefetch_tx.send(para).map_err(|_| ())?;
         ret_rx.await.ok_or(())

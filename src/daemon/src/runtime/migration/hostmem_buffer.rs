@@ -146,7 +146,7 @@ impl HostMemBufferManager {
             .unwrap()
             .mem_bookkeeping
             .iter()
-            .map(|(k, v)| (k.clone(), v.0.len() as u64))
+            .map(|(k, v)| (k.clone(), v.0.capacity() as u64))
             .collect()
     }
 
