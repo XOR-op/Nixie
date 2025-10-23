@@ -21,9 +21,10 @@ use crate::{
     runtime::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
-            DataManagerHandle,
+            BufferLocation, DataManagerHandle,
             migration_plan::{
-                DeviceRequestArgs, MigrationRequirement, local_prefetch_task, realtime_migrate_task,
+                DeviceRequestArgs, MigrationRequirement, gpu_prefetch_task, local_prefetch_task,
+                realtime_migrate_task,
             },
         },
         schedule::{
@@ -343,7 +344,14 @@ impl Scheduler {
         &self,
         prefetch_args: PrefetchArgs,
     ) -> Result<PrefetchResponse, ScheduleError> {
-        if let ActiveClientState::Active { pid, .. } = self.active_client
+        tracing::debug!("Received prefetch request: {:?}", prefetch_args);
+        let (active_pid, active_idle_pid) = match self.active_client {
+            ActiveClientState::Active { pid, .. } => (Some(pid), None),
+            ActiveClientState::LastActive { pid, .. } => (None, Some(pid)),
+            ActiveClientState::None => (None, None),
+        };
+
+        if let Some(pid) = active_pid
             && prefetch_args.list.iter().any(|req| req.pid == pid)
         {
             return Err(ScheduleError::InvalidPrefetchRequest(format!(
@@ -351,10 +359,87 @@ impl Scheduler {
                 pid
             )));
         }
+        if prefetch_args
+            .list
+            .iter()
+            .any(|r| matches!(r.from, BufferLocation::Gpu(_)))
+        {
+            return Err(ScheduleError::InvalidPrefetchRequest(
+                "Cannot prefetch from GPU buffers".to_string(),
+            ));
+        }
+
+        let (gpu_req, other_req) = prefetch_args
+            .list
+            .iter()
+            .partition::<Vec<_>, _>(|r| matches!(r.to, BufferLocation::Gpu(_)));
+
+        // handle GPU prefetch requests first if any
+        if !gpu_req.is_empty() {
+            let control = self.list.write().await;
+            let in_pid = gpu_req[0].pid;
+            if !gpu_req.iter().all(|r| r.pid == in_pid) {
+                let error_msg = "All GPU prefetch requests must belong to the same process";
+                tracing::warn!("{}", error_msg);
+                return Err(ScheduleError::InvalidPrefetchRequest(error_msg.to_string()));
+            }
+            // first collect residual
+            let (para, fut) = CallParameter::new(ProcessResidualRequest {
+                pid: in_pid,
+                on_gpu: false,
+                gpu_list: (0..MAX_GPUS).map(|i| GlobalDeviceId(i as i32)).collect(),
+            });
+            let Some(new_handle) = control.get(&in_pid) else {
+                return Err(ScheduleError::InvalidClient(in_pid));
+            };
+            let _ = new_handle
+                .inst_tx()
+                .send(ProcCtlReq::ListProcessResidual(para));
+            let res = fut
+                .await
+                .expect("Failed to get incoming process residual data");
+            let devs = res.allocations.keys().cloned().collect();
+            let mut others = collect_all_residuals(
+                control
+                    .iter()
+                    .filter_map(|(pid, handle)| {
+                        if !(*pid == in_pid || active_pid.is_some_and(|active| active == *pid)) {
+                            Some((*pid, handle))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                true,
+                devs,
+            )
+            .await;
+
+            // put active idle process to the end of others
+            if let Some(idle_pid) = active_idle_pid
+                && let Some(idle_idx) = others.iter().position(|(pid, _, _, _)| *pid == idle_pid)
+            {
+                let idle_entry = others.remove(idle_idx);
+                others.push(idle_entry);
+            }
+
+            // then create GPU prefetch task
+            let Some(gpu_task) = gpu_prefetch_task(
+                active_pid,
+                (in_pid, res, new_handle.client(), new_handle.dev_mapping()),
+                &others,
+                self.data_manager.clone(),
+            ) else {
+                let error_msg = "Cannot create GPU prefetch task";
+                tracing::warn!("{}", error_msg);
+                return Err(ScheduleError::InvalidPrefetchRequest(error_msg.to_string()));
+            };
+            gpu_task.run().await;
+        }
 
         let Some(task) = local_prefetch_task::<SidecarClient, DataManagerHandle>(
-            prefetch_args
-                .list
+            other_req
                 .into_iter()
                 .map(|e| {
                     (
@@ -469,6 +554,7 @@ impl Scheduler {
                 ),
                 &others,
                 data_manager,
+                true,
             ) else {
                 return Err(ScheduleError::Unavailable(
                     "Cannot create migration task".to_string(),
