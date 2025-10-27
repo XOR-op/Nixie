@@ -17,7 +17,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{Config, ConfigurableArgs, init_config, update_config},
+    config::{Config, ConfigurableArgs, init_config, load_config, update_config},
     control::{self, Controllable, DataManagerMetadata, PrefetchArgs, PrefetchResponse},
     error::{DaemonError, NihilphaseError},
     runtime::{
@@ -110,6 +110,7 @@ impl Daemon {
         let hostmem_buffer = Arc::new(HostMemBufferManager::new(
             self.ram_buffer_size,
             1024 * 1024 * 1024,
+            load_config().preallocate_hostmem,
         ));
         let storage_buffer = Arc::new(
             StorageBufferManager::new(&self.buffer_path).map_err(DaemonError::HybridBuffer)?,

@@ -23,11 +23,26 @@ impl BlockMemBuffer {
 }
 
 impl HostMemBufferManager {
-    pub fn new(in_mem_size: usize, extra_burst_size: usize) -> Self {
+    pub fn new(in_mem_size: usize, extra_burst_size: usize, preallocate: bool) -> Self {
+        let max_buffer_count = in_mem_size / MAX_ALLOCATION_SIZE;
+        let free_buffers = if preallocate {
+            let mut bufs = Vec::with_capacity(max_buffer_count);
+            let buffer_count = in_mem_size / MAX_ALLOCATION_SIZE;
+            for _ in 0..buffer_count {
+                let mut buf = BlockMemBuffer::new();
+                // write random data to the buffer to actually allocate the memory
+                buf.0.resize(MAX_ALLOCATION_SIZE, 1);
+                buf.0.clear();
+                bufs.push(buf);
+            }
+            bufs
+        } else {
+            Vec::new()
+        };
         let inner = HostMemBufferInner {
             mem_bookkeeping: HashMap::new(),
-            free_mem_buffers: Vec::new(),
-            max_mem_buffer_count: in_mem_size / MAX_ALLOCATION_SIZE,
+            free_mem_buffers: free_buffers,
+            max_mem_buffer_count: max_buffer_count,
             extra_burst_mem_buffer_count: extra_burst_size / MAX_ALLOCATION_SIZE,
             borrowed_count: 0,
         };
