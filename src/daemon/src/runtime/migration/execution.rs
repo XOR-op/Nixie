@@ -338,12 +338,17 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             });
         }
 
-        if !self.shm_to_backend.is_empty() {
+        // should always be enabled for spill over
+        task_handles.push({
             let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
             let storage_buffer_mgr = self.data_manager.storage.clone();
-            task_handles.push(tokio::spawn(async move {
+            tokio::spawn(async move {
                 shm_to_backend_transfer(
-                    self.into_gpu.as_ref().map(|(pid, _, _, _)| *pid),
+                    self.into_gpu
+                        .as_ref()
+                        .map(|(pid, _, _, _)| *pid)
+                        .into_iter()
+                        .collect(),
                     self.shm_to_backend,
                     out_rx,
                     self.data_manager.shm.clone(),
@@ -352,8 +357,8 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                     req_shm_rx,
                 )
                 .await
-            }));
-        }
+            })
+        });
 
         if !self.hostmem_to_storage.is_empty() {
             task_handles.push({
@@ -478,29 +483,36 @@ async fn device_to_host_transfer(
                 block_id: out_from_gpu_entry.handle_idx,
                 size: out_from_gpu_entry.size,
             };
-            let offset = match shm_buffer_mgr
-                .reserve_with_max_pending(&src_buffer_id, 0, Some(Duration::from_secs(30)))
-                .await
-            {
-                Ok(offset) => offset,
-                Err(_) => {
-                    // No shm is available given the plan; we need to notify shm -> backend to free up space
-                    req_for_shm.request(1);
+            let offset = match shm_buffer_mgr.try_reserve(&src_buffer_id) {
+                Some(offset) => offset,
+                None => {
+                    // No shm is immediately available; wait for shm->backend to free up space
+                    req_for_shm.prio_request();
                     match shm_buffer_mgr
-                        .reserve_with_timeout(&src_buffer_id, Some(timeout))
+                        .reserve_with_max_pending(&src_buffer_id, 0, Some(Duration::from_secs(18)))
                         .await
                     {
                         Ok(offset) => offset,
                         Err(_) => {
-                            tracing::warn!(
-                                "Failed to reserve shared memory for migration: {:?} for timeout {:?}; moved {}/{}",
-                                src_buffer_id,
-                                timeout,
-                                moved_cnt,
-                                total
-                            );
-                            tokio::time::sleep(Duration::from_secs(3600)).await;
-                            return;
+                            // No shm is available given the plan; we need to notify shm -> backend to free up space
+                            req_for_shm.request(1);
+                            match shm_buffer_mgr
+                                .reserve_with_timeout(&src_buffer_id, Some(timeout))
+                                .await
+                            {
+                                Ok(offset) => offset,
+                                Err(_) => {
+                                    tracing::warn!(
+                                        "Failed to reserve shm for gpu->shm: {:?} for timeout {:?}; moved {}/{}",
+                                        src_buffer_id,
+                                        timeout,
+                                        moved_cnt,
+                                        total
+                                    );
+                                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                                    return;
+                                }
+                            }
                         }
                     }
                 }
@@ -712,31 +724,37 @@ async fn backend_to_shm_transfer(
 ) {
     let mut moved_cnt = 0;
     let total = host_mem_to_shm.len();
-    let timeout = Duration::from_secs(5);
+    let timeout = Duration::from_secs(6);
     for buffer_id in host_mem_to_shm {
-        let shm_buf_offset = match shm_buffer_mgr
-            .reserve_with_max_pending(&buffer_id, 0, Some(Duration::from_secs(30)))
-            .await
-        {
-            Ok(offset) => offset,
-            Err(_) => {
-                // No shm is available given the plan; we need to notify shm -> backend to free up space
-                req_for_shm.request(1);
+        let shm_buf_offset = match shm_buffer_mgr.try_reserve(&buffer_id) {
+            Some(offset) => offset,
+            None => {
+                req_for_shm.prio_request();
                 match shm_buffer_mgr
-                    .reserve_with_timeout(&buffer_id, Some(timeout))
+                    .reserve_with_max_pending(&buffer_id, 0, Some(Duration::from_secs(30)))
                     .await
                 {
                     Ok(offset) => offset,
                     Err(_) => {
-                        tracing::warn!(
-                            "Failed to reserve shm for buffer {:?} after {:?}; moved {}/{}",
-                            buffer_id,
-                            timeout,
-                            moved_cnt,
-                            total
-                        );
-                        tokio::time::sleep(Duration::from_secs(3600)).await;
-                        return;
+                        // No shm is available given the plan; we need to notify shm -> backend to free up space
+                        req_for_shm.request(1);
+                        match shm_buffer_mgr
+                            .reserve_with_timeout(&buffer_id, Some(timeout))
+                            .await
+                        {
+                            Ok(offset) => offset,
+                            Err(_) => {
+                                tracing::warn!(
+                                    "Failed to reserve shm for backend->shm; buffer {:?} after {:?}; moved {}/{}",
+                                    buffer_id,
+                                    timeout,
+                                    moved_cnt,
+                                    total
+                                );
+                                tokio::time::sleep(Duration::from_secs(3600)).await;
+                                return;
+                            }
+                        }
                     }
                 }
             }
@@ -783,7 +801,7 @@ async fn backend_to_shm_transfer(
 }
 
 async fn shm_to_backend_transfer(
-    incoming_pid: Option<i32>,
+    excluding_list: HashSet<i32>,
     shm_to_hybrid: HashMap<BufferId, BufferLocation>,
     mut out_data_ready_rx: OutDataReadyRx,
     shm_buffer_mgr: Arc<ShmBufferManager>,
@@ -873,14 +891,25 @@ async fn shm_to_backend_transfer(
             );
         }
     }
-    while let Some(()) = req_for_shm_rx.listen().await {
+    loop {
+        // condition for releasing shm space
+        if !shm_buffer_mgr.is_full() {
+            match req_for_shm_rx.listen().await {
+                // new request
+                Some(()) => {}
+                None => {
+                    // no more needed
+                    break;
+                }
+            }
+        }
         // Release space for error in plan
         let Some((buf_id, _)) =
-            shm_buffer_mgr.find(|buf_id, _| incoming_pid.is_none_or(|x| x != buf_id.pid))
+            shm_buffer_mgr.find(|buf_id, _| !excluding_list.contains(&buf_id.pid))
         else {
             tracing::warn!(
                 "No buffer can be released to satisfy shm space request for pid {:?}",
-                incoming_pid
+                excluding_list
             );
             continue;
         };
@@ -888,7 +917,7 @@ async fn shm_to_backend_transfer(
             "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {:?}",
             buf_id.pid,
             pretty_size(buf_id.size),
-            incoming_pid
+            excluding_list
         );
         extra_move += 1;
 

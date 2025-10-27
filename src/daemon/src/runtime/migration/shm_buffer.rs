@@ -109,6 +109,10 @@ impl ShmBufferManager {
     pub fn capacity(&self) -> usize {
         self.shm_buffer.size()
     }
+
+    pub fn is_full(&self) -> bool {
+        self.inner.lock().unwrap().avail_addrs.is_empty()
+    }
 }
 
 // Allocation and release logic
@@ -132,7 +136,8 @@ impl ShmBufferManager {
                     let inner = self.inner.lock().unwrap();
                     let pending_len = inner.pending_reservations.len();
                     tracing::warn!(
-                        "Reservation timeout for buffer {:?}, pending reservations: {}, free size = {}",
+                        "Reservation timeout ({:?}) for buffer {:?}, pending reservations: {}, free size = {}",
+                        timeout,
                         buf_id,
                         pending_len,
                         inner.avail_addrs.values().sum::<u64>()

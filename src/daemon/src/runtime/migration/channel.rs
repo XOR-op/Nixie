@@ -135,6 +135,7 @@ impl OutDataReadyRx {
 #[derive(Clone)]
 pub(super) struct RequestForSpaceTx {
     inner: mpsc::UnboundedSender<()>,
+    prio_channel: mpsc::Sender<()>,
 }
 
 impl RequestForSpaceTx {
@@ -145,21 +146,38 @@ impl RequestForSpaceTx {
             }
         }
     }
+
+    // Prioritized request with capacity = 1
+    pub fn prio_request(&self) {
+        let _ = self.prio_channel.try_send(());
+    }
 }
 pub(super) struct RequestForSpaceRx {
     inner: mpsc::UnboundedReceiver<()>,
+    prio_channel: mpsc::Receiver<()>,
 }
 
 impl RequestForSpaceRx {
     pub async fn listen(&mut self) -> Option<()> {
-        self.inner.recv().await
+        tokio::select! {
+            biased;
+            res = self.prio_channel.recv() => res,
+            res = self.inner.recv() => res,
+        }
     }
 }
 
 pub(super) fn create_request_for_space_channel() -> (RequestForSpaceTx, RequestForSpaceRx) {
     let (tx, rx) = mpsc::unbounded_channel();
+    let (prio_tx, prio_rx) = mpsc::channel(1);
     (
-        RequestForSpaceTx { inner: tx },
-        RequestForSpaceRx { inner: rx },
+        RequestForSpaceTx {
+            inner: tx,
+            prio_channel: prio_tx,
+        },
+        RequestForSpaceRx {
+            inner: rx,
+            prio_channel: prio_rx,
+        },
     )
 }
