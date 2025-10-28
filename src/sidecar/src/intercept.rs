@@ -305,12 +305,17 @@ pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaErr
         unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id as *mut _) },
         "get device"
     );
+    let res = mem_get_info_func(free, total);
+    if res != cudaError_enum::CUDA_SUCCESS {
+        return res;
+    }
+    // override free size
     let available_size = get_max_allocation_size(device_id)
         .saturating_sub(CURRENT_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Relaxed));
     unsafe {
         *free = available_size as usize;
     }
-    mem_get_info_func(free, total)
+    res
 }
 
 #[allow(non_snake_case)]
