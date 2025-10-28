@@ -95,7 +95,7 @@ impl ProcessControl {
                                 physical.push(PhysicalMemoryData {
                                     on_gpu: handle.on_gpu,
                                     handle_idx,
-                                    size: handle.size as u64,
+                                    size: handle.size as u32,
                                 });
                                 cur_handle = handle.next_handle_idx;
                                 if handle.on_gpu {
@@ -146,7 +146,7 @@ impl ProcessControl {
                                     mem_list.push(PhysicalMemoryData {
                                         on_gpu: handle.on_gpu,
                                         handle_idx,
-                                        size: handle.size as u64,
+                                        size: handle.size as u32,
                                     });
                                 }
                                 cur_handle = handle.next_handle_idx;

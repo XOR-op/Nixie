@@ -116,7 +116,7 @@ impl AbstractDataHandle for DataManagerHandle {
 macro_rules! check_size {
     ($given:expr, $expected:expr, $msg:expr
     ) => {
-        if $given < $expected {
+        if ($given as u64) < ($expected as u64) {
             panic!(
                 "TODO: {} {} is smaller than expected {}, which not implemented",
                 $msg, $given, $expected
@@ -159,7 +159,7 @@ where
                 .map(|(id, entries)| {
                     assert!(entries.iter().all(|e| !e.on_gpu));
 
-                    let sum_size = entries.iter().map(|entry| entry.size).sum::<u64>();
+                    let sum_size = entries.iter().map(|entry| entry.size as u64).sum::<u64>();
                     let free_space = if with_free_memory {
                         match gpu_free_space.get(id).copied() {
                             Some(v) => v,
@@ -301,7 +301,7 @@ where
                         }
                     };
                     migration_entries.push(spec_entry);
-                    accu_size += entry.size;
+                    accu_size += entry.size as u64;
                 }
                 if !migration_entries.is_empty() {
                     out_of_gpu_list.push((
@@ -409,7 +409,7 @@ where
                     break;
                 }
                 removed.insert(buf_id.clone(), *len);
-                accu_size += buf_id.size;
+                accu_size += buf_id.size as u64;
             }
             if accu_size < moving.size && !moving.allow_incomplete {
                 tracing::warn!(
@@ -596,7 +596,7 @@ where
                     residual_data
                         .allocations
                         .get(&dev_id)
-                        .map(|entries| entries.iter().map(|e| e.size).sum::<u64>())
+                        .map(|entries| entries.iter().map(|e| e.size as u64).sum::<u64>())
                 })
                 .sum();
             (dev_id, total_size)
@@ -612,10 +612,10 @@ where
             let mut accu_size = 0;
             let mut migration_entries = Vec::new();
             for entry in entries {
-                if accu_size + entry.size > available_size {
+                if accu_size + entry.size as u64 > available_size {
                     continue; // check other entries
                 }
-                accu_size += entry.size;
+                accu_size += entry.size as u64;
                 migration_entries.push(entry);
             }
             (dev_id, migration_entries)
@@ -682,7 +682,7 @@ pub(super) mod tests {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
                         block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
-                        size: block_size,
+                        size: block_size as u32,
                     })
                     .collect(),
                 shm_buffer_ids: (0..input.shm / block_size)
@@ -690,7 +690,7 @@ pub(super) mod tests {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
                         block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
-                        size: block_size,
+                        size: block_size as u32,
                     })
                     .collect(),
                 hostmem_buffer_ids: (0..input.hostmem / block_size)
@@ -698,7 +698,7 @@ pub(super) mod tests {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
                         block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
-                        size: block_size,
+                        size: block_size as u32,
                     })
                     .collect(),
                 storage_buffer_ids: (0..input.storage / block_size)
@@ -706,7 +706,7 @@ pub(super) mod tests {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
                         block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
-                        size: block_size,
+                        size: block_size as u32,
                     })
                     .collect(),
             }
@@ -789,24 +789,24 @@ pub(super) mod tests {
         let mut storage_map = HashMap::new();
         for process_data in process_data_list.iter() {
             for buf_id in process_data.shm_buffer_ids.iter() {
-                shm_map.insert(buf_id.clone(), buf_id.size);
+                shm_map.insert(buf_id.clone(), buf_id.size as u64);
             }
             for buf_id in process_data.hostmem_buffer_ids.iter() {
-                hostmem_map.insert(buf_id.clone(), buf_id.size);
+                hostmem_map.insert(buf_id.clone(), buf_id.size as u64);
             }
             for buf_id in process_data.storage_buffer_ids.iter() {
-                storage_map.insert(buf_id.clone(), buf_id.size);
+                storage_map.insert(buf_id.clone(), buf_id.size as u64);
             }
         }
         assert!(
             process_data_list
                 .iter()
-                .map(|p| p.gpu_buffer_ids.iter().map(|b| b.size).sum::<u64>())
+                .map(|p| p.gpu_buffer_ids.iter().map(|b| b.size as u64).sum::<u64>())
                 .sum::<u64>()
                 <= gpu_capacity
         );
-        assert!(shm_map.values().sum::<u64>() <= shm_capacity);
-        assert!(hostmem_map.values().sum::<u64>() <= hostmem_capacity);
+        assert!(shm_map.values().map(|x| *x as u64).sum::<u64>() <= shm_capacity);
+        assert!(hostmem_map.values().map(|x| *x as u64).sum::<u64>() <= hostmem_capacity);
         let data_manager = MockManager {
             shm_map,
             hostmem_map,

@@ -74,7 +74,7 @@ impl HostMemBufferManager {
         data: &mut [u8],
     ) -> Result<BufferLocation, HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
-        if buffer_id.size > (MAX_ALLOCATION_SIZE as u64) || (data.len() as u64) < buffer_id.size {
+        if buffer_id.size as usize > MAX_ALLOCATION_SIZE || data.len() < buffer_id.size as usize {
             return Err(HybridBufferError::InvalidInputBuffer);
         }
         if let Some(block_buffer) = inner.mem_bookkeeping.remove(buffer_id) {

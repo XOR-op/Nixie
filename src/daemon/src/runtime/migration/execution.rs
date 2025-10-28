@@ -40,7 +40,7 @@ macro_rules! warn_on_send_error {
 
 #[derive(Debug, Clone)]
 pub struct MigrationSpecEntry {
-    pub size: u64,
+    pub size: u32,
     pub handle_idx: NonZeroU32,
     // When ready is true, the buffer should be on GPU or in shm.
     pub ready_for_pcie_xfer: bool,
@@ -110,7 +110,7 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                     .device_map
                     .values()
                     .flatten()
-                    .map(|e| e.size)
+                    .map(|e| e.size as u64)
                     .sum::<u64>()
             })
             .unwrap_or_default();
@@ -131,7 +131,7 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                             .device_map
                             .values()
                             .flatten()
-                            .map(|e| e.size)
+                            .map(|e| e.size as u64)
                             .sum::<u64>(),
                     ),
                 )
@@ -154,7 +154,12 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .map(|b| (format!("{}", b.pid), b.size))
                 .into_group_map()
                 .into_iter()
-                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .map(|(pid, sizes)| {
+                    (
+                        pid,
+                        pretty_size(sizes.iter().map(|x| *x as u64).sum::<u64>()),
+                    )
+                })
                 .collect::<HashMap<_, _>>();
             data.insert("hostmem -> shm", hostmem_to_shm_mapping);
         }
@@ -165,7 +170,12 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .map(|b| (format!("{}", b.pid), b.size))
                 .into_group_map()
                 .into_iter()
-                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .map(|(pid, sizes)| {
+                    (
+                        pid,
+                        pretty_size(sizes.iter().map(|x| *x as u64).sum::<u64>()),
+                    )
+                })
                 .collect::<HashMap<_, _>>();
             data.insert("storage -> shm", storage_to_shm_mapping);
         }
@@ -176,7 +186,12 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .map(|b| (format!("{}", b.pid), b.size))
                 .into_group_map()
                 .into_iter()
-                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .map(|(pid, sizes)| {
+                    (
+                        pid,
+                        pretty_size(sizes.iter().map(|x| *x as u64).sum::<u64>()),
+                    )
+                })
                 .collect::<HashMap<_, _>>();
             data.insert("shm -> backend", shm_to_backend_mapping);
         }
@@ -187,7 +202,12 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .map(|b| (format!("{}", b.pid), b.size))
                 .into_group_map()
                 .into_iter()
-                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .map(|(pid, sizes)| {
+                    (
+                        pid,
+                        pretty_size(sizes.iter().map(|x| *x as u64).sum::<u64>()),
+                    )
+                })
                 .collect::<HashMap<_, _>>();
             data.insert("storage -> hostmem", storage_to_hostmem_mapping);
         }
@@ -198,7 +218,12 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                 .map(|b| (format!("{}", b.pid), b.size))
                 .into_group_map()
                 .into_iter()
-                .map(|(pid, sizes)| (pid, pretty_size(sizes.into_iter().sum())))
+                .map(|(pid, sizes)| {
+                    (
+                        pid,
+                        pretty_size(sizes.iter().map(|x| *x as u64).sum::<u64>()),
+                    )
+                })
                 .collect::<HashMap<_, _>>();
             data.insert("hostmem -> storage", hostmem_to_storage_mapping);
         }
@@ -215,11 +240,26 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
 
     pub async fn run(mut self) {
         let mut largest_transfer_size = [
-            self.hostmem_to_shm.iter().map(|b| b.size).sum::<u64>(),
-            self.storage_to_shm.iter().map(|b| b.size).sum::<u64>(),
-            self.shm_to_backend.keys().map(|b| b.size).sum::<u64>(),
-            self.storage_to_hostmem.iter().map(|b| b.size).sum::<u64>(),
-            self.hostmem_to_storage.iter().map(|b| b.size).sum::<u64>(),
+            self.hostmem_to_shm
+                .iter()
+                .map(|b| b.size as u64)
+                .sum::<u64>(),
+            self.storage_to_shm
+                .iter()
+                .map(|b| b.size as u64)
+                .sum::<u64>(),
+            self.shm_to_backend
+                .keys()
+                .map(|b| b.size as u64)
+                .sum::<u64>(),
+            self.storage_to_hostmem
+                .iter()
+                .map(|b| b.size as u64)
+                .sum::<u64>(),
+            self.hostmem_to_storage
+                .iter()
+                .map(|b| b.size as u64)
+                .sum::<u64>(),
         ]
         .into_iter()
         .max()
@@ -239,7 +279,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         for (pid, spec, rpc_client, mapping) in self.out_from_gpu {
             for (device_id, entries) in spec.device_map {
                 largest_transfer_size =
-                    largest_transfer_size.max(entries.iter().map(|e| e.size).sum::<u64>());
+                    largest_transfer_size.max(entries.iter().map(|e| e.size as u64).sum::<u64>());
                 src_per_device.entry(device_id).or_insert(Vec::new()).push((
                     pid,
                     mapping
@@ -281,8 +321,8 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                     .3
                     .real_to_visible(device)
                     .unwrap_or_else(|| todo!("Handle missing device mapping"));
-                largest_transfer_size =
-                    largest_transfer_size.max(dst_entries.iter().map(|e| e.size).sum::<u64>());
+                largest_transfer_size = largest_transfer_size
+                    .max(dst_entries.iter().map(|e| e.size as u64).sum::<u64>());
                 (into_gpu.0, device_id, rpc_client, dst_entries)
             });
 
@@ -519,8 +559,8 @@ async fn device_to_host_transfer(
             };
 
             let args = MigrationArgs {
-                host_buffer_offset: offset,
-                size: out_from_gpu_entry.size,
+                host_buffer_offset: vec![offset],
+                size: vec![out_from_gpu_entry.size],
                 device,
                 handle_idx: out_from_gpu_entry.handle_idx,
                 host_to_device: false,
@@ -642,8 +682,8 @@ async fn host_to_device_transfer(
 
             token_received += 1;
 
-            if accu_length >= buffer_id.size {
-                accu_length -= buffer_id.size;
+            if accu_length >= buffer_id.size as u64 {
+                accu_length -= buffer_id.size as u64;
             } else {
                 // no enough vram; wait for more
                 token_not_enough += 1;
@@ -690,8 +730,8 @@ async fn host_to_device_transfer_inner(
         .ok_or(buffer_id.clone())?
         .addr;
     let args = MigrationArgs {
-        host_buffer_offset: offset,
-        size: buffer_id.size,
+        host_buffer_offset: vec![offset],
+        size: vec![buffer_id.size],
         device: dst_device,
         handle_idx: buffer_id.block_id,
         host_to_device: true,

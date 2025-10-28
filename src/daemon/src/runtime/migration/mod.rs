@@ -18,7 +18,7 @@ pub struct BufferId {
     pub pid: i32,
     pub device_id: GlobalDeviceId,
     pub block_id: NonZeroU32,
-    pub size: u64,
+    pub size: u32,
 }
 
 #[derive(Debug, Clone)]

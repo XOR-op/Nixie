@@ -413,7 +413,7 @@ impl Scheduler {
                             if accu_size >= req.size {
                                 break;
                             }
-                            accu_size += entry.size;
+                            accu_size += entry.size as u64;
                             entries.push(entry.clone());
                         }
                         res.insert(dev_id, entries);
@@ -592,7 +592,7 @@ impl Scheduler {
             swap_out = task.get_out_from_gpu().first().map(|(_, spec, _, _)| {
                 spec.device_map
                     .values()
-                    .map(|entries| entries.iter().map(|entry| entry.size).sum::<u64>())
+                    .map(|entries| entries.iter().map(|entry| entry.size as u64).sum::<u64>())
                     .sum::<u64>()
             });
             task.run().await

@@ -46,10 +46,11 @@ pub struct MemoryUsage {
 
 // ------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MigrationArgs {
-    pub host_buffer_offset: u64,
-    pub size: u64,
+    // in different vectors for less padding; length must be the same
+    pub host_buffer_offset: Vec<u64>,
+    pub size: Vec<u32>,
     pub device: ProcessLocalDeviceId,
     pub handle_idx: NonZeroU32,
     pub host_to_device: bool,

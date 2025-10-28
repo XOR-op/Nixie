@@ -75,7 +75,7 @@ pub(crate) struct AllocationData {
 pub(crate) struct PhysicalMemoryData {
     pub on_gpu: bool,
     pub handle_idx: NonZeroU32,
-    pub size: u64,
+    pub size: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -48,7 +48,7 @@ impl StorageBufferManager {
 
     pub fn load_to(&self, buffer_id: &BufferId, data: &mut [u8]) -> Result<(), HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
-        if buffer_id.size > (MAX_ALLOCATION_SIZE as u64) || (data.len() as u64) < buffer_id.size {
+        if buffer_id.size > (MAX_ALLOCATION_SIZE as u32) || (data.len() < buffer_id.size as usize) {
             return Err(HybridBufferError::InvalidInputBuffer);
         }
         if let Some(info) = inner.disk_bookkeeping.remove(buffer_id) {
@@ -128,7 +128,7 @@ impl StorageBufferInner {
     fn load_from_disk(
         &mut self,
         offset: u64,
-        read_length: u64,
+        read_length: u32,
         data: &mut [u8],
     ) -> Result<(), HybridBufferError> {
         self.file

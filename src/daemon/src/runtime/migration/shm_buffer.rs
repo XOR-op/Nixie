@@ -30,7 +30,7 @@ impl ShmBufferInner {
         let r = inner
             .avail_addrs
             .iter()
-            .find(|(_, size)| **size >= buf_id.size)?;
+            .find(|(_, size)| **size >= buf_id.size as u64)?;
         tracing::trace!("ShmBuffer: available length = {}", inner.avail_addrs.len());
         let (addr, block_size) = (*r.0, *r.1);
         let len = inner.avail_addrs.remove(&addr);

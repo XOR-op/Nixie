@@ -90,21 +90,8 @@ impl StreamingMemoryMigrator {
     pub fn migrate(&mut self, args: CallParameter<MigrationArgs, MigrationResponse>) {
         let (args, ret_chan) = args.into_parts();
         set_device(self.device_id);
+        let total_size = args.size.iter().map(|&s| s as usize).sum::<usize>();
         let mut event = std::ptr::null_mut();
-        let host_buffer_ptr = {
-            let ptr = unsafe {
-                global_shm_buffer().at_offset(args.host_buffer_offset, args.size as usize)
-            };
-            if ptr.is_none() {
-                warn_eprintln!(
-                    "Invalid host buffer: offset={} size={}",
-                    args.host_buffer_offset,
-                    args.size
-                );
-                return;
-            };
-            ptr.unwrap()
-        };
         check_cu_err!(
             unsafe {
                 cudarc::driver::sys::cuEventCreate(
@@ -114,13 +101,15 @@ impl StreamingMemoryMigrator {
             },
             "Failed to create CUDA event"
         );
+        assert_eq!(args.host_buffer_offset.len(), args.size.len());
+        assert!(!args.size.is_empty());
         if args.host_to_device {
             // allocate physical memory
             let mut cu_handle = 0u64;
             let res = unsafe {
                 cudarc::driver::sys::cuMemCreate(
                     &mut cu_handle,
-                    args.size as usize,
+                    total_size,
                     &default_alloc_prop(self.device_id),
                     0,
                 )
@@ -137,7 +126,7 @@ impl StreamingMemoryMigrator {
                     .handle_list
                     .get_handle_mut(args.handle_idx)
                     .expect("PhyHandle should remain valid in migration");
-                assert_eq!(phy_handle.size, args.size as usize);
+                assert_eq!(phy_handle.size, total_size);
                 assert!(!phy_handle.on_gpu);
                 phy_handle.cu_handle = Some(cu_handle);
                 map_mem_handle(phy_handle, &default_access_desc(args.device.0));
@@ -145,18 +134,25 @@ impl StreamingMemoryMigrator {
                 phy_handle.addr
             };
 
+            let mut accu_offset = 0u64;
             // h2d copy
-            check_cu_err!(
-                unsafe {
-                    cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
-                        virtual_addr,
-                        host_buffer_ptr as *const _,
-                        args.size as usize,
-                        self.h2d_stream.0,
-                    )
-                },
-                "Failed to copy memory from host to device"
-            );
+            for (base, size) in args.host_buffer_offset.iter().zip(args.size.iter()) {
+                check_cu_err!(
+                    unsafe {
+                        cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
+                            virtual_addr + accu_offset,
+                            match get_host_buffer_ptr(*base, *size) {
+                                Some(x) => x as *const _,
+                                None => return,
+                            },
+                            *size as usize,
+                            self.h2d_stream.0,
+                        )
+                    },
+                    "Failed to copy memory from host to device"
+                );
+                accu_offset += *size as u64;
+            }
             check_cu_err!(
                 unsafe { cudarc::driver::sys::cuEventRecord(event, self.h2d_stream.0) },
                 "Failed to record CUDA event for h2d copy"
@@ -169,7 +165,7 @@ impl StreamingMemoryMigrator {
                 warn_eprintln!("Failed to send h2d migration request: {}", e);
             }
         } else {
-            // h2d
+            // d2h
             let virtual_addr = {
                 let table = GENERIC_DATA
                     .get_or_init(should_have_initialized)
@@ -179,20 +175,28 @@ impl StreamingMemoryMigrator {
                     .get_handle(args.handle_idx)
                     .expect("PhyHandle should remain valid in migration");
                 assert!(phy_handle.on_gpu);
-                assert_eq!(phy_handle.size, args.size as usize);
+                assert_eq!(phy_handle.size, total_size);
                 phy_handle.addr
             };
-            check_cu_err!(
-                unsafe {
-                    cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
-                        host_buffer_ptr as *mut _,
-                        virtual_addr,
-                        args.size as usize,
-                        self.d2h_stream.0,
-                    )
-                },
-                "Failed to copy memory from device to host"
-            );
+            let mut accu_offset = 0u64;
+            for (base, size) in args.host_buffer_offset.iter().zip(args.size.iter()) {
+                let host_buffer_ptr = match get_host_buffer_ptr(*base, *size) {
+                    Some(x) => x,
+                    None => return,
+                };
+                check_cu_err!(
+                    unsafe {
+                        cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
+                            host_buffer_ptr as *mut _,
+                            virtual_addr + accu_offset,
+                            *size as usize,
+                            self.d2h_stream.0,
+                        )
+                    },
+                    "Failed to copy memory from device to host"
+                );
+                accu_offset += *size as u64;
+            }
             check_cu_err!(
                 unsafe { cudarc::driver::sys::cuEventRecord(event, self.d2h_stream.0) },
                 "Failed to record CUDA event for d2h copy"
@@ -226,7 +230,7 @@ impl StreamingMemoryMigrator {
             let response = MigrationResponse {
                 handle_idx: args.handle_idx,
                 device: args.device,
-                size: args.size,
+                size: args.size.iter().map(|&s| s as u64).sum(),
             };
             // copy finished, do the post-processing
             if !args.host_to_device {
@@ -246,4 +250,17 @@ impl StreamingMemoryMigrator {
             }
         }
     }
+}
+
+fn get_host_buffer_ptr(host_buffer_offset: u64, size: u32) -> Option<*mut std::ffi::c_void> {
+    let ptr = unsafe { global_shm_buffer().at_offset(host_buffer_offset, size as usize) };
+    if ptr.is_none() {
+        warn_eprintln!(
+            "Invalid host buffer: offset={} size={}",
+            host_buffer_offset,
+            size
+        );
+        return None;
+    };
+    Some(ptr.unwrap() as *mut std::ffi::c_void)
 }
