@@ -42,5 +42,25 @@ pub struct DataManagerHandle {
     pub storage: Arc<StorageBufferManager>,
 }
 
-pub type Offset = u64;
-pub type AllocationCapacity = u64;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Offset(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AllocationCapacity(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AllocationCount(pub u32);
+
+impl std::ops::Add for AllocationCount {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        AllocationCount(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::AddAssign for AllocationCount {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}

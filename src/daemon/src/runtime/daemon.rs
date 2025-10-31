@@ -301,7 +301,7 @@ impl Controllable for ControllableDaemon {
                 let entry = procs.entry(buf_id.pid).or_default();
                 entry.push(control::DataBlockMeta {
                     device_id: buf_id.device_id,
-                    size,
+                    size: size.0 as u64,
                 });
             }
             procs

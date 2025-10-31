@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::{Read, Seek, Write},
+    io::{IoSlice, IoSliceMut, Read, Seek, Write},
     path::Path,
 };
 
@@ -35,24 +35,32 @@ impl StorageBufferManager {
         })
     }
 
-    pub fn store(&self, buffer_id: &BufferId, data: &[u8]) -> Result<(), HybridBufferError> {
+    pub fn store_vectored(
+        &self,
+        buffer_id: &BufferId,
+        data: &[IoSlice<'_>],
+    ) -> Result<(), HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
-        if data.len() > MAX_ALLOCATION_SIZE {
+        if data.iter().map(|b| b.len()).sum::<usize>() > MAX_ALLOCATION_SIZE {
             return Err(HybridBufferError::InvalidInputBuffer);
         }
 
-        let alloc_info = inner.save_to_disk(data)?;
+        let alloc_info = inner.save_to_disk_vectored(data)?;
         inner.disk_bookkeeping.insert(buffer_id.clone(), alloc_info);
         Ok(())
     }
 
-    pub fn load_to(&self, buffer_id: &BufferId, data: &mut [u8]) -> Result<(), HybridBufferError> {
+    pub fn load_to_vectored(
+        &self,
+        buffer_id: &BufferId,
+        data: &mut [IoSliceMut<'_>],
+    ) -> Result<(), HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
         if buffer_id.size > (MAX_ALLOCATION_SIZE as u32) || (data.len() < buffer_id.size as usize) {
             return Err(HybridBufferError::InvalidInputBuffer);
         }
         if let Some(info) = inner.disk_bookkeeping.remove(buffer_id) {
-            inner.load_from_disk(info.addr, buffer_id.size, data)?;
+            inner.load_from_disk_vectored(info.addr, buffer_id.size, data)?;
             inner.put_back_disk(info);
             Ok(())
         } else {
@@ -85,7 +93,7 @@ impl StorageBufferManager {
             .unwrap()
             .disk_bookkeeping
             .iter()
-            .map(|(k, v)| (k.clone(), v.block_size))
+            .map(|(k, v)| (k.clone(), AllocationCapacity(v.block_size as u32)))
             .collect()
     }
 }
@@ -99,11 +107,17 @@ struct StorageBufferInner {
 
 impl StorageBufferInner {
     fn put_back_disk(&mut self, alloc_info: AllocationInfo) {
+        assert_eq!(alloc_info.block_size, MAX_ALLOCATION_SIZE as u64);
         self.free_disk_buffers.push(alloc_info);
     }
 
-    fn save_to_disk(&mut self, buf: &[u8]) -> Result<AllocationInfo, HybridBufferError> {
+    fn save_to_disk_vectored(
+        &mut self,
+        bufs: &[IoSlice<'_>],
+    ) -> Result<AllocationInfo, HybridBufferError> {
+        let expected_size: usize = bufs.iter().map(|b| b.len()).sum();
         let offset = if let Some(alloc_info) = self.free_disk_buffers.pop() {
+            assert_eq!(alloc_info.block_size, MAX_ALLOCATION_SIZE as u64);
             alloc_info.addr
         } else {
             let offset = self.file_size;
@@ -116,27 +130,50 @@ impl StorageBufferInner {
         self.file
             .seek(std::io::SeekFrom::Start(offset))
             .map_err(|e| HybridBufferError::IoError(e, "Failed to seek in file".to_string()))?;
-        self.file
-            .write_all(buf)
+        let write_len = self
+            .file
+            .write_vectored(bufs)
             .map_err(|e| HybridBufferError::IoError(e, "Failed to write to file".to_string()))?;
+        if write_len != expected_size {
+            return Err(HybridBufferError::IoError(
+                std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "Failed to write enough data to file",
+                ),
+                "Failed to write enough data to file".to_string(),
+            ));
+        }
         Ok(AllocationInfo {
             addr: offset,
             block_size: MAX_ALLOCATION_SIZE as u64,
         })
     }
 
-    fn load_from_disk(
+    fn load_from_disk_vectored(
         &mut self,
         offset: u64,
         read_length: u32,
-        data: &mut [u8],
+        data: &mut [IoSliceMut<'_>],
     ) -> Result<(), HybridBufferError> {
         self.file
             .seek(std::io::SeekFrom::Start(offset))
             .map_err(|e| HybridBufferError::IoError(e, "Failed to seek in file".to_string()))?;
-        self.file
-            .read_exact(&mut data[..read_length as usize])
-            .map_err(|e| HybridBufferError::IoError(e, "Failed to read from file".to_string()))?;
+        assert_eq!(
+            data.iter().map(|d| d.len()).sum::<usize>(),
+            read_length as usize
+        );
+        let read_len = self.file.read_vectored(data).map_err(|e| {
+            HybridBufferError::IoError(e, "Failed to read vectored from file".to_string())
+        })?;
+        if read_len != read_length as usize {
+            return Err(HybridBufferError::IoError(
+                std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "Failed to read enough data from file",
+                ),
+                "Failed to read enough data from file".to_string(),
+            ));
+        }
         Ok(())
     }
 }

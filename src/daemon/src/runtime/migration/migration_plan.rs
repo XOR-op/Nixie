@@ -3,13 +3,15 @@ use std::{
     sync::Arc,
 };
 
-use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE};
+use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE};
 
 use crate::{
     control::ProcessResidualData,
     runtime::{
         daemon_server::DeviceOrdinalMapping,
-        migration::{AllocationCapacity, BufferId, BufferLocation, DataManagerHandle},
+        migration::{
+            AllocationCapacity, AllocationCount, BufferId, BufferLocation, DataManagerHandle,
+        },
     },
 };
 
@@ -49,10 +51,11 @@ pub(crate) enum DeviceRequestArgs {
 pub(crate) trait AbstractDataHandle: Clone {
     fn gpu_free_space(&self, devices: &[GlobalDeviceId]) -> HashMap<GlobalDeviceId, u64>;
 
-    fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<u64>;
+    fn get_shm_block_count(&self, buf_id: &BufferId) -> Option<AllocationCount>;
+    fn get_hostmem_block_count(&self, buf_id: &BufferId) -> Option<AllocationCount>;
 
     fn shm_contains(&self, buf_id: &BufferId) -> bool {
-        self.shm_alloc_size(buf_id).is_some()
+        self.get_shm_block_count(buf_id).is_some()
     }
     fn hostmem_contains(&self, buf_id: &BufferId) -> bool;
     fn storage_contains(&self, buf_id: &BufferId) -> bool;
@@ -60,8 +63,8 @@ pub(crate) trait AbstractDataHandle: Clone {
     fn shm_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity>;
     fn hostmem_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity>;
 
-    fn shm_free_segments(&self) -> Vec<AllocationCapacity>;
-    fn hostmem_free_segments(&self) -> Vec<AllocationCapacity>;
+    fn shm_free_blocks_count(&self) -> AllocationCount;
+    fn hostmem_free_blocks_count(&self) -> AllocationCount;
 }
 
 impl AbstractDataHandle for DataManagerHandle {
@@ -90,11 +93,19 @@ impl AbstractDataHandle for DataManagerHandle {
     fn hostmem_contains(&self, buf_id: &BufferId) -> bool {
         self.hostmem.contains(buf_id)
     }
+
     fn storage_contains(&self, buf_id: &BufferId) -> bool {
         self.storage.contains(buf_id)
     }
-    fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<AllocationCapacity> {
-        self.shm.get_buffer(buf_id).map(|info| info.block_size)
+
+    fn get_shm_block_count(&self, buf_id: &BufferId) -> Option<AllocationCount> {
+        self.shm
+            .get_buffer(buf_id)
+            .map(|blocks| AllocationCount(blocks.len() as u32))
+    }
+
+    fn get_hostmem_block_count(&self, buf_id: &BufferId) -> Option<AllocationCount> {
+        self.hostmem.get_block_count(buf_id)
     }
 
     fn shm_buffer_ids(&self) -> HashMap<BufferId, AllocationCapacity> {
@@ -105,11 +116,11 @@ impl AbstractDataHandle for DataManagerHandle {
         self.hostmem.dump_buffers()
     }
 
-    fn shm_free_segments(&self) -> Vec<AllocationCapacity> {
-        self.shm.free_segments()
+    fn shm_free_blocks_count(&self) -> AllocationCount {
+        self.shm.free_blocks_count()
     }
-    fn hostmem_free_segments(&self) -> Vec<AllocationCapacity> {
-        self.hostmem.free_mem_segments()
+    fn hostmem_free_blocks_count(&self) -> AllocationCount {
+        self.hostmem.free_blocks_count()
     }
 }
 
@@ -183,8 +194,8 @@ where
             DeviceRequestArgs::Allocation(allocation) => allocation.clone(),
         }
     };
-    let mut shm_free_segments = data_manager.shm_free_segments();
-    let mut host_mem_free_segments = data_manager.hostmem_free_segments();
+    let mut shm_free_blocks = data_manager.shm_free_blocks_count();
+    let mut host_mem_free_blocks = data_manager.hostmem_free_blocks_count();
 
     let mut hostmem_to_shm = Vec::new();
     let mut storage_to_shm = Vec::new();
@@ -210,8 +221,8 @@ where
                                 block_id: data_entry.handle_idx,
                                 size: data_entry.size,
                             };
-                            if let Some(alloc_size) = data_manager.shm_alloc_size(&buffer_id) {
-                                shm_free_segments.push(alloc_size);
+                            if let Some(alloc_size) = data_manager.get_shm_block_count(&buffer_id) {
+                                shm_free_blocks += alloc_size;
                                 // in SHM
                                 Some(MigrationSpecEntry {
                                     size: data_entry.size,
@@ -219,9 +230,11 @@ where
                                     ready_for_pcie_xfer: true,
                                 })
                             } else {
-                                if data_manager.hostmem_contains(&buffer_id) {
+                                if let Some(count) =
+                                    data_manager.get_hostmem_block_count(&buffer_id)
+                                {
                                     // in host mem
-                                    host_mem_free_segments.push(MAX_ALLOCATION_SIZE as u64);
+                                    host_mem_free_blocks += count;
                                     hostmem_to_shm.push(buffer_id);
                                 } else if data_manager.storage_contains(&buffer_id) {
                                     // in storage
@@ -272,33 +285,31 @@ where
                         ready_for_pcie_xfer: true, // the buffer is on GPU
                     };
                     // Use SHM first, then host mem, then storage
-                    // TODO: handle if segments have variable lengths
-                    if let Some(seg) = shm_free_segments.pop() {
-                        check_size!(seg, entry.size, "SHM free segment");
+                    let required_shm_blocks = entry.size.div_ceil(MIN_ALLOCATION_SIZE as u32);
+                    if shm_free_blocks.0 >= required_shm_blocks {
+                        shm_free_blocks.0 -= required_shm_blocks;
                     } else {
-                        // pop one entry from shm_eviction_candidates
-                        let evicted_buf_id = {
-                            let res = shm_eviction_candidates
+                        // pop enough entries from shm_eviction_candidates
+                        while shm_free_blocks.0 < required_shm_blocks {
+                            let Some((next_id, next_capa)) = shm_eviction_candidates
                                 .iter()
                                 .next()
-                                .map(|(k, v)| (k.clone(), *v));
-                            match res {
-                                Some((k, v)) => {
-                                    check_size!(v, entry.size, "SHM eviction candidate");
-                                    shm_eviction_candidates.remove(&k);
-                                    k
-                                }
-                                None => {
-                                    panic!("No more SHM eviction candidates");
-                                }
+                                .map(|(k, v)| (k.clone(), *v))
+                            else {
+                                panic!("No more SHM eviction candidates");
+                            };
+                            assert_eq!(next_capa.0 % MIN_ALLOCATION_SIZE as u32, 0);
+                            shm_eviction_candidates.remove(&next_id);
+                            let avail_count = next_capa.0 / MIN_ALLOCATION_SIZE as u32;
+                            if host_mem_free_blocks.0 >= avail_count {
+                                host_mem_free_blocks.0 -= avail_count;
+                                shm_to_backend.insert(next_id, BufferLocation::HostMem);
+                            } else {
+                                shm_to_backend.insert(next_id, BufferLocation::Storage);
                             }
-                        };
-                        if let Some(seg) = host_mem_free_segments.pop() {
-                            check_size!(seg, entry.size, "Host mem segment");
-                            shm_to_backend.insert(evicted_buf_id, BufferLocation::HostMem);
-                        } else {
-                            shm_to_backend.insert(evicted_buf_id, BufferLocation::Storage);
+                            shm_free_blocks.0 += avail_count;
                         }
+                        shm_free_blocks.0 -= required_shm_blocks;
                     };
                     migration_entries.push(spec_entry);
                     accu_size += entry.size as u64;
@@ -366,8 +377,8 @@ where
     let in_requests_pids: HashSet<_, std::hash::RandomState> =
         HashSet::from_iter(requests.iter().map(|(pid, _)| *pid));
     assert_eq!(in_requests_pids.len(), requests.len(), "duplicated pids");
-    let mut shm_free_segments = data_manager.shm_free_segments();
-    let mut host_mem_free_segments = data_manager.hostmem_free_segments();
+    let mut shm_free_blocks_count = data_manager.shm_free_blocks_count();
+    let mut host_mem_free_blocks_count = data_manager.hostmem_free_blocks_count();
 
     let mut hostmem_to_shm = Vec::new();
     let mut storage_to_shm = Vec::new();
@@ -389,10 +400,10 @@ where
             }
 
             let (eviction_candiates, free_segments) = match moving.from {
-                BufferLocation::Shm => (&mut shm_eviction_candidates, &mut shm_free_segments),
+                BufferLocation::Shm => (&mut shm_eviction_candidates, &mut shm_free_blocks_count),
                 BufferLocation::HostMem => (
                     &mut hostmem_eviction_candidates,
-                    &mut host_mem_free_segments,
+                    &mut host_mem_free_blocks_count,
                 ),
                 BufferLocation::Storage => continue,
                 BufferLocation::Gpu(_) => {
@@ -425,7 +436,7 @@ where
             }
 
             // add back the freed segments
-            free_segments.extend(removed.values());
+            free_segments.0 += removed.values().cloned().fold(0, |acc, x| acc + x.0);
 
             // add to the corresponding move list
             let removed: Vec<BufferId> = removed.into_keys().collect();
@@ -474,9 +485,9 @@ where
     let mut shm_not_enough = Vec::new();
     let mut hostmem_not_enough = Vec::new();
     for entry in storage_to_shm.iter().chain(hostmem_to_shm.iter()) {
-        if let Some(seg) = shm_free_segments.pop() {
-            // TODO: support variable segment sizes
-            check_size!(seg, entry.size, "SHM free segment");
+        let required_shm_block = entry.size.div_ceil(MIN_ALLOCATION_SIZE as u32);
+        if shm_free_blocks_count.0 >= required_shm_block {
+            shm_free_blocks_count.0 -= required_shm_block;
         } else {
             shm_not_enough.push(entry.size);
         }
@@ -491,9 +502,9 @@ where
             }
         }))
     {
-        if let Some(seg) = host_mem_free_segments.pop() {
-            // TODO: support variable segment sizes
-            check_size!(seg, entry.size, "Host mem segment");
+        let required_hostmem_block = entry.size.div_ceil(MIN_ALLOCATION_SIZE as u32);
+        if host_mem_free_blocks_count.0 >= required_hostmem_block {
+            host_mem_free_blocks_count.0 -= required_hostmem_block;
         } else {
             hostmem_not_enough.push(entry.size);
         }
@@ -501,37 +512,48 @@ where
     // 2. we try to evict data out of SHM and host mem to make space
     if !(shm_not_enough.is_empty() && hostmem_not_enough.is_empty()) {
         for size in shm_not_enough.into_iter() {
-            // move from shm to host mem or storage
-            let Some((victim, victim_size)) = shm_eviction_candidates
-                .iter()
-                .next()
-                .map(|(k, v)| (k.clone(), *v))
-            else {
-                tracing::warn!("Not enough SHM space to organize data");
-                return None;
-            };
-            check_size!(victim_size, size, "SHM eviction candidate");
-            shm_eviction_candidates.remove(&victim);
-            if let Some(seg) = host_mem_free_segments.pop() {
-                check_size!(seg, size, "Host mem segment");
-                shm_to_backend.insert(victim, BufferLocation::HostMem);
-            } else {
-                shm_to_backend.insert(victim, BufferLocation::Storage);
+            let needed_blocks = size.div_ceil(MIN_ALLOCATION_SIZE as u32);
+            while shm_free_blocks_count.0 < needed_blocks {
+                // move from shm to host mem or storage
+                let Some((victim, victim_size)) = shm_eviction_candidates
+                    .iter()
+                    .next()
+                    .map(|(k, v)| (k.clone(), *v))
+                else {
+                    tracing::warn!("Not enough SHM space to organize data");
+                    return None;
+                };
+                assert_eq!(victim_size.0 % MIN_ALLOCATION_SIZE as u32, 0);
+                shm_eviction_candidates.remove(&victim);
+                let evicted_count = victim_size.0 / MIN_ALLOCATION_SIZE as u32;
+                if host_mem_free_blocks_count.0 >= evicted_count {
+                    host_mem_free_blocks_count.0 -= evicted_count;
+                    shm_to_backend.insert(victim, BufferLocation::HostMem);
+                } else {
+                    shm_to_backend.insert(victim, BufferLocation::Storage);
+                }
+                shm_free_blocks_count.0 += evicted_count;
             }
+            shm_free_blocks_count.0 -= needed_blocks;
         }
         for size in hostmem_not_enough.into_iter() {
-            // move from host mem to storage
-            let Some((victim, victim_size)) = hostmem_eviction_candidates
-                .iter()
-                .next()
-                .map(|(k, v)| (k.clone(), *v))
-            else {
-                tracing::warn!("Not enough host mem space to organize data");
-                return None;
-            };
-            check_size!(victim_size, size, "Host mem eviction candidate");
-            hostmem_eviction_candidates.remove(&victim);
-            hostmem_to_storage.push(victim);
+            let needed_blocks = size.div_ceil(MIN_ALLOCATION_SIZE as u32);
+            while host_mem_free_blocks_count.0 < needed_blocks {
+                // move from host mem to storage
+                let Some((victim, victim_size)) = hostmem_eviction_candidates
+                    .iter()
+                    .next()
+                    .map(|(k, v)| (k.clone(), *v))
+                else {
+                    tracing::warn!("Not enough host mem space to organize data");
+                    return None;
+                };
+                assert_eq!(victim_size.0 % MIN_ALLOCATION_SIZE as u32, 0);
+                hostmem_eviction_candidates.remove(&victim);
+                hostmem_to_storage.push(victim);
+                host_mem_free_blocks_count.0 += victim_size.0 / MIN_ALLOCATION_SIZE as u32;
+            }
+            host_mem_free_blocks_count.0 -= needed_blocks;
         }
     }
 
@@ -724,7 +746,7 @@ pub(super) mod tests {
     }
 
     impl AbstractDataHandle for MockManager {
-        fn shm_alloc_size(&self, buf_id: &BufferId) -> Option<AllocationCapacity> {
+        fn get_shm_block_count(&self, buf_id: &BufferId) -> Option<AllocationCapacity> {
             self.shm_map.get(buf_id).copied()
         }
         fn hostmem_contains(&self, buf_id: &BufferId) -> bool {

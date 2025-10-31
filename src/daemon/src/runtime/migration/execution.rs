@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
+    io::{IoSlice, IoSliceMut},
     num::NonZeroU32,
     sync::Arc,
     time::Duration,
@@ -23,6 +24,7 @@ use crate::{
                 RequestForSpaceTx, create_data_ready_channel, create_request_for_space_channel,
             },
             hostmem_buffer::HostMemBufferManager,
+            shm_buffer::ShmBlock,
             storage_buffer::StorageBufferManager,
         },
     },
@@ -523,8 +525,8 @@ async fn device_to_host_transfer(
                 block_id: out_from_gpu_entry.handle_idx,
                 size: out_from_gpu_entry.size,
             };
-            let offset = match shm_buffer_mgr.try_reserve(&src_buffer_id) {
-                Some(offset) => offset,
+            let blocks = match shm_buffer_mgr.try_reserve(&src_buffer_id) {
+                Some(blocks) => blocks,
                 None => {
                     // No shm is immediately available; wait for shm->backend to free up space
                     req_for_shm.prio_request();
@@ -532,7 +534,7 @@ async fn device_to_host_transfer(
                         .reserve_with_max_pending(&src_buffer_id, 0, Some(Duration::from_secs(18)))
                         .await
                     {
-                        Ok(offset) => offset,
+                        Ok(blocks) => blocks,
                         Err(_) => {
                             // No shm is available given the plan; we need to notify shm -> backend to free up space
                             req_for_shm.request(1);
@@ -559,8 +561,8 @@ async fn device_to_host_transfer(
             };
 
             let args = MigrationArgs {
-                host_buffer_offset: vec![offset],
-                size: vec![out_from_gpu_entry.size],
+                host_buffer_offset: blocks.iter().map(|b| b.offset.0).collect(),
+                size: blocks.iter().map(|b| b.data_size).collect(),
                 device,
                 handle_idx: out_from_gpu_entry.handle_idx,
                 host_to_device: false,
@@ -725,13 +727,13 @@ async fn host_to_device_transfer_inner(
     rpc_client: &SidecarClient,
     shm_buffer_mgr: &ShmBufferManager,
 ) -> Result<(), BufferId> {
-    let offset = shm_buffer_mgr
+    let blocks = shm_buffer_mgr
         .get_buffer(&buffer_id)
-        .ok_or(buffer_id.clone())?
-        .addr;
+        .ok_or(buffer_id.clone())?;
+
     let args = MigrationArgs {
-        host_buffer_offset: vec![offset],
-        size: vec![buffer_id.size],
+        host_buffer_offset: blocks.iter().map(|b| b.offset.0).collect(),
+        size: blocks.iter().map(|b| b.data_size).collect(),
         device: dst_device,
         handle_idx: buffer_id.block_id,
         host_to_device: true,
@@ -766,8 +768,8 @@ async fn backend_to_shm_transfer(
     let total = host_mem_to_shm.len();
     let timeout = Duration::from_secs(6);
     for buffer_id in host_mem_to_shm {
-        let shm_buf_offset = match shm_buffer_mgr.try_reserve(&buffer_id) {
-            Some(offset) => offset,
+        let blocks = match shm_buffer_mgr.try_reserve(&buffer_id) {
+            Some(blocks) => blocks,
             None => {
                 req_for_shm.prio_request();
                 match shm_buffer_mgr
@@ -782,7 +784,7 @@ async fn backend_to_shm_transfer(
                             .reserve_with_timeout(&buffer_id, Some(timeout))
                             .await
                         {
-                            Ok(offset) => offset,
+                            Ok(blocks) => blocks,
                             Err(_) => {
                                 tracing::warn!(
                                     "Failed to reserve shm for backend->shm; buffer {:?} after {:?}; moved {}/{}",
@@ -799,16 +801,16 @@ async fn backend_to_shm_transfer(
                 }
             }
         };
-        let buf = unsafe {
+        let mut buf = unsafe {
             get_buffer_ref_mut(
                 convert_to_static(&shm_buffer_mgr), // safety: the lifetime of the buffer will not exceed the end of the block
                 &buffer_id,
-                shm_buf_offset,
+                &blocks,
             )
         };
         match &backend_mgr {
             BackendManager::HostMem(mgr) => {
-                panic_on_error!(mgr.load_to(&buffer_id, buf));
+                panic_on_error!(mgr.load_to_vectored(&buffer_id, &mut buf));
                 warn_on_send_error!(
                     in_data_ready_tx.send(buffer_id.clone(), BufferLocation::HostMem)
                 );
@@ -817,7 +819,8 @@ async fn backend_to_shm_transfer(
                 let buf_id = buffer_id.clone();
                 let mgr = mgr.clone();
                 panic_on_error!(panic_on_error!(
-                    tokio::task::spawn_blocking(move || mgr.load_to(&buf_id, buf)).await
+                    tokio::task::spawn_blocking(move || mgr.load_to_vectored(&buf_id, &mut buf))
+                        .await
                 ));
                 warn_on_send_error!(
                     in_data_ready_tx.send(buffer_id.clone(), BufferLocation::Storage)
@@ -995,7 +998,11 @@ async fn hostmem_to_storage_transfer(
         let storage_mgr = storage_mgr.clone();
         let buf = panic_on_error!(
             tokio::task::spawn_blocking(move || {
-                panic_on_error!(storage_mgr.store(&buffer_id, &buf.0));
+                let buf_vec = buf
+                    .iter()
+                    .map(|x| IoSlice::new(x.0.iter().as_slice()))
+                    .collect::<Vec<_>>();
+                panic_on_error!(storage_mgr.store_vectored(&buffer_id, &buf_vec));
                 buf
             })
             .await
@@ -1010,24 +1017,30 @@ async fn storage_to_hostmem_transfer(
     storage_mgr: Arc<StorageBufferManager>,
 ) {
     for buffer_id in list {
-        let Some(mut buf) = hostmem_mgr.allocate_empty_buffer() else {
+        let Some(mut buf) = hostmem_mgr.allocate_empty_buffer(buffer_id.size as usize) else {
             tracing::warn!(
-                "No free buffer in host memory buffer manager to load buffer ID {:?}",
+                "No enough free buffer in host memory buffer manager to load buffer ID {:?}",
                 buffer_id
             );
             continue;
         };
+        assert_eq!(
+            buf.iter().map(|x| x.0.len()).sum::<usize>(),
+            buffer_id.size as usize
+        );
         let storage_mgr = storage_mgr.clone();
         let buf_id = buffer_id.clone();
-        let mut buf = panic_on_error!(
+        let buf = panic_on_error!(
             tokio::task::spawn_blocking(move || {
-                panic_on_error!(storage_mgr.load_to(&buf_id, &mut buf.0));
+                let mut slices = buf
+                    .iter_mut()
+                    .map(|x| IoSliceMut::new(&mut x.0))
+                    .collect::<Vec<_>>();
+                panic_on_error!(storage_mgr.load_to_vectored(&buf_id, &mut slices));
                 buf
             })
             .await
         );
-        // Resize the buffer to the actual size
-        buf.0.resize(buffer_id.size as usize, 0);
         hostmem_mgr.return_associated_buffer(buffer_id, buf);
     }
 }
@@ -1039,31 +1052,41 @@ async fn storage_to_hostmem_transfer(
 unsafe fn get_buffer_ref_mut<'a>(
     shm_buffer_mgr: &'a ShmBufferManager,
     buffer_id: &BufferId,
-    shm_offset: u64,
-) -> &'a mut [u8] {
-    unsafe {
-        std::slice::from_raw_parts_mut(
-            shm_buffer_mgr
-                .at_offset(shm_offset, buffer_id.size as usize)
-                .unwrap(),
-            buffer_id.size as usize,
-        )
+    blocks: &[ShmBlock],
+) -> Vec<IoSliceMut<'a>> {
+    let mut res = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let slice = unsafe {
+            std::slice::from_raw_parts_mut(
+                shm_buffer_mgr
+                    .at_offset(block.offset.0, block.data_size as usize)
+                    .unwrap(),
+                buffer_id.size as usize,
+            )
+        };
+        res.push(IoSliceMut::new(slice));
     }
+    res
 }
 
 unsafe fn get_buffer_ref<'a>(
     shm_buffer_mgr: &'a ShmBufferManager,
     buffer_id: &BufferId,
-    shm_offset: u64,
-) -> &'a [u8] {
-    unsafe {
-        std::slice::from_raw_parts(
-            shm_buffer_mgr
-                .at_offset(shm_offset, buffer_id.size as usize)
-                .unwrap(),
-            buffer_id.size as usize,
-        )
+    blocks: &[ShmBlock],
+) -> Vec<IoSlice<'a>> {
+    let mut res = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let slice = unsafe {
+            std::slice::from_raw_parts(
+                shm_buffer_mgr
+                    .at_offset(block.offset.0, block.data_size as usize)
+                    .unwrap(),
+                buffer_id.size as usize,
+            )
+        };
+        res.push(IoSlice::new(slice));
     }
+    res
 }
 
 unsafe fn convert_to_static<T>(r: &T) -> &'static T {
@@ -1077,17 +1100,15 @@ async fn shm_to_backend_transfer_inner(
     storage_buffer_mgr: &Arc<StorageBufferManager>,
     mut target_loc: BufferLocation,
 ) -> Result<BufferLocation, HybridBufferError> {
-    let buf_offset = shm_buffer_mgr
+    let blocks = shm_buffer_mgr
         .get_buffer(buffer_id)
-        .ok_or(HybridBufferError::NoBufferId)?
-        .addr;
+        .ok_or(HybridBufferError::NoBufferId)?;
     // Safety: the lifetime of the buffer will not exceed the end of the block
-    let buf_ref =
-        unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), buffer_id, buf_offset) };
+    let buf_ref = unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), buffer_id, &blocks) };
     assert!(target_loc == BufferLocation::HostMem || target_loc == BufferLocation::Storage);
 
     if target_loc == BufferLocation::HostMem {
-        match hostmem_buffer_mgr.store(buffer_id, buf_ref) {
+        match hostmem_buffer_mgr.store_vectored(buffer_id, &buf_ref) {
             Ok(_) => {}
             Err(HybridBufferError::MemoryExhausted) => {
                 target_loc = BufferLocation::Storage;
@@ -1099,7 +1120,8 @@ async fn shm_to_backend_transfer_inner(
     if target_loc == BufferLocation::Storage {
         let buf_id = buffer_id.clone();
         let storage_buffer_mgr = storage_buffer_mgr.clone();
-        tokio::task::spawn_blocking(move || storage_buffer_mgr.store(&buf_id, buf_ref)).await??;
+        tokio::task::spawn_blocking(move || storage_buffer_mgr.store_vectored(&buf_id, &buf_ref))
+            .await??;
     }
 
     shm_buffer_mgr

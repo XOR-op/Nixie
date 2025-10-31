@@ -1,24 +1,30 @@
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
-    sync::Mutex,
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
-use nihil_common::{MAX_ALLOCATION_SIZE, shm_buffer::ShmBuffer};
+use nihil_common::{MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE, shm_buffer::ShmBuffer};
 use tokio::sync::oneshot;
 
-use crate::runtime::migration::{AllocationCapacity, Offset};
+use crate::runtime::migration::{AllocationCapacity, AllocationCount, Offset};
 
-use super::{AllocationInfo, BufferId};
+use super::BufferId;
 
 pub struct ShmBufferManager {
     shm_buffer: ShmBuffer,
     inner: Mutex<ShmBufferInner>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ShmBlock {
+    pub offset: Offset,
+    pub data_size: u32,
+}
+
 struct ShmBufferInner {
-    bookkeeping: HashMap<BufferId, AllocationInfo>,
-    avail_addrs: BTreeMap<Offset, AllocationCapacity>,
+    bookkeeping: HashMap<BufferId, Arc<[ShmBlock]>>,
+    avail_addrs: Vec<Offset>,
     pending_reservations: VecDeque<oneshot::Sender<()>>,
 }
 
@@ -26,19 +32,33 @@ impl ShmBufferInner {
     fn reserve_inner(
         inner: &mut std::sync::MutexGuard<'_, Self>,
         buf_id: &BufferId,
-    ) -> Option<u64> {
-        let r = inner
-            .avail_addrs
-            .iter()
-            .find(|(_, size)| **size >= buf_id.size as u64)?;
+    ) -> Option<Arc<[ShmBlock]>> {
+        let required_len = buf_id.size.div_ceil(MIN_ALLOCATION_SIZE as u32) as usize;
+        if inner.avail_addrs.len() < required_len {
+            return None;
+        }
         tracing::trace!("ShmBuffer: available length = {}", inner.avail_addrs.len());
-        let (addr, block_size) = (*r.0, *r.1);
-        let len = inner.avail_addrs.remove(&addr);
-        debug_assert!(len.is_some());
-        inner
-            .bookkeeping
-            .insert(buf_id.clone(), AllocationInfo { addr, block_size });
-        Some(addr)
+        let blocks: Arc<[ShmBlock]> = {
+            let mut accumulated_size = 0;
+            let mut blocks = Box::new_uninit_slice(required_len);
+            for idx in 0..required_len {
+                let offset = inner.avail_addrs.pop().unwrap();
+                let block_size = if accumulated_size + MIN_ALLOCATION_SIZE as u32 > buf_id.size {
+                    buf_id.size - accumulated_size
+                } else {
+                    MIN_ALLOCATION_SIZE as u32
+                };
+                accumulated_size += block_size;
+                blocks[idx].write(ShmBlock {
+                    offset,
+                    data_size: block_size,
+                });
+            }
+            let inited = unsafe { blocks.assume_init() };
+            Arc::from(inited)
+        };
+        inner.bookkeeping.insert(buf_id.clone(), blocks.clone());
+        Some(blocks)
     }
 
     fn notify_reservation(inner: &mut std::sync::MutexGuard<'_, Self>, mut cnt: usize) {
@@ -60,11 +80,11 @@ impl ShmBufferManager {
             "Shared memory size must be a multiple of MAX_ALLOCATION_SIZE"
         );
         let shm_buffer = ShmBuffer::new(shm_path, shm_size, true)?;
-        let mut avail_addrs = BTreeMap::new();
+        let mut avail_addrs = Vec::with_capacity(shm_size / MIN_ALLOCATION_SIZE + 1);
         let mut offset = 0;
         while offset < shm_size as u64 {
-            let size = MAX_ALLOCATION_SIZE as u64;
-            avail_addrs.insert(offset, size);
+            let size = MIN_ALLOCATION_SIZE as u64;
+            avail_addrs.push(Offset(offset));
             offset += size;
         }
         Ok(Self {
@@ -77,32 +97,32 @@ impl ShmBufferManager {
         })
     }
 
-    pub fn get_buffer(&self, buf_id: &BufferId) -> Option<AllocationInfo> {
+    pub fn get_buffer(&self, buf_id: &BufferId) -> Option<Arc<[ShmBlock]>> {
         self.inner.lock().unwrap().bookkeeping.get(buf_id).cloned()
     }
 
-    /// Returns: a list of lengths of free segments
-    pub fn free_segments(&self) -> Vec<AllocationCapacity> {
-        self.inner
-            .lock()
-            .unwrap()
-            .avail_addrs
-            .values()
-            .cloned()
-            .collect()
+    /// Returns: length of free segments
+    pub fn free_blocks_count(&self) -> AllocationCount {
+        AllocationCount(self.inner.lock().unwrap().avail_addrs.len() as u32)
     }
 
     pub unsafe fn at_offset(&self, offset: u64, size: usize) -> Option<*mut u8> {
         unsafe { self.shm_buffer.at_offset(offset, size) }
     }
 
+    // buffer_id -> buffer allocation length in bytes
     pub fn dump_buffers(&self) -> HashMap<BufferId, AllocationCapacity> {
         self.inner
             .lock()
             .unwrap()
             .bookkeeping
             .iter()
-            .map(|(k, v)| (k.clone(), v.block_size))
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    AllocationCapacity((v.len() * MIN_ALLOCATION_SIZE) as u32),
+                )
+            })
             .collect()
     }
 
@@ -117,7 +137,7 @@ impl ShmBufferManager {
 
 // Allocation and release logic
 impl ShmBufferManager {
-    pub fn try_reserve(&self, buf_id: &BufferId) -> Option<u64> {
+    pub fn try_reserve(&self, buf_id: &BufferId) -> Option<Arc<[ShmBlock]>> {
         let mut inner = self.inner.lock().unwrap();
         ShmBufferInner::reserve_inner(&mut inner, buf_id)
     }
@@ -136,11 +156,11 @@ impl ShmBufferManager {
                     let inner = self.inner.lock().unwrap();
                     let pending_len = inner.pending_reservations.len();
                     tracing::warn!(
-                        "Reservation timeout ({:?}) for buffer {:?}, pending reservations: {}, free size = {}",
+                        "Reservation timeout ({:?}) for buffer {:?}, pending reservations: {}, free chunk num = {}",
                         timeout,
                         buf_id,
                         pending_len,
-                        inner.avail_addrs.values().sum::<u64>()
+                        inner.avail_addrs.len()
                     );
                     Err(())
                 }
@@ -157,7 +177,7 @@ impl ShmBufferManager {
         buf_id: &BufferId,
         max_pending: usize,
         timeout: Option<Duration>,
-    ) -> Result<u64, ()> {
+    ) -> Result<Arc<[ShmBlock]>, ()> {
         loop {
             let rx = {
                 let (tx, rx) = oneshot::channel();
@@ -179,7 +199,7 @@ impl ShmBufferManager {
         &self,
         buf_id: &BufferId,
         timeout: Option<Duration>,
-    ) -> Result<u64, ()> {
+    ) -> Result<Arc<[ShmBlock]>, ()> {
         loop {
             let rx = {
                 let (tx, rx) = oneshot::channel();
@@ -194,13 +214,13 @@ impl ShmBufferManager {
         }
     }
 
-    pub async fn reserve(&self, buf_id: &BufferId) -> u64 {
+    pub async fn reserve(&self, buf_id: &BufferId) -> Arc<[ShmBlock]> {
         self.reserve_with_timeout(buf_id, None).await.unwrap()
     }
 
-    pub fn find<F>(&self, func: F) -> Option<(BufferId, AllocationInfo)>
+    pub fn find<F>(&self, func: F) -> Option<(BufferId, Arc<[ShmBlock]>)>
     where
-        F: Fn(&BufferId, &AllocationInfo) -> bool,
+        F: Fn(&BufferId, &[ShmBlock]) -> bool,
     {
         let inner = self.inner.lock().unwrap();
         inner
@@ -212,9 +232,11 @@ impl ShmBufferManager {
 
     pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(info) = inner.bookkeeping.remove(buf_id) {
-            inner.avail_addrs.insert(info.addr, info.block_size);
-            ShmBufferInner::notify_reservation(&mut inner, 1);
+        if let Some(blocks) = inner.bookkeeping.remove(buf_id) {
+            for blk in blocks.iter() {
+                inner.avail_addrs.push(blk.offset);
+            }
+            ShmBufferInner::notify_reservation(&mut inner, todo!());
             Ok(())
         } else {
             Err(())
@@ -226,15 +248,17 @@ impl ShmBufferManager {
         let mut cnt = 0;
         {
             let inner_ref = &mut *inner;
-            inner_ref.bookkeeping.retain(|buf_id, info| {
+            inner_ref.bookkeeping.retain(|buf_id, blocks| {
                 let will_keep = buf_id.pid != pid;
                 if !will_keep {
-                    inner_ref.avail_addrs.insert(info.addr, info.block_size);
-                    cnt += 1;
+                    for blk in blocks.iter() {
+                        inner_ref.avail_addrs.push(blk.offset);
+                        cnt += 1;
+                    }
                 }
                 will_keep
             });
         }
-        ShmBufferInner::notify_reservation(&mut inner, cnt);
+        ShmBufferInner::notify_reservation(&mut inner, todo!());
     }
 }
