@@ -804,7 +804,6 @@ async fn backend_to_shm_transfer(
         let mut buf = unsafe {
             get_buffer_ref_mut(
                 convert_to_static(&shm_buffer_mgr), // safety: the lifetime of the buffer will not exceed the end of the block
-                &buffer_id,
                 &blocks,
             )
         };
@@ -1051,7 +1050,6 @@ async fn storage_to_hostmem_transfer(
 #[allow(clippy::mut_from_ref)]
 unsafe fn get_buffer_ref_mut<'a>(
     shm_buffer_mgr: &'a ShmBufferManager,
-    buffer_id: &BufferId,
     blocks: &[ShmBlock],
 ) -> Vec<IoSliceMut<'a>> {
     let mut res = Vec::with_capacity(blocks.len());
@@ -1061,7 +1059,7 @@ unsafe fn get_buffer_ref_mut<'a>(
                 shm_buffer_mgr
                     .at_offset(block.offset.0, block.data_size as usize)
                     .unwrap(),
-                buffer_id.size as usize,
+                block.data_size as usize,
             )
         };
         res.push(IoSliceMut::new(slice));
@@ -1071,7 +1069,6 @@ unsafe fn get_buffer_ref_mut<'a>(
 
 unsafe fn get_buffer_ref<'a>(
     shm_buffer_mgr: &'a ShmBufferManager,
-    buffer_id: &BufferId,
     blocks: &[ShmBlock],
 ) -> Vec<IoSlice<'a>> {
     let mut res = Vec::with_capacity(blocks.len());
@@ -1081,7 +1078,7 @@ unsafe fn get_buffer_ref<'a>(
                 shm_buffer_mgr
                     .at_offset(block.offset.0, block.data_size as usize)
                     .unwrap(),
-                buffer_id.size as usize,
+                block.data_size as usize,
             )
         };
         res.push(IoSlice::new(slice));
@@ -1104,7 +1101,7 @@ async fn shm_to_backend_transfer_inner(
         .get_buffer(buffer_id)
         .ok_or(HybridBufferError::NoBufferId)?;
     // Safety: the lifetime of the buffer will not exceed the end of the block
-    let buf_ref = unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), buffer_id, &blocks) };
+    let buf_ref = unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), &blocks) };
     assert!(target_loc == BufferLocation::HostMem || target_loc == BufferLocation::Storage);
 
     if target_loc == BufferLocation::HostMem {

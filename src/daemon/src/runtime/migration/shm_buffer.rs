@@ -236,7 +236,7 @@ impl ShmBufferManager {
             for blk in blocks.iter() {
                 inner.avail_addrs.push(blk.offset);
             }
-            ShmBufferInner::notify_reservation(&mut inner, todo!());
+            ShmBufferInner::notify_reservation(&mut inner, blocks.len());
             Ok(())
         } else {
             Err(())
@@ -259,6 +259,6 @@ impl ShmBufferManager {
                 will_keep
             });
         }
-        ShmBufferInner::notify_reservation(&mut inner, todo!());
+        ShmBufferInner::notify_reservation(&mut inner, cnt);
     }
 }

@@ -55,6 +55,10 @@ impl HostMemBufferManager {
         data_len: usize,
     ) -> Result<Vec<BlockMemBuffer>, HybridBufferError> {
         if data_len > MAX_ALLOCATION_SIZE {
+            tracing::warn!(
+                "Invalid store request: data length = {}",
+                nihil_common::general::pretty_size(data_len as u64)
+            );
             return Err(HybridBufferError::InvalidInputBuffer);
         }
         if let Some(block_buffers) = inner.alloc_n_buffers(data_len.div_ceil(MIN_ALLOCATION_SIZE)) {
@@ -107,6 +111,11 @@ impl HostMemBufferManager {
         data_len: usize,
     ) -> Result<Vec<BlockMemBuffer>, HybridBufferError> {
         if buffer_id.size as usize > MAX_ALLOCATION_SIZE || data_len < buffer_id.size as usize {
+            tracing::warn!(
+                "Invalid load request: buffer size = {}, data length = {}",
+                nihil_common::general::pretty_size(buffer_id.size as u64),
+                nihil_common::general::pretty_size(data_len as u64)
+            );
             return Err(HybridBufferError::InvalidInputBuffer);
         }
         if let Some(block_buffers) = inner.mem_bookkeeping.remove(buffer_id) {
@@ -138,7 +147,8 @@ impl HostMemBufferManager {
         data: &mut [std::io::IoSliceMut<'_>],
     ) -> Result<BufferLocation, HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
-        let block_buffers = Self::load_preparation(&mut inner, buffer_id, data.len())?;
+        let total_size: usize = data.iter().map(|b| b.len()).sum();
+        let block_buffers = Self::load_preparation(&mut inner, buffer_id, total_size)?;
         assert_eq!(block_buffers.len(), data.len());
         for (src, dst) in block_buffers.iter().zip(data.iter_mut()) {
             let copy_size = src.0.len();

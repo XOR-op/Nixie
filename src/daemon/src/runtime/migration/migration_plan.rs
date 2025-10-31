@@ -124,18 +124,6 @@ impl AbstractDataHandle for DataManagerHandle {
     }
 }
 
-macro_rules! check_size {
-    ($given:expr, $expected:expr, $msg:expr
-    ) => {
-        if ($given as u64) < ($expected as u64) {
-            panic!(
-                "TODO: {} {} is smaller than expected {}, which not implemented",
-                $msg, $given, $expected
-            );
-        }
-    };
-}
-
 /// Create a migration task that migrates data at the cost of others being moved out.
 /// `out_from_gpu`: the earlier in the list, the more likely to be moved out.
 pub(crate) fn realtime_migrate_task<Client, Handle>(
@@ -746,8 +734,11 @@ pub(super) mod tests {
     }
 
     impl AbstractDataHandle for MockManager {
-        fn get_shm_block_count(&self, buf_id: &BufferId) -> Option<AllocationCapacity> {
-            self.shm_map.get(buf_id).copied()
+        fn get_shm_block_count(&self, buf_id: &BufferId) -> Option<AllocationCount> {
+            self.shm_map
+                .get(buf_id)
+                .copied()
+                .map(|capa| AllocationCount(capa.0 / MIN_ALLOCATION_SIZE as u32))
         }
         fn hostmem_contains(&self, buf_id: &BufferId) -> bool {
             self.hostmem_map.contains_key(buf_id)
@@ -764,15 +755,18 @@ pub(super) mod tests {
             self.hostmem_map.clone()
         }
 
-        fn shm_free_segments(&self) -> Vec<AllocationCapacity> {
-            let free_cnt = (self.shm_capacity - self.shm_map.values().sum::<u64>())
+        fn shm_free_blocks_count(&self) -> AllocationCount {
+            let free_cnt = (self.shm_capacity
+                - self.shm_map.values().map(|x| x.0 as u64).sum::<u64>())
                 / MAX_ALLOCATION_SIZE as u64;
-            vec![MAX_ALLOCATION_SIZE as u64; free_cnt as usize]
+            AllocationCount(free_cnt as u32)
         }
-        fn hostmem_free_segments(&self) -> Vec<AllocationCapacity> {
-            let free_cnt = (self.hostmem_capacity - self.hostmem_map.values().sum::<u64>())
+
+        fn hostmem_free_blocks_count(&self) -> AllocationCount {
+            let free_cnt = (self.hostmem_capacity
+                - self.hostmem_map.values().map(|x| x.0 as u64).sum::<u64>())
                 / MAX_ALLOCATION_SIZE as u64;
-            vec![MAX_ALLOCATION_SIZE as u64; free_cnt as usize]
+            AllocationCount(free_cnt as u32)
         }
 
         fn gpu_free_space(&self, devices: &[GlobalDeviceId]) -> HashMap<GlobalDeviceId, u64> {
@@ -783,6 +777,13 @@ pub(super) mod tests {
                 }
             }
             result
+        }
+
+        fn get_hostmem_block_count(&self, buf_id: &BufferId) -> Option<AllocationCount> {
+            self.hostmem_map
+                .get(buf_id)
+                .copied()
+                .map(|capa| AllocationCount(capa.0 / MIN_ALLOCATION_SIZE as u32))
         }
     }
 
@@ -811,13 +812,25 @@ pub(super) mod tests {
         let mut storage_map = HashMap::new();
         for process_data in process_data_list.iter() {
             for buf_id in process_data.shm_buffer_ids.iter() {
-                shm_map.insert(buf_id.clone(), buf_id.size as u64);
+                shm_map.insert(
+                    buf_id.clone(),
+                    AllocationCapacity(
+                        buf_id.size.div_ceil(MIN_ALLOCATION_SIZE as u32)
+                            * MIN_ALLOCATION_SIZE as u32,
+                    ),
+                );
             }
             for buf_id in process_data.hostmem_buffer_ids.iter() {
-                hostmem_map.insert(buf_id.clone(), buf_id.size as u64);
+                hostmem_map.insert(
+                    buf_id.clone(),
+                    AllocationCapacity(
+                        buf_id.size.div_ceil(MIN_ALLOCATION_SIZE as u32)
+                            * MIN_ALLOCATION_SIZE as u32,
+                    ),
+                );
             }
             for buf_id in process_data.storage_buffer_ids.iter() {
-                storage_map.insert(buf_id.clone(), buf_id.size as u64);
+                storage_map.insert(buf_id.clone(), AllocationCapacity(buf_id.size));
             }
         }
         assert!(
@@ -827,8 +840,8 @@ pub(super) mod tests {
                 .sum::<u64>()
                 <= gpu_capacity
         );
-        assert!(shm_map.values().map(|x| *x as u64).sum::<u64>() <= shm_capacity);
-        assert!(hostmem_map.values().map(|x| *x as u64).sum::<u64>() <= hostmem_capacity);
+        assert!(shm_map.values().map(|x| x.0 as u64).sum::<u64>() <= shm_capacity);
+        assert!(hostmem_map.values().map(|x| x.0 as u64).sum::<u64>() <= hostmem_capacity);
         let data_manager = MockManager {
             shm_map,
             hostmem_map,
@@ -959,7 +972,7 @@ pub(super) mod tests {
         let shm_to_backend = task
             .shm_to_backend
             .iter()
-            .map(|(k, v)| BTreeMap::from([(k.pid, HashMap::from([(*v, k.size)]))]))
+            .map(|(k, v)| BTreeMap::from([(k.pid, HashMap::from([(*v, k.size as u64)]))]))
             .reduce(|mut acc, m| {
                 for (k, v) in m {
                     acc.entry(k)
@@ -1004,13 +1017,14 @@ pub(super) mod tests {
             // no data to move out, no deadlock
             return true;
         }
-        let shm_free_size: u64 = task.data_manager.shm_free_segments().iter().sum();
+        let shm_free_size: u64 =
+            task.data_manager.shm_free_blocks_count().0 as u64 * MAX_ALLOCATION_SIZE as u64;
         // let hostmem_free_size: u64 = task.data_manager.hostmem_free_segments().iter().sum();
         let mut ready_shm_xfer = 0;
         // check if any shm to backend is already available in shm
         for (buf_id, _) in task.shm_to_backend.iter() {
             if task.data_manager.shm_contains(buf_id) {
-                ready_shm_xfer += buf_id.size;
+                ready_shm_xfer += buf_id.size as u64;
             }
         }
         println!(
