@@ -36,9 +36,9 @@ pub(crate) fn init_cuda_env() {
     } else {
         check_cu_err!(res, "CUDA initialization test failed");
     }
+    init_mapped_gpu_memory();
 }
 
-// should only
 pub(crate) fn init_all_entrypoint() {
     static FIRST_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if FIRST_TIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
@@ -65,4 +65,21 @@ pub(crate) fn init_max_available_vram_size(sizes: &[(ProcessLocalDeviceId, u64)]
             .map(|(dev_id, size)| (dev_id.0, *size))
             .collect(),
     );
+}
+
+fn init_mapped_gpu_memory() {
+    set_device(0);
+    unsafe {
+        let global_buf = crate::global_shm_buffer();
+        let shm_buf_ptr = global_buf.at_offset(0, 1).unwrap();
+        let size = global_buf.size();
+        check_cu_err!(
+            cudarc::driver::sys::cuMemHostRegister_v2(
+                shm_buf_ptr as *mut nix::libc::c_void,
+                size,
+                cudarc::driver::sys::CU_MEMHOSTALLOC_PORTABLE,
+            ),
+            "Failed to register SHM buffer with CUDA"
+        );
+    }
 }
