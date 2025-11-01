@@ -265,7 +265,7 @@ impl HostMemBufferManager {
     }
 
     pub fn capacity(&self) -> usize {
-        self.inner.lock().unwrap().max_mem_buffer_count * MAX_ALLOCATION_SIZE
+        self.inner.lock().unwrap().max_mem_buffer_count * MIN_ALLOCATION_SIZE
     }
 }
 

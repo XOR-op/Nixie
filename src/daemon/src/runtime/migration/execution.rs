@@ -116,6 +116,11 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
                     .sum::<u64>()
             })
             .unwrap_or_default();
+        let into_gpu_chunk_count = self
+            .into_gpu
+            .as_ref()
+            .map(|into_gpu| into_gpu.1.device_map.values().flatten().count())
+            .unwrap_or_default();
         let income_pid_str = self
             .into_gpu
             .as_ref()
@@ -128,13 +133,17 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
             .map(|(pid, specs, _, _)| {
                 (
                     format!("{}", pid),
-                    pretty_size(
-                        specs
-                            .device_map
-                            .values()
-                            .flatten()
-                            .map(|e| e.size as u64)
-                            .sum::<u64>(),
+                    format!(
+                        "{}({})",
+                        pretty_size(
+                            specs
+                                .device_map
+                                .values()
+                                .flatten()
+                                .map(|e| e.size as u64)
+                                .sum::<u64>(),
+                        ),
+                        specs.device_map.values().flatten().count()
                     ),
                 )
             })
@@ -143,7 +152,10 @@ impl<Client, Handle> DataMigrationTask<Client, Handle> {
         if self.into_gpu.is_some() {
             data.insert(
                 "shm -> gpu",
-                HashMap::from([(income_pid_str.clone(), pretty_size(into_gpu_size))]),
+                HashMap::from([(
+                    income_pid_str.clone(),
+                    format!("{}({})", pretty_size(into_gpu_size), into_gpu_chunk_count),
+                )]),
             );
         }
         if !self.out_from_gpu.is_empty() {
@@ -443,7 +455,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                 "Data migration completed in {:.3}s, largest transfer size = {}, speed = {:.3} GB/s",
                 elapsed.as_secs_f64(),
                 pretty_size(largest_transfer_size),
-                (largest_transfer_size as f64 / elapsed.as_secs_f64() / 1e9)
+                (largest_transfer_size as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0 * 1024.0))
             );
         } else {
             tracing::debug!("No migration needed");

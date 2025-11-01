@@ -14,9 +14,9 @@ use tarpc::{
 };
 
 use crate::comm::msg::A2SMessage;
-use crate::{GENERIC_DATA, check_cu_err, global_shm_buffer, info_eprintln, schedule, set_device};
+use crate::{GENERIC_DATA, info_eprintln, schedule};
 
-use crate::init::{init_cuda_env, init_generic_data, init_shm_buffer};
+use crate::init::{init_generic_data, init_shm_buffer};
 
 use super::communication::SidecarServer;
 
