@@ -76,7 +76,7 @@ pub fn pretty_size<T>(size_in_bytes: T) -> String
 where
     T: Into<u64>,
 {
-    let units = ["B", "KB", "MB", "GB"];
+    let units = ["B", "KiB", "MiB", "GiB"];
     let mut size = Into::<u64>::into(size_in_bytes) as f64;
     let mut unit = 0;
     while size >= 1024.0 && unit < units.len() - 1 {

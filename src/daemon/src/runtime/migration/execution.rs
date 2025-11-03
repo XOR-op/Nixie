@@ -455,7 +455,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                 "Data migration completed in {:.3}s, largest transfer size = {}, speed = {:.3} GB/s",
                 elapsed.as_secs_f64(),
                 pretty_size(largest_transfer_size),
-                (largest_transfer_size as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0 * 1024.0))
+                (largest_transfer_size as f64 / elapsed.as_secs_f64() / 1e9) // We use 1000^3 for GB, is consistent with nvbandwidth
             );
         } else {
             tracing::debug!("No migration needed");

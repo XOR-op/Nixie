@@ -128,7 +128,7 @@ impl AbstractDataHandle for DataManagerHandle {
 /// `out_from_gpu`: the earlier in the list, the more likely to be moved out.
 pub(crate) fn realtime_migrate_task<Client, Handle>(
     into_gpu: (i32, DeviceRequestArgs, Client, Arc<DeviceOrdinalMapping>),
-    out_from_gpu: &[(i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>)],
+    mut out_from_gpu: Vec<(i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>)>,
     data_manager: Handle,
     with_free_memory: bool,
 ) -> Option<DataMigrationTask<Client, Handle>>
@@ -258,10 +258,13 @@ where
         );
         let mut accu_size = 0;
         // for every src process
-        for (out_from_gpu_pid, out_from_gpu_entries, rpc_client, dev_mapping) in out_from_gpu.iter()
+        for (out_from_gpu_pid, out_from_gpu_entries, rpc_client, dev_mapping) in
+            out_from_gpu.iter_mut()
         {
-            if let Some(entries) = out_from_gpu_entries.allocations.get(&global_id) {
+            if let Some(mut entries) = out_from_gpu_entries.allocations.remove(&global_id) {
                 let mut migration_entries = Vec::new();
+                // sort entries by size descending
+                entries.sort_by(|a, b| b.size.cmp(&a.size));
                 // check per device per src process
                 for entry in entries {
                     if accu_size >= into_gpu_required_size {
@@ -570,7 +573,7 @@ where
 pub(crate) fn gpu_prefetch_task<Client, Handle>(
     current_pid: Option<i32>,
     into_gpu: (i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>),
-    out_from_gpu: &[(i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>)],
+    out_from_gpu: Vec<(i32, ProcessResidualData, Client, Arc<DeviceOrdinalMapping>)>,
     data_manager: Handle,
 ) -> Option<DataMigrationTask<Client, Handle>>
 where
@@ -878,7 +881,7 @@ pub(super) mod tests {
                 (),
                 dev_mapping.clone(),
             ),
-            &process_data_list
+            process_data_list
                 .iter()
                 .filter(|p| p.pid != schedued_pid && !p.gpu_buffer_ids.is_empty())
                 .map(|p| {

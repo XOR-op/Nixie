@@ -455,7 +455,7 @@ impl Scheduler {
             let Some(gpu_task) = gpu_prefetch_task(
                 active_pid,
                 (in_pid, res, new_handle.client(), new_handle.dev_mapping()),
-                &others,
+                others,
                 self.data_manager.clone(),
             ) else {
                 let error_msg = "Cannot create GPU prefetch task";
@@ -580,7 +580,7 @@ impl Scheduler {
                     new_handle.client(),
                     new_handle.dev_mapping(),
                 ),
-                &others,
+                others,
                 data_manager,
                 true,
             ) else {
