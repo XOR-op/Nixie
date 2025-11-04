@@ -197,7 +197,8 @@ where
         DeviceRequestArgs::ResidualData(process_residual_data) => process_residual_data
             .allocations
             .into_iter()
-            .map(|(global_id, entries)| {
+            .map(|(global_id, mut entries)| {
+                entries.sort_by(|a, b| a.size.cmp(&b.size).reverse());
                 (
                     global_id,
                     entries
@@ -264,7 +265,7 @@ where
             if let Some(mut entries) = out_from_gpu_entries.allocations.remove(&global_id) {
                 let mut migration_entries = Vec::new();
                 // sort entries by size descending
-                entries.sort_by(|a, b| b.size.cmp(&a.size));
+                entries.sort_by(|a, b| a.size.cmp(&b.size).reverse());
                 // check per device per src process
                 for entry in entries {
                     if accu_size >= into_gpu_required_size {

@@ -526,6 +526,12 @@ async fn device_to_host_transfer(
         .iter()
         .map(|(_, _, _, entries)| entries.len())
         .sum::<usize>();
+
+    #[allow(unused_variables, unused_mut)]
+    let mut profiling_vec: Vec<(u32, u128, u128)> = Vec::with_capacity(512);
+    #[allow(unused_variables, unused_mut)]
+    let mut last_time = std::time::Instant::now();
+
     let mut moved_cnt = 0;
     for (out_from_gpu_pid, device, rpc_client, out_from_gpu_entries) in out_from_gpu {
         // Migrate each entry
@@ -579,6 +585,10 @@ async fn device_to_host_transfer(
                 handle_idx: out_from_gpu_entry.handle_idx,
                 host_to_device: false,
             };
+
+            #[allow(unused_variables)]
+            let profiling_buf_size = src_buffer_id.size;
+
             // Send migration request to the source process
             if let Ok(resp) = rpc_client.migrate(tarpc::context::current(), args).await {
                 // Rx may close early if the client is requiring space for allocation
@@ -588,11 +598,27 @@ async fn device_to_host_transfer(
             } else {
                 tracing::warn!("Failed to complete D2H migration RPC to source process");
             }
+
+            #[cfg(feature = "profiling")]
+            {
+                profiling_vec.push((
+                    profiling_buf_size,
+                    last_time.elapsed().as_micros(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_micros(),
+                ));
+                last_time = std::time::Instant::now();
+            }
+
             moved_cnt += 1;
         }
     }
     drop(gpu_mem_token_tx); // close the channel
     tracing::trace!("D2H migration moved {} buffers", total);
+    #[cfg(feature = "profiling")]
+    tracing::trace!("!! D2H-Profile: {:?}", profiling_vec);
 }
 
 macro_rules! warn_no_buffer_id {
@@ -643,6 +669,11 @@ async fn host_to_device_transfer(
     let mut token_received = 0;
     let mut token_not_enough = 0;
 
+    #[allow(unused_variables, unused_mut)]
+    let mut profiling_vec: Vec<(u32, u128, u128)> = Vec::with_capacity(512);
+    #[allow(unused_variables, unused_mut)]
+    let mut last_time = std::time::Instant::now();
+
     loop {
         if next_entry.is_none() {
             // get next entry when dst_entries is depleted
@@ -682,6 +713,8 @@ async fn host_to_device_transfer(
                         token_not_enough
                     );
                 }
+                #[cfg(feature = "profiling")]
+                tracing::trace!("!! H2D-Profile: {:?}", profiling_vec);
                 return;
             }
         }
@@ -704,6 +737,8 @@ async fn host_to_device_transfer(
                 continue;
             }
         }
+        #[allow(unused_variables)]
+        let profiling_buf_size = buffer_id.size;
         warn_no_buffer_id!(
             host_to_device_transfer_inner(
                 next_entry.take().unwrap().0,
@@ -713,6 +748,20 @@ async fn host_to_device_transfer(
             )
             .await
         );
+
+        #[cfg(feature = "profiling")]
+        {
+            profiling_vec.push((
+                profiling_buf_size,
+                last_time.elapsed().as_micros(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_micros(),
+            ));
+            last_time = std::time::Instant::now();
+        }
+
         match buf_source {
             BufferSource::Ready => dst_processed += 1,
             BufferSource::Pending => pending_processed += 1,
