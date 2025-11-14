@@ -4,7 +4,11 @@ use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
-use crate::{UpdateConfigArgs, control::PrefetchResponse, error::ClientError};
+use crate::{
+    UpdateConfigArgs,
+    control::{PrefetchResponse, ProcessMetadata},
+    error::ClientError,
+};
 use nihil_common::{GlobalDeviceId, general::pretty_size};
 
 use super::ControllableClient;
@@ -94,19 +98,21 @@ impl ControlClient {
     }
 
     pub async fn list_processes(&self, verbose: bool) -> Result<(), ClientError> {
-        let processes = self
-            .client
-            .list_processes(tarpc::context::current())
-            .await
-            .map_err(|e| ClientError::ClientRpc("list_processes", e))?;
+        let processes = filter_invalid_processes(
+            self.client
+                .list_processes(tarpc::context::current())
+                .await
+                .map_err(|e| ClientError::ClientRpc("list_processes", e))?,
+        );
         // print info
         println!("Active processes: {}", processes.len());
-        for process in processes {
+        for (idx, process) in processes.into_iter().enumerate() {
             let process_name = std::fs::read_to_string(format!("/proc/{}/comm", process.pid))
                 .map(|s| s.trim().to_string())
                 .ok();
             println!(
-                "[{}]{} <{}, {}>",
+                "{} [{}]{} <{}, {}>",
+                format!("#{}", idx).magenta(),
                 process.pid.to_string().yellow(),
                 process_name
                     .map_or("".to_string(), |s| format!(" {}", s))
@@ -160,10 +166,12 @@ impl ControlClient {
         verbose: bool,
     ) -> Result<(), ClientError> {
         let processes = if with_gpu_info {
-            self.client
-                .list_processes(tarpc::context::current())
-                .await
-                .map_err(|e| ClientError::ClientRpc("list_processes", e))?
+            filter_invalid_processes(
+                self.client
+                    .list_processes(tarpc::context::current())
+                    .await
+                    .map_err(|e| ClientError::ClientRpc("list_processes", e))?,
+            )
         } else {
             Vec::new()
         };
@@ -368,4 +376,11 @@ fn pretty_precentage(p: f64) -> colored::ColoredString {
     } else {
         format!("{:.2}%", p).green()
     }
+}
+
+fn filter_invalid_processes(processes: Vec<ProcessMetadata>) -> Vec<ProcessMetadata> {
+    processes
+        .into_iter()
+        .filter(|p| p.state.is_some())
+        .collect()
 }
