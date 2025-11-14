@@ -133,7 +133,7 @@ fn main() {
             }
             Args::Usage(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
-                client.data_details(args.verbose).await.unwrap();
+                client.data_details(true, args.verbose).await.unwrap();
             }
             Args::Daemon(_) => unreachable!(),
         };

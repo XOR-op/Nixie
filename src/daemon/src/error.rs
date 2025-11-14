@@ -19,6 +19,8 @@ pub enum ClientError {
     Args(String),
     #[error("{0}: IO error {1}")]
     Io(&'static str, std::io::Error),
+    #[error("{0}: NVML error {1:?}")]
+    Nvml(&'static str, nvml_wrapper::error::NvmlError),
 }
 
 #[derive(Debug, Error)]

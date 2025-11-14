@@ -279,6 +279,8 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         .max()
         .unwrap_or(0);
 
+        // TODO: support cancellation
+        #[allow(unused_variables)]
         let (cancel_tx, cancel_rx) = watch::channel(true);
 
         // clustering by global device ID

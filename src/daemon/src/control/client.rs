@@ -5,7 +5,7 @@ use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
 use crate::{UpdateConfigArgs, control::PrefetchResponse, error::ClientError};
-use nihil_common::general::pretty_size;
+use nihil_common::{GlobalDeviceId, general::pretty_size};
 
 use super::ControllableClient;
 
@@ -130,20 +130,22 @@ impl ControlClient {
                     .iter()
                     .map(|a| a.on_gpu_bytes + a.off_gpu_bytes)
                     .sum::<u64>();
+                let on_gpu_size = allocations.iter().map(|a| a.on_gpu_bytes).sum::<u64>();
                 println!(
-                    "{} #alloc = {}, size = {}",
+                    "{} #alloc = {}, size = {}/{}",
                     format!("<Device {}>", device.0).cyan(),
                     format!("{}", allocations.len()).yellow(),
+                    pretty_size(on_gpu_size).bright_blue(),
                     pretty_size(alloc_size).blue()
                 );
                 if verbose {
                     // print each allocation info
                     for (idx, a) in allocations.into_iter().enumerate() {
                         println!(
-                            "\t{}: size = {}, on_gpu_size = {}",
+                            "\t{}: size = {}/{}",
                             format!("<Allocation {}>", idx).cyan(),
+                            pretty_size(a.on_gpu_bytes).bright_blue(),
                             pretty_size(a.on_gpu_bytes + a.off_gpu_bytes).blue(),
-                            pretty_size(a.on_gpu_bytes).blue()
                         )
                     }
                 }
@@ -152,7 +154,19 @@ impl ControlClient {
         Ok(())
     }
 
-    pub async fn data_details(&self, verbose: bool) -> Result<(), ClientError> {
+    pub async fn data_details(
+        &self,
+        with_gpu_info: bool,
+        verbose: bool,
+    ) -> Result<(), ClientError> {
+        let processes = if with_gpu_info {
+            self.client
+                .list_processes(tarpc::context::current())
+                .await
+                .map_err(|e| ClientError::ClientRpc("list_processes", e))?
+        } else {
+            Vec::new()
+        };
         let data_meta = self
             .client
             .data_details(tarpc::context::current())
@@ -173,8 +187,42 @@ impl ControlClient {
             .iter()
             .map(|p| p.data_blocks.iter().map(|b| b.size).sum::<u64>())
             .sum::<u64>();
+        // use nvml to get GPU memory usage if possible
+        if with_gpu_info {
+            let nvml = crate::staticly::get_nvml();
+            for dev in 0..(nvml
+                .device_count()
+                .map_err(|e| ClientError::Nvml("device_count", e))?)
+            {
+                let device = nvml
+                    .device_by_index(dev)
+                    .map_err(|e| ClientError::Nvml("device_by_index", e))?;
+                let memory_info = device
+                    .memory_info()
+                    .map_err(|e| ClientError::Nvml("memory_info", e))?;
+                let n_proc_on_dev = processes
+                    .iter()
+                    .map(|p| {
+                        p.allocations.iter().any(|(d, alloc)| {
+                            *d == GlobalDeviceId(dev as i32)
+                                && alloc.iter().any(|a| a.on_gpu_bytes > 0)
+                        }) as u32
+                    })
+                    .count();
+                println!(
+                    "Device {}: {}/{} ({}, {} procs)",
+                    dev,
+                    pretty_size(memory_info.used).bright_blue(),
+                    pretty_size(memory_info.total).blue(),
+                    pretty_precentage(
+                        (memory_info.used as f64) / (memory_info.total as f64) * 100.0
+                    ),
+                    n_proc_on_dev
+                );
+            }
+        }
         println!(
-            "SHM: {}/{} ({}, {} procs), HostMem: {}/{} ({}, {} procs), Disk: {} ({} procs)",
+            "SHM: {}/{} ({}, {} procs)\nHostMem: {}/{} ({}, {} procs)\nDisk: {} ({} procs)",
             pretty_size(shm_used).bright_blue(),
             pretty_size(data_meta.shm_capacity).blue(),
             pretty_precentage((shm_used as f64) / (data_meta.shm_capacity as f64) * 100.0),
@@ -207,14 +255,32 @@ impl ControlClient {
                 .keys()
                 .chain(proc_hostmem.keys())
                 .chain(proc_storage.keys())
+                .chain(processes.iter().map(|p| &p.pid))
                 .copied()
                 .collect::<std::collections::BTreeSet<i32>>();
+            if !sorted_pids.is_empty() {
+                // empty line before details
+                println!("");
+            }
             for pid in sorted_pids {
                 let process_name = std::fs::read_to_string(format!("/proc/{}/comm", pid))
                     .map(|s| s.trim().to_string())
                     .ok()
                     .unwrap_or_else(|| "Unknown".to_string());
                 let mut str = format!("[{}]{}; ", pid.to_string().yellow(), process_name.green());
+                for dev in processes.iter().filter(|p| p.pid == pid) {
+                    for (device, allocations) in &dev.allocations {
+                        let on_gpu_size = allocations.iter().map(|a| a.on_gpu_bytes).sum::<u64>();
+                        if on_gpu_size > 0 {
+                            str.push_str(&format!(
+                                "{} {}: {}; ",
+                                "Device".bold(),
+                                device.0.to_string().bold(),
+                                pretty_size(on_gpu_size).bright_blue(),
+                            ));
+                        }
+                    }
+                }
                 if let Some((used, blocks)) = proc_shm.get(&pid) {
                     str.push_str(&format!(
                         "{}: {} in {} blocks; ",
