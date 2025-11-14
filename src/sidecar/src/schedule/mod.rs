@@ -121,6 +121,16 @@ impl Scheduler {
         );
     }
 
+    pub fn record_sync_start(&'static self) {
+        let mut sched_ctx = self.allow_running.lock().unwrap();
+        sched_ctx.stats.record_sync_start();
+    }
+
+    pub fn record_sync_end(&'static self) {
+        let mut sched_ctx = self.allow_running.lock().unwrap();
+        sched_ctx.stats.record_sync_end();
+    }
+
     fn spawn_idle_monitor_once(&'static self) {
         static SPAWNED: AtomicBool = AtomicBool::new(false);
         if SPAWNED
@@ -132,10 +142,14 @@ impl Scheduler {
             )
             .is_ok()
         {
-            const MALLOC_INTERVAL: Duration = Duration::from_millis(200);
-            const KERNEL_INTERVAL: Duration = Duration::from_millis(500);
-            const GRAPH_INTERVAL: Duration = Duration::from_millis(500);
-            const TRANSFER_INTERVAL: Duration = Duration::from_millis(500);
+            const MALLOC_INTERVAL: Duration = Duration::from_millis(300);
+            const KERNEL_INTERVAL: Duration = Duration::from_millis(200);
+            const GRAPH_INTERVAL: Duration = Duration::from_millis(300);
+            const TRANSFER_INTERVAL: Duration = Duration::from_millis(300);
+            const SYNC_INTERVAL: Duration = Duration::from_millis(50);
+
+            const CHECK_INTERVAL: Duration = Duration::from_millis(20);
+
             assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
             if sidecar_config().auto_idle {
                 tokio::spawn(async {
@@ -145,18 +159,22 @@ impl Scheduler {
                             let mut context = self.allow_running.lock().unwrap();
                             if context.program_state == ProgramState::Running {
                                 // check idle
-                                if context.stats.graph_elapsed() > GRAPH_INTERVAL
-                                    && context.stats.kernel_elapsed() > KERNEL_INTERVAL
-                                    && context.stats.malloc_elapsed() > MALLOC_INTERVAL
-                                    && context.stats.kernel_elapsed() > TRANSFER_INTERVAL
-                                {
-                                    // should not use disable() here since we don't need prefetch
-                                    context.program_state = ProgramState::Paused;
-                                    crate::comm::update_activity(ActivityUpdate::Idle);
+                                if context.stats.pending_sync_elapsed().is_none() {
+                                    // no pending sync
+                                    if context.stats.graph_elapsed() > GRAPH_INTERVAL
+                                        && context.stats.kernel_elapsed() > KERNEL_INTERVAL
+                                        && context.stats.malloc_elapsed() > MALLOC_INTERVAL
+                                        && context.stats.transfer_elapsed() > TRANSFER_INTERVAL
+                                        && context.stats.sync_elapsed() > SYNC_INTERVAL
+                                    {
+                                        // should not use disable() here since we don't need prefetch
+                                        context.program_state = ProgramState::Paused;
+                                        crate::comm::update_activity(ActivityUpdate::Idle);
+                                    }
                                 }
                             }
                         }
-                        tokio::time::sleep(KERNEL_INTERVAL).await;
+                        tokio::time::sleep(CHECK_INTERVAL).await;
                     }
                 });
             }

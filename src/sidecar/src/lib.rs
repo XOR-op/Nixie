@@ -13,6 +13,7 @@ mod env_config;
 mod init;
 mod intercept;
 mod intercept_launch;
+mod intercept_sync;
 mod memory;
 mod schedule;
 mod utils;

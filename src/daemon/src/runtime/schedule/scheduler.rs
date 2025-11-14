@@ -140,7 +140,7 @@ impl Scheduler {
     }
 
     async fn received_data(&mut self, pid: i32, data: ActivityUpdate, last_polled: &mut Instant) {
-        // tracing::trace!("Received data from process {}: {:?}", pid, data);
+        tracing::trace!("Received data from process {}: {:?}", pid, data);
         self.sched_queue.schedule_push(pid, data);
         self.poll_queue(last_polled).await;
     }
@@ -243,6 +243,8 @@ impl Scheduler {
                         .sum::<u64>()
                 )
             );
+        } else {
+            tracing::debug!("Process {} requests scheduling", incoming_pid);
         }
 
         if let Some((active_pid, previous_proc_is_running)) = match self.active_client {

@@ -5,6 +5,8 @@ pub(super) struct LaunchStats {
     last_graph: SystemTime,
     last_malloc: SystemTime,
     last_transfer: SystemTime,
+    last_sync_start: SystemTime,
+    last_sync_end: SystemTime,
 }
 
 impl LaunchStats {
@@ -14,6 +16,8 @@ impl LaunchStats {
             last_graph: UNIX_EPOCH,
             last_malloc: UNIX_EPOCH,
             last_transfer: UNIX_EPOCH,
+            last_sync_start: UNIX_EPOCH,
+            last_sync_end: UNIX_EPOCH,
         }
     }
 
@@ -33,6 +37,14 @@ impl LaunchStats {
         self.last_transfer = SystemTime::now();
     }
 
+    pub fn record_sync_start(&mut self) {
+        self.last_sync_start = SystemTime::now();
+    }
+
+    pub fn record_sync_end(&mut self) {
+        self.last_sync_end = SystemTime::now();
+    }
+
     pub fn kernel_elapsed(&self) -> Duration {
         SystemTime::now()
             .duration_since(self.last_kernel)
@@ -48,6 +60,30 @@ impl LaunchStats {
     pub fn malloc_elapsed(&self) -> Duration {
         SystemTime::now()
             .duration_since(self.last_malloc)
+            .unwrap_or_default()
+    }
+
+    pub fn transfer_elapsed(&self) -> Duration {
+        SystemTime::now()
+            .duration_since(self.last_transfer)
+            .unwrap_or_default()
+    }
+
+    pub fn pending_sync_elapsed(&self) -> Option<Duration> {
+        if self.last_sync_end < self.last_sync_start {
+            Some(
+                SystemTime::now()
+                    .duration_since(self.last_sync_start)
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        }
+    }
+
+    pub fn sync_elapsed(&self) -> Duration {
+        SystemTime::now()
+            .duration_since(self.last_sync_end)
             .unwrap_or_default()
     }
 }
