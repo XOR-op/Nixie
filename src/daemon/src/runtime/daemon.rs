@@ -18,7 +18,10 @@ use tokio::{
 
 use crate::{
     config::{Config, ConfigurableArgs, init_config, load_config, update_config},
-    control::{self, Controllable, DataManagerMetadata, PrefetchArgs, PrefetchResponse},
+    control::{
+        self, Controllable, DataManagerMetadata, PrefetchArgs, PrefetchResponse, SetPriorityArgs,
+        SetPriorityResponse,
+    },
     error::{DaemonError, NihilphaseError},
     runtime::{
         ProcCtlReq,
@@ -128,7 +131,6 @@ impl Daemon {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (exit_tx, mut exit_rx) = mpsc::unbounded_channel();
         let (rpc_data_tx, rpc_data_rx) = mpsc::unbounded_channel();
-        let (prefetch_tx, prefetch_rx) = mpsc::unbounded_channel();
         let (sched_ctl_tx, sched_ctl_rx) = mpsc::unbounded_channel();
         let shm_buffer_path = self.shm_buffer_path.clone();
         // accept app connections
@@ -136,7 +138,7 @@ impl Daemon {
             self.daemon_path,
             tx,
             exit_tx,
-            sched_ctl_tx,
+            sched_ctl_tx.clone(),
             rpc_data_tx,
             shm_buffer_path,
             self.shm_buffer_size,
@@ -168,15 +170,9 @@ impl Daemon {
             let list_handle = self.data.processes.clone();
             let data_manager = data_manager.clone();
             tokio::spawn(async move {
-                Scheduler::new(
-                    list_handle,
-                    rpc_data_rx,
-                    prefetch_rx,
-                    sched_ctl_rx,
-                    data_manager,
-                )
-                .run()
-                .await;
+                Scheduler::new(list_handle, rpc_data_rx, sched_ctl_rx, data_manager)
+                    .run()
+                    .await;
             });
         }
 
@@ -190,7 +186,7 @@ impl Daemon {
             );
             let server = ControllableDaemon {
                 data: self.data.clone(),
-                prefetch_tx: prefetch_tx.clone(),
+                control_tx: sched_ctl_tx.clone(),
                 data_mgr_handle: data_manager.clone(),
             };
             tokio::spawn(
@@ -245,7 +241,7 @@ impl Daemon {
 struct ControllableDaemon {
     data: Arc<DaemonData>,
     data_mgr_handle: DataManagerHandle,
-    prefetch_tx: mpsc::UnboundedSender<CallParameter<PrefetchArgs, PrefetchResponse>>,
+    control_tx: mpsc::UnboundedSender<ScheduleControlReq>,
 }
 
 impl Controllable for ControllableDaemon {
@@ -270,6 +266,24 @@ impl Controllable for ControllableDaemon {
         results.into_iter().flatten().collect()
     }
 
+    async fn set_priority(
+        self,
+        _context: Context,
+        args: SetPriorityArgs,
+    ) -> Result<SetPriorityResponse, ()> {
+        let guard = self.data.processes.read().await;
+        if !guard.contains_key(&args.pid) {
+            tracing::warn!("Process with pid {} not found", args.pid);
+            return Err(());
+        }
+        drop(guard);
+        let (para, ret_rx) = CallParameter::new(args);
+        self.control_tx
+            .send(ScheduleControlReq::SetPriority(para))
+            .map_err(|_| ())?;
+        ret_rx.await.ok_or(())
+    }
+
     async fn prefetch(self, _context: Context, args: PrefetchArgs) -> Result<PrefetchResponse, ()> {
         let guard = self.data.processes.read().await;
         for msg in &args.list {
@@ -280,7 +294,9 @@ impl Controllable for ControllableDaemon {
         }
         drop(guard);
         let (para, ret_rx) = CallParameter::new(args);
-        self.prefetch_tx.send(para).map_err(|_| ())?;
+        self.control_tx
+            .send(ScheduleControlReq::Prefetch(para))
+            .map_err(|_| ())?;
         ret_rx.await.ok_or(())
     }
 

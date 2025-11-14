@@ -6,7 +6,10 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use control::{client::ControlClient, parse::parse_move_ops};
 
-use crate::control::parse::MoveOperation;
+use crate::{
+    control::parse::{MoveOperation, parse_pid},
+    runtime::{Priority, PriorityLevel},
+};
 
 mod config;
 mod control;
@@ -71,6 +74,42 @@ struct UsageArgs {
     pub verbose: bool,
 }
 
+#[derive(Clone, Copy, Debug, Subcommand)]
+enum SetPriorityLevel {
+    Interactive,
+    LowInteractive,
+    Batch,
+    Background,
+}
+
+impl SetPriorityLevel {
+    fn to_fixed(self) -> Priority {
+        match self {
+            SetPriorityLevel::Interactive => Priority::Fixed(PriorityLevel::Interactive),
+            SetPriorityLevel::LowInteractive => Priority::Fixed(PriorityLevel::LowInteractive),
+            SetPriorityLevel::Batch => Priority::Fixed(PriorityLevel::Batch),
+            SetPriorityLevel::Background => Priority::Fixed(PriorityLevel::Background),
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum SetPriorityOption {
+    /// Unset priority to dynamic
+    Unset,
+    /// Set priority to fixed level
+    #[clap(subcommand)]
+    Set(SetPriorityLevel),
+}
+
+#[derive(Debug, Parser)]
+struct SetPriorityArgs {
+    #[arg(short, long)]
+    pid: String,
+    #[clap(subcommand)]
+    option: SetPriorityOption,
+}
+
 #[derive(Debug, Parser)]
 #[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
@@ -78,6 +117,7 @@ enum Args {
     Prefetch(PrefetchArgs),
     List(ListArgs),
     Usage(UsageArgs),
+    SetPriority(SetPriorityArgs),
     #[clap(subcommand)]
     Config(ConfigArgs),
 }
@@ -128,6 +168,29 @@ fn main() {
                     }
                     ConfigArgs::Update(args) => {
                         client.update_config(args).await.unwrap();
+                    }
+                }
+            }
+            Args::SetPriority(args) => {
+                let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
+                let pid = parse_pid(&args.pid)
+                    .map_err(|e| {
+                        eprintln!("{}: {}", "Error".red(), e);
+                        std::process::exit(1);
+                    })
+                    .unwrap();
+                match args.option {
+                    SetPriorityOption::Unset => {
+                        client
+                            .set_priority(pid, control::SetPriorityLevel::FixToDynamic)
+                            .await
+                            .unwrap();
+                    }
+                    SetPriorityOption::Set(level) => {
+                        client
+                            .set_priority(pid, control::SetPriorityLevel::Set(level.to_fixed()))
+                            .await
+                            .unwrap();
                     }
                 }
             }

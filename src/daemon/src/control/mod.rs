@@ -21,6 +21,8 @@ pub(crate) trait Controllable {
 
     async fn data_details() -> DataManagerMetadata;
 
+    async fn set_priority(args: SetPriorityArgs) -> Result<SetPriorityResponse, ()>;
+
     async fn prefetch(args: PrefetchArgs) -> Result<PrefetchResponse, ()>;
 
     async fn update_config(config: ConfigurableArgs);
@@ -41,6 +43,26 @@ pub(crate) struct PrefetchMsg {
     pub from: BufferLocation,
     pub to: BufferLocation,
     pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum SetPriorityLevel {
+    Set(Priority),
+    FixToDynamic,
+    UnsetToDefault,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SetPriorityArgs {
+    pub pid: i32,
+    pub level: SetPriorityLevel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum SetPriorityResponse {
+    Success,
+    FailureProcessNotExist,
+    FailurePriorityNotFixed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

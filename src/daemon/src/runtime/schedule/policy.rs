@@ -5,7 +5,7 @@ use std::{
 
 use nihil_common::{ActivityUpdate, general::CallParameter};
 
-use crate::control::{PrefetchArgs, PrefetchResponse};
+use crate::control::{PrefetchArgs, PrefetchResponse, SetPriorityLevel, SetPriorityResponse};
 
 use super::{Priority, scheduler::ActiveClientState};
 
@@ -211,6 +211,32 @@ impl ScheduleQueue {
 
     pub fn update_active(&mut self, active_client: ActiveClientState) {
         self.active_client = active_client;
+    }
+
+    pub fn set_priority(&mut self, pid: i32, new_level: SetPriorityLevel) -> SetPriorityResponse {
+        let Some(client) = self.get_client_mut(pid) else {
+            return SetPriorityResponse::FailureProcessNotExist;
+        };
+        match new_level {
+            SetPriorityLevel::FixToDynamic => match client.priority {
+                Priority::Fixed(level) => {
+                    client.priority = Priority::Dynamic { level, weight: 0 };
+                    SetPriorityResponse::Success
+                }
+                Priority::Dynamic { .. } => SetPriorityResponse::FailurePriorityNotFixed,
+            },
+            SetPriorityLevel::UnsetToDefault => match client.priority {
+                Priority::Dynamic { .. } => SetPriorityResponse::FailurePriorityNotFixed,
+                Priority::Fixed(_) => {
+                    client.priority = Priority::default_dynamic();
+                    SetPriorityResponse::Success
+                }
+            },
+            SetPriorityLevel::Set(level) => {
+                client.priority = level;
+                SetPriorityResponse::Success
+            }
+        }
     }
 
     fn update_priority(&mut self) {

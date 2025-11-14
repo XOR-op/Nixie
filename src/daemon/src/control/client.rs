@@ -5,9 +5,12 @@ use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
 
 use crate::{
-    UpdateConfigArgs,
-    control::{PrefetchResponse, ProcessMetadata},
+    ProcArgs, UpdateConfigArgs,
+    control::{
+        PrefetchResponse, ProcessMetadata, SetPriorityArgs, SetPriorityLevel, SetPriorityResponse,
+    },
     error::ClientError,
+    runtime::Priority,
 };
 use nihil_common::{GlobalDeviceId, general::pretty_size};
 
@@ -15,6 +18,34 @@ use super::ControllableClient;
 
 pub(crate) struct ControlClient {
     client: ControllableClient,
+}
+
+fn get_pid_checked(args: ProcArgs, pid_list: &[i32]) -> Result<i32, ClientError> {
+    if let Some(pid) = args.pid {
+        if !pid_list.contains(&pid) {
+            return Err(ClientError::Args(format!(
+                "Process with pid {} not found",
+                pid
+            )));
+        }
+        Ok(pid)
+    } else if let Some(idx) = args.idx {
+        if (idx as usize) >= pid_list.len() {
+            return Err(ClientError::Args(format!(
+                "Process index {} out of range",
+                idx
+            )));
+        }
+        println!(
+            "Process index {} mapped to pid {}",
+            idx, pid_list[idx as usize]
+        );
+        Ok(pid_list[idx as usize])
+    } else {
+        Err(ClientError::Args(
+            "Either pid or idx must be specified".to_string(),
+        ))
+    }
 }
 
 impl ControlClient {
@@ -49,31 +80,7 @@ impl ControlClient {
                 .move_ops
                 .into_iter()
                 .map(|msg| {
-                    let pid = if let Some(pid) = msg.pid.pid {
-                        if !pid_list.contains(&pid) {
-                            return Err(ClientError::Args(format!(
-                                "Process with pid {} not found",
-                                pid
-                            )));
-                        }
-                        pid
-                    } else if let Some(idx) = msg.pid.idx {
-                        if (idx as usize) >= pid_list.len() {
-                            return Err(ClientError::Args(format!(
-                                "Process index {} out of range",
-                                idx
-                            )));
-                        }
-                        println!(
-                            "Process index {} mapped to pid {}",
-                            idx, pid_list[idx as usize]
-                        );
-                        pid_list[idx as usize]
-                    } else {
-                        return Err(ClientError::Args(
-                            "Either pid or idx must be specified".to_string(),
-                        ));
-                    };
+                    let pid = get_pid_checked(msg.pid, &pid_list)?;
                     Ok(crate::control::PrefetchMsg {
                         pid,
                         from: msg.src,
@@ -110,6 +117,15 @@ impl ControlClient {
             let process_name = std::fs::read_to_string(format!("/proc/{}/comm", process.pid))
                 .map(|s| s.trim().to_string())
                 .ok();
+            let priority_str = match &process.priority {
+                Some(p) => match *p {
+                    Priority::Dynamic { level, weight } => {
+                        format!("{:?}/{}", level, weight).purple()
+                    }
+                    Priority::Fixed(level) => format!("{:?}[F]", level).bright_yellow(),
+                },
+                None => "N/A".to_string().bright_black(),
+            };
             println!(
                 "{} [{}]{} <{}, {}>",
                 format!("#{}", idx).magenta(),
@@ -121,14 +137,7 @@ impl ControlClient {
                     .state
                     .map_or("Unknown".to_string(), |s| format!("{:?}", s))
                     .blue(),
-                process
-                    .priority
-                    .map_or("N/A".to_string(), |p| format!(
-                        "{:?}{}",
-                        p.level(),
-                        p.weight().map(|w| format!("/{}", w)).unwrap_or_default()
-                    ))
-                    .purple()
+                priority_str
             );
             for (device, allocations) in process.allocations {
                 // print aggregated per device info
@@ -317,6 +326,37 @@ impl ControlClient {
             }
         }
 
+        Ok(())
+    }
+
+    pub async fn set_priority(
+        &self,
+        pid: ProcArgs,
+        level: SetPriorityLevel,
+    ) -> Result<(), ClientError> {
+        let pid_list = self.get_pid_list().await?;
+        let pid = get_pid_checked(pid, &pid_list)?;
+        let resp = self
+            .client
+            .set_priority(tarpc::context::current(), SetPriorityArgs { pid, level })
+            .await
+            .map_err(|e| ClientError::ClientRpc("set_priority", e))?;
+        match resp {
+            Ok(resp) => match resp {
+                SetPriorityResponse::Success => {
+                    println!("{}", "Priority set successfully".green());
+                }
+                SetPriorityResponse::FailureProcessNotExist => {
+                    eprintln!("{}", "Failed to set priority: Process Not Exist".red());
+                }
+                SetPriorityResponse::FailurePriorityNotFixed => {
+                    eprintln!("{}", "Failed to set priority: Priority Not Fixed".red());
+                }
+            },
+            Err(_) => {
+                eprintln!("{}", "Failed to set priority: Unknown Error".red());
+            }
+        }
         Ok(())
     }
 

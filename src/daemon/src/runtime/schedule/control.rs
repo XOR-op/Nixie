@@ -1,9 +1,14 @@
 use nihil_common::general::CallParameter;
 
-use crate::runtime::{ClientState, Priority};
+use crate::{
+    control::{PrefetchArgs, PrefetchResponse, SetPriorityArgs, SetPriorityResponse},
+    runtime::{ClientState, Priority},
+};
 
 pub enum ScheduleControlReq {
     GetState(CallParameter<i32, GetStateResponse>),
+    Prefetch(CallParameter<PrefetchArgs, PrefetchResponse>),
+    SetPriority(CallParameter<SetPriorityArgs, SetPriorityResponse>),
 }
 
 #[derive(Debug, Clone)]

@@ -17,6 +17,33 @@ pub(crate) fn parse_move_ops(s: &str) -> Result<Vec<MoveOperation>, String> {
         .map(|v| v.into_iter().flatten().collect())
 }
 
+pub(crate) fn parse_pid(s: &str) -> Result<ProcArgs, String> {
+    let s = s.to_lowercase();
+    match s.parse::<u32>() {
+        Ok(pid) => Ok(ProcArgs {
+            pid: Some(pid as i32),
+            idx: None,
+        }),
+        Err(_) => {
+            let new_pid_str = if let Some(idx) = s.strip_prefix("idx") {
+                idx
+            } else if let Some(idx) = s.strip_prefix('i') {
+                idx
+            } else {
+                &s
+            };
+            Ok(ProcArgs {
+                pid: None,
+                idx: Some(
+                    new_pid_str
+                        .parse::<u32>()
+                        .map_err(|_| format!("Invalid PID or index: '{}'", s))?,
+                ),
+            })
+        }
+    }
+}
+
 // Parser function with signature: fn(&str) -> Result<T, String>
 fn parse_move_op(s: &str) -> Result<Vec<MoveOperation>, String> {
     let s = s.to_lowercase();
@@ -26,29 +53,7 @@ fn parse_move_op(s: &str) -> Result<Vec<MoveOperation>, String> {
         .ok_or(format!("Invalid format: missing ':' in '{}'", s))?;
 
     // Parse PID
-    let pid = match pid_str.parse::<u32>() {
-        Ok(pid) => ProcArgs {
-            pid: Some(pid as i32),
-            idx: None,
-        },
-        Err(_) => {
-            let new_pid_str = if let Some(idx) = pid_str.strip_prefix("idx") {
-                idx
-            } else if let Some(idx) = pid_str.strip_prefix('i') {
-                idx
-            } else {
-                pid_str
-            };
-            ProcArgs {
-                pid: None,
-                idx: Some(
-                    new_pid_str
-                        .parse::<u32>()
-                        .map_err(|_| format!("Invalid PID or index: '{}'", pid_str))?,
-                ),
-            }
-        }
-    };
+    let pid = parse_pid(pid_str)?;
 
     // Split by comma for micro op
     rest.split(',')

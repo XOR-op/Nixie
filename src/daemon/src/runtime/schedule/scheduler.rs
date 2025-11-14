@@ -53,7 +53,6 @@ pub(super) enum ActiveClientState {
 pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
     rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
-    prefetch_rx: mpsc::UnboundedReceiver<CallParameter<PrefetchArgs, PrefetchResponse>>,
     control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
@@ -64,14 +63,12 @@ impl Scheduler {
     pub fn new(
         list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
         rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
-        prefetch_rx: mpsc::UnboundedReceiver<CallParameter<PrefetchArgs, PrefetchResponse>>,
         control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
         data_manager: DataManagerHandle,
     ) -> Self {
         Self {
             list,
             rpc_data_rx,
-            prefetch_rx,
             control_msg_rx,
             active_client: ActiveClientState::None,
             sched_queue: ScheduleQueue::new(),
@@ -88,11 +85,8 @@ impl Scheduler {
                 Some((pid, data)) = self.rpc_data_rx.recv() => {
                     self.received_data(pid, data, &mut last_polled).await;
                 }
-                Some(para) = self.prefetch_rx.recv() => {
-                    self.received_prefetch_request(para, &mut last_polled).await;
-                }
                 Some(req) = self.control_msg_rx.recv() =>{
-                    self.handle_ctrl(req).await;
+                    self.handle_ctrl(req, &mut last_polled).await;
                 }
                 _ = tokio::time::sleep(sleep_duration) => {
                     self.poll_queue(&mut last_polled).await;
@@ -101,7 +95,7 @@ impl Scheduler {
         }
     }
 
-    async fn handle_ctrl(&mut self, req: ScheduleControlReq) {
+    async fn handle_ctrl(&mut self, req: ScheduleControlReq, last_polled: &mut Instant) {
         match req {
             ScheduleControlReq::GetState(param) => {
                 let (pid, ret_tx) = param.into_parts();
@@ -117,16 +111,20 @@ impl Scheduler {
                     tracing::warn!("Failed to send GetStateResponse");
                 }
             }
+            ScheduleControlReq::Prefetch(param) => {
+                // Only after prefetch request is processed will result be sent back
+                self.sched_queue.push_prefetch(param);
+                self.poll_queue(last_polled).await;
+            }
+            ScheduleControlReq::SetPriority(param) => {
+                let (args, ret_tx) = param.into_parts();
+                let res = self.sched_queue.set_priority(args.pid, args.level);
+                if ret_tx.ret(res).is_err() {
+                    tracing::warn!("Failed to send SetPriorityResponse");
+                }
+                self.poll_queue(last_polled).await;
+            }
         }
-    }
-
-    async fn received_prefetch_request(
-        &mut self,
-        param: CallParameter<PrefetchArgs, PrefetchResponse>,
-        last_polled: &mut Instant,
-    ) {
-        self.sched_queue.push_prefetch(param);
-        self.poll_queue(last_polled).await;
     }
 
     async fn received_prioritized_data(
