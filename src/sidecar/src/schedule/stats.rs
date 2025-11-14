@@ -5,6 +5,7 @@ pub(super) struct LaunchStats {
     last_graph: SystemTime,
     last_malloc: SystemTime,
     last_transfer: SystemTime,
+    last_transfer_size: usize,
     last_sync_start: SystemTime,
     last_sync_end: SystemTime,
 }
@@ -16,6 +17,7 @@ impl LaunchStats {
             last_graph: UNIX_EPOCH,
             last_malloc: UNIX_EPOCH,
             last_transfer: UNIX_EPOCH,
+            last_transfer_size: 0,
             last_sync_start: UNIX_EPOCH,
             last_sync_end: UNIX_EPOCH,
         }
@@ -33,8 +35,9 @@ impl LaunchStats {
         self.last_malloc = SystemTime::now();
     }
 
-    pub fn record_launch_transfer(&mut self) {
+    pub fn record_launch_transfer(&mut self, size: usize) {
         self.last_transfer = SystemTime::now();
+        self.last_transfer_size = size;
     }
 
     pub fn record_sync_start(&mut self) {
@@ -63,10 +66,13 @@ impl LaunchStats {
             .unwrap_or_default()
     }
 
-    pub fn transfer_elapsed(&self) -> Duration {
-        SystemTime::now()
-            .duration_since(self.last_transfer)
-            .unwrap_or_default()
+    pub fn transfer_elapsed(&self) -> (Duration, usize) {
+        (
+            SystemTime::now()
+                .duration_since(self.last_transfer)
+                .unwrap_or_default(),
+            self.last_transfer_size,
+        )
     }
 
     pub fn pending_sync_elapsed(&self) -> Option<Duration> {
@@ -93,5 +99,5 @@ pub(crate) enum LaunchType {
     Kernel,
     Graph,
     Malloc,
-    Transfer,
+    Transfer(usize),
 }

@@ -108,7 +108,7 @@ impl Scheduler {
             LaunchType::Kernel => sched_ctx.stats.record_launch_kernel(),
             LaunchType::Graph => sched_ctx.stats.record_launch_graph(),
             LaunchType::Malloc => sched_ctx.stats.record_launch_malloc(),
-            LaunchType::Transfer => sched_ctx.stats.record_launch_transfer(),
+            LaunchType::Transfer(sz) => sched_ctx.stats.record_launch_transfer(sz),
         }
     }
 
@@ -143,8 +143,8 @@ impl Scheduler {
             .is_ok()
         {
             const MALLOC_INTERVAL: Duration = Duration::from_millis(300);
-            const KERNEL_INTERVAL: Duration = Duration::from_millis(200);
-            const GRAPH_INTERVAL: Duration = Duration::from_millis(300);
+            const KERNEL_INTERVAL: Duration = Duration::from_millis(100);
+            const GRAPH_INTERVAL: Duration = Duration::from_millis(100);
             const TRANSFER_INTERVAL: Duration = Duration::from_millis(300);
             const SYNC_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -160,11 +160,16 @@ impl Scheduler {
                             if context.program_state == ProgramState::Running {
                                 // check idle
                                 if context.stats.pending_sync_elapsed().is_none() {
+                                    let (transfer_interval, transfer_size) =
+                                        context.stats.transfer_elapsed();
                                     // no pending sync
                                     if context.stats.graph_elapsed() > GRAPH_INTERVAL
                                         && context.stats.kernel_elapsed() > KERNEL_INTERVAL
                                         && context.stats.malloc_elapsed() > MALLOC_INTERVAL
-                                        && context.stats.transfer_elapsed() > TRANSFER_INTERVAL
+                                        && (transfer_interval > TRANSFER_INTERVAL
+                                            || transfer_interval.as_millis() as usize
+                                                * (4 * 1024 * 1024 * 1024)
+                                                > transfer_size)
                                         && context.stats.sync_elapsed() > SYNC_INTERVAL
                                     {
                                         // should not use disable() here since we don't need prefetch

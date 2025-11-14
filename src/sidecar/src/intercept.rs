@@ -252,7 +252,7 @@ pub extern "C" fn cudaMemcpy(
     static MEMCPY_FN: OnceLock<CudaMemcpyType> = OnceLock::new();
     generate_init_fn!(CudaMemcpyType, cr"cudaMemcpy");
     let memcpy_func = MEMCPY_FN.get_or_init(init_fn);
-    SCHED_CTL.launch_allowed(LaunchType::Transfer);
+    SCHED_CTL.launch_allowed(LaunchType::Transfer(size));
     memcpy_func(dst, src, size, kind)
 }
 
@@ -275,7 +275,7 @@ pub extern "C" fn cudaMemcpyAsync(
     static MEMCPY_ASYNC_FN: OnceLock<CudaMemcpyAsyncType> = OnceLock::new();
     generate_init_fn!(CudaMemcpyAsyncType, cr"cudaMemcpyAsync");
     let memcpy_async_func = MEMCPY_ASYNC_FN.get_or_init(init_fn);
-    SCHED_CTL.launch_allowed(LaunchType::Transfer);
+    SCHED_CTL.launch_allowed(LaunchType::Transfer(size));
     memcpy_async_func(dst, src, size, kind, stream)
 }
 
@@ -290,7 +290,7 @@ pub extern "C" fn cudaMemset(
     static MEMSET_FN: OnceLock<CudaMemsetType> = OnceLock::new();
     generate_init_fn!(CudaMemsetType, cr"cudaMemset");
     let memset_func = MEMSET_FN.get_or_init(init_fn);
-    SCHED_CTL.launch_allowed(LaunchType::Transfer);
+    SCHED_CTL.launch_allowed(LaunchType::Transfer(size));
     memset_func(dev_ptr, value, size)
 }
 
