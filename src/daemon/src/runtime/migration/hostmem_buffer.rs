@@ -97,7 +97,7 @@ impl HostMemBufferManager {
         assert_eq!(block_buffers.len(), data.len());
         for (src, dst) in data.iter().zip(block_buffers.iter_mut()) {
             dst.0.clear();
-            dst.0.extend_from_slice(&src);
+            dst.0.extend_from_slice(src);
         }
         inner
             .mem_bookkeeping

@@ -478,6 +478,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_for_device(
         global_id: GlobalDeviceId,
         out_from_gpu: Vec<(
@@ -960,6 +961,7 @@ async fn backend_to_shm_transfer(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn shm_to_backend_transfer(
     excluding_list: HashSet<i32>,
     shm_to_hybrid: HashMap<BufferId, BufferLocation>,

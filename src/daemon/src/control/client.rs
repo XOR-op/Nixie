@@ -219,11 +219,11 @@ impl ControlClient {
                     .map_err(|e| ClientError::Nvml("memory_info", e))?;
                 let n_proc_on_dev = processes
                     .iter()
-                    .map(|p| {
+                    .filter(|p| {
                         p.allocations.iter().any(|(d, alloc)| {
                             *d == GlobalDeviceId(dev as i32)
                                 && alloc.iter().any(|a| a.on_gpu_bytes > 0)
-                        }) as u32
+                        })
                     })
                     .count();
                 println!(
@@ -277,7 +277,7 @@ impl ControlClient {
                 .collect::<std::collections::BTreeSet<i32>>();
             if !sorted_pids.is_empty() {
                 // empty line before details
-                println!("");
+                println!();
             }
             for pid in sorted_pids {
                 let process_name = std::fs::read_to_string(format!("/proc/{}/comm", pid))
