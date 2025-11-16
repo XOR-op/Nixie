@@ -41,6 +41,9 @@ struct ListArgs {
     /// Show detailed information
     #[arg(short, long, default_value = "false")]
     pub verbose: bool,
+    /// Show in JSON format
+    #[arg(long, default_value = "false")]
+    pub json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -158,7 +161,18 @@ fn main() {
             }
             Args::List(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
-                client.list_processes(args.verbose).await.unwrap();
+                if args.json {
+                    if args.verbose {
+                        eprintln!(
+                            "{}",
+                            "Error: JSON output does not support verbose mode".red()
+                        );
+                        std::process::exit(1);
+                    }
+                    client.list_processes_json().await.unwrap();
+                } else {
+                    client.list_processes(args.verbose).await.unwrap();
+                }
             }
             Args::Config(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);

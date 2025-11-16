@@ -104,6 +104,56 @@ impl ControlClient {
         Ok(PrefetchResponse)
     }
 
+    pub async fn list_processes_json(&self) -> Result<(), ClientError> {
+        let processes = filter_invalid_processes(
+            self.client
+                .list_processes(tarpc::context::current())
+                .await
+                .map_err(|e| ClientError::ClientRpc("list_processes", e))?,
+        );
+        let mut list = Vec::new();
+        for process in processes.into_iter() {
+            let process_name = std::fs::read_to_string(format!("/proc/{}/comm", process.pid))
+                .map(|s| s.trim().to_string())
+                .ok();
+            let priority = match &process.priority {
+                Some(p) => match *p {
+                    Priority::Dynamic { level, weight } => {
+                        serde_json::json!({"type": "dynamic", "level": format!("{:?}", level), "weight": weight})
+                    }
+                    Priority::Fixed(level) => {
+                        serde_json::json!({"type": "fixed", "level": format!("{:?}", level)})
+                    }
+                },
+                None => serde_json::json!(null),
+            };
+            let mut allocs = Vec::new();
+            for (device, allocations) in process.allocations {
+                // print aggregated per device info
+                let alloc_size = allocations
+                    .iter()
+                    .map(|a| a.on_gpu_bytes + a.off_gpu_bytes)
+                    .sum::<u64>();
+                let on_gpu_size = allocations.iter().map(|a| a.on_gpu_bytes).sum::<u64>();
+                allocs.push(serde_json::json!({
+                    "device": device.0,
+                    "n_allocations": allocations.len(),
+                    "on_gpu_size": on_gpu_size,
+                    "total_size": alloc_size,
+                }));
+            }
+            list.push(serde_json::json!({
+                "pid": process.pid,
+                "process_name": process_name,
+                "state": process.state.map(|s| format!("{:?}", s)),
+                "priority": priority,
+                "allocations": allocs,
+            }));
+        }
+        println!("{}", serde_json::to_string_pretty(&list).unwrap());
+        Ok(())
+    }
+
     pub async fn list_processes(&self, verbose: bool) -> Result<(), ClientError> {
         let processes = filter_invalid_processes(
             self.client
