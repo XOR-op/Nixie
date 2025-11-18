@@ -57,7 +57,7 @@ pub(crate) fn populate_entry(
                 has_requested_reservation = true;
                 SCHED_CTL.pause_then_require_memory(
                     LaunchType::Malloc,
-                    nihil_common::MemoryRequest {
+                    Box::new(nihil_common::MemoryRequest {
                         mem_req: std::array::from_fn(|idx| {
                             if idx == device_id as usize {
                                 (
@@ -73,7 +73,7 @@ pub(crate) fn populate_entry(
                                 (ProcessLocalDeviceId(0), Vec::new())
                             }
                         }),
-                    },
+                    }),
                 );
                 res = alloc_for_mem_handle(handle, &alloc_prop)
                     .err()

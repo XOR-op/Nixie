@@ -33,7 +33,7 @@ pub struct HandshakeResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActivityUpdate {
     RequestScheduling,
-    YieldThenRequestSchedulingAndMem { memory_request: MemoryRequest },
+    YieldThenRequestSchedulingAndMem { memory_request: Box<MemoryRequest> },
     Idle,
 }
 

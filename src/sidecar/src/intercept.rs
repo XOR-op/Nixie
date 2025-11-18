@@ -162,7 +162,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         if cuda_mem_get_info_impl().0 < CUDA_CONTROL_PLANE_RESERVATION_SIZE {
             SCHED_CTL.pause_then_require_memory(
                 LaunchType::Malloc,
-                MemoryRequest {
+                Box::new(MemoryRequest {
                     mem_req: std::array::from_fn(|ith_dev| {
                         if ith_dev == device_id as usize {
                             (
@@ -173,7 +173,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                             (ProcessLocalDeviceId(0), Vec::new())
                         }
                     }),
-                },
+                }),
             );
         }
     }

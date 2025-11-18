@@ -80,7 +80,7 @@ impl Scheduler {
     pub fn pause_then_require_memory(
         &'static self,
         launch_type: LaunchType,
-        mem_req: MemoryRequest,
+        mem_req: Box<MemoryRequest>,
     ) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         sched_ctx.program_state = ProgramState::Paused;
@@ -91,7 +91,7 @@ impl Scheduler {
         mut sched_ctx: MutexGuard<Context>,
         cond_var: &Condvar,
         launch_type: LaunchType,
-        mem_req: Option<MemoryRequest>,
+        mem_req: Option<Box<MemoryRequest>>,
     ) {
         if sched_ctx.program_state == ProgramState::Paused {
             crate::comm::update_activity(match mem_req {

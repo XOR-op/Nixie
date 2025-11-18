@@ -224,7 +224,7 @@ impl Scheduler {
     async fn handle_sched_request(
         &mut self,
         incoming_pid: i32,
-        mem_req: Option<MemoryRequest>,
+        mem_req: Option<Box<MemoryRequest>>,
     ) -> Result<(), ScheduleError> {
         let control = self.list.write().await;
         let config = load_config();
@@ -508,7 +508,7 @@ impl Scheduler {
         incoming_pid: i32,
         active_pid: i32,
         disable_fut: Option<tokio::task::JoinHandle<Result<(), tarpc::client::RpcError>>>, // future of dev sync completion
-        mem_req: Option<MemoryRequest>,
+        mem_req: Option<Box<MemoryRequest>>,
         control: &LinkedHashMap<i32, DaemonServerHandle>,
         data_manager: DataManagerHandle,
     ) -> Result<Option<u64>, ScheduleError> {

@@ -54,7 +54,7 @@ pub(crate) fn set_device(dev: i32) {
         crate::debug_eprintln!("Allocating memory for CUDA context");
         SCHED_CTL.pause_then_require_memory(
             LaunchType::Malloc,
-            MemoryRequest {
+            Box::new(MemoryRequest {
                 mem_req: std::array::from_fn(|ith_dev| {
                     if ith_dev == dev as usize {
                         (
@@ -65,7 +65,7 @@ pub(crate) fn set_device(dev: i32) {
                         (ProcessLocalDeviceId(0), Vec::new())
                     }
                 }),
-            },
+            }),
         );
         res = unsafe { cudarc::driver::sys::cuDevicePrimaryCtxRetain(&mut cu_ctx, dev) };
     }
