@@ -6,7 +6,7 @@ use cudarc::driver::sys::{
     CUmemLocation, CUmemLocationType, cudaError_enum,
 };
 use nihil_common::{
-    MAX_ALLOCATION_SIZE,
+    MAX_ALLOCATION_SIZE, ProcessLocalDeviceId,
     shm::{AllocationEntry, AllocationTable, HandleList, PhysicalMemoryHandle},
 };
 
@@ -60,14 +60,17 @@ pub(crate) fn populate_entry(
                     nihil_common::MemoryRequest {
                         mem_req: std::array::from_fn(|idx| {
                             if idx == device_id as usize {
-                                vec![
-                                    remaining_size as u64,
-                                    // avoid fragmentation
-                                    MAX_ALLOCATION_SIZE as u64,
-                                    MAX_ALLOCATION_SIZE as u64,
-                                ]
+                                (
+                                    ProcessLocalDeviceId(device_id),
+                                    vec![
+                                        remaining_size as u64,
+                                        // avoid fragmentation
+                                        MAX_ALLOCATION_SIZE as u64,
+                                        MAX_ALLOCATION_SIZE as u64,
+                                    ],
+                                )
                             } else {
-                                Vec::new()
+                                (ProcessLocalDeviceId(0), Vec::new())
                             }
                         }),
                     },

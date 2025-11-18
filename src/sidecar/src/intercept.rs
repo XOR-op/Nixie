@@ -2,7 +2,7 @@ use cudarc::driver::sys::{CUdevice, CUstream, cudaError_enum};
 use nihil_common::shm::AllocationEntry;
 use nihil_common::{
     CUDA_CONTROL_PLANE_RESERVATION_SIZE, MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE,
-    MemoryRequest,
+    MemoryRequest, ProcessLocalDeviceId,
 };
 use nix::libc::{self, RTLD_NEXT, c_char, c_int, dlsym};
 use nix::sys::stat::mode_t;
@@ -165,9 +165,12 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                 MemoryRequest {
                     mem_req: std::array::from_fn(|ith_dev| {
                         if ith_dev == device_id as usize {
-                            vec![CUDA_CONTROL_PLANE_RESERVATION_SIZE as u64]
+                            (
+                                ProcessLocalDeviceId(device_id),
+                                vec![CUDA_CONTROL_PLANE_RESERVATION_SIZE as u64],
+                            )
                         } else {
-                            Vec::new()
+                            (ProcessLocalDeviceId(0), Vec::new())
                         }
                     }),
                 },

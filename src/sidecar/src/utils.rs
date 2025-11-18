@@ -1,5 +1,5 @@
 use cudarc::driver::sys::cudaError_enum;
-use nihil_common::{CUDA_PROCESS_RESERVATION_SIZE, MemoryRequest};
+use nihil_common::{CUDA_PROCESS_RESERVATION_SIZE, MemoryRequest, ProcessLocalDeviceId};
 
 use crate::{
     env_config::sidecar_config,
@@ -57,9 +57,12 @@ pub(crate) fn set_device(dev: i32) {
             MemoryRequest {
                 mem_req: std::array::from_fn(|ith_dev| {
                     if ith_dev == dev as usize {
-                        vec![CUDA_PROCESS_RESERVATION_SIZE as u64]
+                        (
+                            ProcessLocalDeviceId(dev),
+                            vec![CUDA_PROCESS_RESERVATION_SIZE as u64],
+                        )
                     } else {
-                        Vec::new()
+                        (ProcessLocalDeviceId(0), Vec::new())
                     }
                 }),
             },

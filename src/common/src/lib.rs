@@ -65,7 +65,7 @@ pub struct MigrationResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRequest {
-    pub mem_req: [Vec<u64>; MAX_GPUS],
+    pub mem_req: [(ProcessLocalDeviceId, Vec<u64>); MAX_GPUS], // local device id
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -166,6 +166,8 @@ impl Scheduler {
                             self.handle_sched_request(req.pid, None).await
                         }
                         ActivityUpdate::YieldThenRequestSchedulingAndMem { memory_request } => {
+                            // convert local device ids to global device ids
+
                             self.handle_sched_request(req.pid, Some(memory_request))
                                 .await
                         }
@@ -237,7 +239,7 @@ impl Scheduler {
                         .unwrap()
                         .mem_req
                         .iter()
-                        .map(|v| v.iter().sum::<u64>())
+                        .map(|v| v.1.iter().sum::<u64>())
                         .sum::<u64>()
                 )
             );
@@ -518,19 +520,23 @@ impl Scheduler {
                 return Err(ScheduleError::InvalidClient(incoming_pid));
             };
             let (incoming_request, devs) = if let Some(mem_req) = mem_req {
-                let requirement = mem_req
-                    .mem_req
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(global_id, entries)| {
+                let requirement = {
+                    let mut req_map = HashMap::new();
+                    let dev_mapping = new_handle.dev_mapping();
+                    for (local_dev, entries) in mem_req.mem_req.into_iter() {
                         let size = entries.iter().sum::<u64>();
                         if size > 0 {
-                            Some((GlobalDeviceId(global_id as i32), size))
-                        } else {
-                            None
+                            let real_dev = dev_mapping
+                                .visible_to_real(local_dev)
+                                .ok_or_else(|| ScheduleError::Unavailable(format!(
+                                    "Device mapping not found for local device id {:?} of process {}",
+                                    local_dev, incoming_pid
+                                )))?;
+                            req_map.insert(real_dev, size);
                         }
-                    })
-                    .collect::<HashMap<_, _>>();
+                    }
+                    req_map
+                };
                 let devs = requirement.keys().cloned().collect();
                 (DeviceRequestArgs::Allocation(requirement), devs)
             } else {
