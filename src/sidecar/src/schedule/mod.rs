@@ -6,7 +6,9 @@ use std::{
 use nihil_common::{ActivityUpdate, MemoryRequest, SchedulingArgs, general::CallParameter};
 use stats::LaunchStats;
 
-use crate::{check_cu_err, env_config::sidecar_config, set_device};
+use crate::{
+    check_cu_err, env_config::sidecar_config, intercept_launch::is_during_capture, set_device,
+};
 
 mod stats;
 pub(crate) use stats::LaunchType;
@@ -48,6 +50,10 @@ impl Scheduler {
 
     pub fn set_allow_running(&'static self, params: CallParameter<SchedulingArgs, ()>) {
         self.spawn_idle_monitor_once();
+        // TODO: unsound implementation, need condvar for sound implementation
+        while is_during_capture() {
+            std::thread::yield_now();
+        }
         let mut allow_running = self.allow_running.lock().unwrap();
         match params.param {
             SchedulingArgs::Enable => {

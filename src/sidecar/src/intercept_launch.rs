@@ -62,6 +62,7 @@ pub extern "C" fn cudaStreamCaptureBegin(stream: CUstream, mode: i32) -> cudaErr
     static STREAM_CAPTURE_BEGIN_FN: OnceLock<CudaStreamBeginCaptureType> = OnceLock::new();
     generate_init_fn!(CudaStreamBeginCaptureType, cr"cudaStreamBeginCapture");
     let stream_capture_begin_func = STREAM_CAPTURE_BEGIN_FN.get_or_init(init_fn);
+    SCHED_CTL.launch_allowed(LaunchType::Graph);
     IS_DURING_CAPTURE.store(true, std::sync::atomic::Ordering::Relaxed);
     stream_capture_begin_func(stream, mode)
 }
@@ -73,8 +74,9 @@ pub extern "C" fn cudaStreamEndCapture(stream: CUstream, pGraph: *mut c_void) ->
     static STREAM_END_CAPTURE_FN: OnceLock<CudaStreamEndCaptureType> = OnceLock::new();
     generate_init_fn!(CudaStreamEndCaptureType, cr"cudaStreamEndCapture");
     let stream_end_capture_func = STREAM_END_CAPTURE_FN.get_or_init(init_fn);
+    let res = stream_end_capture_func(stream, pGraph);
     IS_DURING_CAPTURE.store(false, std::sync::atomic::Ordering::Relaxed);
-    stream_end_capture_func(stream, pGraph)
+    res
 }
 
 #[allow(unused)]
