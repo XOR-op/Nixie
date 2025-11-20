@@ -35,6 +35,8 @@ pub enum DaemonError {
     Nvml(&'static str, nvml_wrapper::error::NvmlError),
     #[error("{0}: Config error {1}")]
     Config(&'static str, toml::de::Error),
+    #[error("{0}: Config error {1}")]
+    ConfigValue(&'static str, String),
     #[error("HybridBuffer: {0}")]
     HybridBuffer(#[from] HybridBufferError),
 }

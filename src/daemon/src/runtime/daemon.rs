@@ -17,7 +17,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{Config, ConfigurableArgs, init_config, load_config, update_config},
+    config::{Config, ConfigurableArgs, load_config, update_config},
     control::{
         self, Controllable, DataManagerMetadata, PrefetchArgs, PrefetchResponse, SetPriorityArgs,
         SetPriorityResponse,
@@ -63,31 +63,19 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn new() -> Self {
+    pub fn new(shm_buffer_size: usize, ram_buffer_size: usize) -> Self {
         Self {
             daemon_path: PathBuf::from("/tmp/nihilphase.sock"),
             control_path: PathBuf::from(control::CONTROL_PATH),
             buffer_path: PathBuf::from("/tmp/nihilphase.pagebuffer"),
-            shm_buffer_size: 36 * 1024 * 1024 * 1024,
-            ram_buffer_size: 32 * 1024 * 1024 * 1024,
+            shm_buffer_size,
+            ram_buffer_size,
             shm_buffer_path: String::from("/nihilphase_shm_buffer"),
             data: Arc::new(DaemonData::new()),
         }
     }
 
-    pub fn run(self, config_path: Option<PathBuf>) {
-        crate::logging::init_tracing();
-        tracing::info!("Starting daemon...");
-        if unsafe { cudarc::driver::sys::cuInit(0) }
-            != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS
-        {
-            tracing::error!("Failed to initialize CUDA");
-            return;
-        }
-        if let Err(e) = init_config(config_path) {
-            tracing::error!("Failed to init config: {}", e);
-            return;
-        }
+    pub fn run(self) {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .enable_all()

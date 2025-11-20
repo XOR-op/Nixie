@@ -7,7 +7,8 @@ use colored::Colorize;
 use control::{client::ControlClient, parse::parse_move_ops};
 
 use crate::{
-    control::parse::{MoveOperation, parse_pid},
+    config::{CliConfig, init_config},
+    control::parse::{MoveOperation, parse_pid, parse_size},
     runtime::{Priority, PriorityLevel},
 };
 
@@ -68,6 +69,15 @@ struct UpdateConfigArgs {
 struct DaemonArgs {
     #[arg(short, long)]
     pub config_path: Option<PathBuf>,
+    /// Set shared memory size (e.g., "32g", "1024m")
+    #[arg(long, value_parser = parse_size, visible_aliases = ["shm"])]
+    pub shmem: Option<u64>,
+    /// Set host memory size (e.g., "32g", "1024m")
+    #[arg(long, value_parser = parse_size, visible_aliases = ["host", "ram","paged"])]
+    pub hostmem: Option<u64>,
+    /// Set device memory usage ratio (0.0 - 1.0)
+    #[arg(long)]
+    pub device_ratio: Option<f64>,
 }
 
 #[derive(Debug, Parser)]
@@ -145,8 +155,29 @@ impl ProcArgs {
 fn main() {
     let args: Args = Args::parse();
     if let Args::Daemon(args) = args {
-        let runtime = runtime::Daemon::new();
-        runtime.run(args.config_path);
+        crate::logging::init_tracing();
+        tracing::info!("Starting daemon...");
+        if unsafe { cudarc::driver::sys::cuInit(0) }
+            != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS
+        {
+            tracing::error!("Failed to initialize CUDA");
+            return;
+        }
+        let cli_config = CliConfig {
+            shmem_size: args.shmem,
+            hostmem_size: args.hostmem,
+            device_threshold: args.device_ratio,
+        };
+        if let Err(e) = init_config(args.config_path, cli_config) {
+            tracing::error!("Failed to init config: {}", e);
+            return;
+        }
+        let config = crate::config::load_config();
+        let runtime = runtime::Daemon::new(
+            config.shmem_size_mb * 1024 * 1024,
+            config.hostmem_size_mb * 1024 * 1024,
+        );
+        runtime.run();
         std::process::exit(0);
     }
     let rt = tokio::runtime::Builder::new_multi_thread()

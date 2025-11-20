@@ -10,7 +10,9 @@ use crate::error::DaemonError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub device_memory_mb: Vec<u64>,
+    pub shmem_size_mb: usize,
+    pub hostmem_size_mb: usize,
+    pub device_memory_mb: Vec<usize>,
     pub device_threshold: f64,
     pub schedule_cooldown: Option<Duration>,
     pub preallocate_hostmem: bool,
@@ -23,11 +25,50 @@ impl Config {
             device_threshold: Some(self.device_threshold),
         }
     }
+
+    pub fn merge_from(&mut self, other: InitConfig) {
+        if let Some(shmem_size_mb) = other.shmem_size_mb {
+            self.shmem_size_mb = shmem_size_mb;
+        }
+        if let Some(hostmem_size_mb) = other.hostmem_size_mb {
+            self.hostmem_size_mb = hostmem_size_mb;
+        }
+        if let Some(device_memory_mb) = other.device_memory_mb {
+            self.device_memory_mb = device_memory_mb;
+        }
+        if let Some(device_threshold) = other.device_threshold {
+            self.device_threshold = device_threshold;
+        }
+        if let Some(schedule_cooldown) = other.schedule_cooldown {
+            self.schedule_cooldown = Some(schedule_cooldown);
+        }
+        if let Some(preallocate_hostmem) = other.preallocate_hostmem {
+            self.preallocate_hostmem = preallocate_hostmem;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitConfig {
+    pub shmem_size_mb: Option<usize>,
+    pub hostmem_size_mb: Option<usize>,
+    pub device_memory_mb: Option<Vec<usize>>,
+    pub device_threshold: Option<f64>,
+    pub schedule_cooldown: Option<Duration>,
+    pub preallocate_hostmem: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigurableArgs {
     pub schedule_cooldown: Option<Duration>,
+    pub device_threshold: Option<f64>,
+}
+
+/// CLI configuration options that override file config
+#[derive(Debug, Clone, Default)]
+pub struct CliConfig {
+    pub shmem_size: Option<u64>,
+    pub hostmem_size: Option<u64>,
     pub device_threshold: Option<f64>,
 }
 
@@ -42,7 +83,7 @@ pub fn load_config() -> Arc<Config> {
         .clone()
 }
 
-pub fn init_config(config_path: Option<PathBuf>) -> Result<(), DaemonError> {
+pub fn init_config(config_path: Option<PathBuf>, cli_config: CliConfig) -> Result<(), DaemonError> {
     let nvml = crate::staticly::get_nvml();
     let devices = nvml
         .device_count()
@@ -55,22 +96,46 @@ pub fn init_config(config_path: Option<PathBuf>) -> Result<(), DaemonError> {
         let memory = device
             .memory_info()
             .map_err(|e| DaemonError::Nvml("memory_info", e))?;
-        device_memory_mb.push(memory.total / 1024 / 1024);
+        device_memory_mb.push(memory.total as usize / 1024 / 1024);
     }
     // default value
     let mut config = Config {
+        shmem_size_mb: 36 * 1024,
+        hostmem_size_mb: 32 * 1024,
         device_memory_mb,
         device_threshold: 0.95,
         schedule_cooldown: None,
         preallocate_hostmem: false,
     };
 
+    // Apply file config first
     if let Some(config_path) = config_path {
         let config_content = std::fs::read_to_string(config_path)
             .map_err(|e| DaemonError::Io("read config file", e))?;
-        let loaded_config: ConfigurableArgs =
+        let loaded_config: InitConfig =
             toml::from_str(&config_content).map_err(|e| DaemonError::Config("parse toml", e))?;
-        update_config_from(&mut config, loaded_config);
+        config.merge_from(loaded_config);
+    }
+
+    // Apply CLI config with higher priority (overrides file config)
+    if let Some(shmem_size) = cli_config.shmem_size {
+        config.shmem_size_mb = (shmem_size / (1024 * 1024)) as usize;
+    }
+    if let Some(hostmem_size) = cli_config.hostmem_size {
+        config.hostmem_size_mb = (hostmem_size / (1024 * 1024)) as usize;
+    }
+    if let Some(device_threshold) = cli_config.device_threshold {
+        config.device_threshold = device_threshold;
+    }
+
+    if config.shmem_size_mb % 2 != 0 || config.hostmem_size_mb % 2 != 0 {
+        return Err(DaemonError::ConfigValue(
+            "validate config",
+            format!(
+                "shmem_size_mb={} and hostmem_size_mb={} must be multiples of 2",
+                config.shmem_size_mb, config.hostmem_size_mb
+            ),
+        ));
     }
 
     let mut guard = CONFIG.write().unwrap();

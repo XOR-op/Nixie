@@ -102,7 +102,7 @@ fn parse_buffer_location(s: &str) -> Result<BufferLocation, String> {
 }
 
 // can parse sizes like "10g", "512m", "1024k", "10gb","100mb" or just numbers in bytes
-fn parse_size(s: &str) -> Result<u64, String> {
+pub fn parse_size(s: &str) -> Result<u64, String> {
     let s = s.trim();
     if s.is_empty() {
         return Err("Size string is empty".to_string());
