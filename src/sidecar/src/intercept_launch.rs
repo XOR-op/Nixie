@@ -4,11 +4,13 @@ use std::{
 };
 
 use cudarc::driver::sys::{CUgraphExec, CUstream, cudaError_enum};
+use nihil_common::CUDA_CONTROL_PLANE_RESERVATION_SIZE;
 use nix::libc::{self, RTLD_NEXT, dlsym};
 
 use crate::{
     generate_init_fn, generate_init_fn_as,
-    schedule::{LaunchType, SCHED_CTL},
+    schedule::{LaunchType, SCHED_CTL, require_reserved_memory},
+    utils::get_device,
 };
 #[repr(C)]
 pub struct CudaDim3 {
@@ -77,6 +79,23 @@ pub extern "C" fn cudaStreamEndCapture(stream: CUstream, pGraph: *mut c_void) ->
     let res = stream_end_capture_func(stream, pGraph);
     IS_DURING_CAPTURE.store(false, std::sync::atomic::Ordering::Relaxed);
     res
+}
+
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub extern "C" fn cudaGraphInstantiate(
+    pGraphExec: *mut CUgraphExec,
+    graph: *mut c_void,
+    flag: usize,
+) -> cudaError_enum {
+    type CudaGraphInstantiateType =
+        extern "C" fn(*mut CUgraphExec, *mut c_void, usize) -> cudaError_enum;
+    static GRAPH_INSTANTIATE_FN: OnceLock<CudaGraphInstantiateType> = OnceLock::new();
+    generate_init_fn!(CudaGraphInstantiateType, cr"cudaGraphInstantiate");
+    let graph_instantiate_func = GRAPH_INSTANTIATE_FN.get_or_init(init_fn);
+    let device_id = get_device();
+    require_reserved_memory(CUDA_CONTROL_PLANE_RESERVATION_SIZE, device_id);
+    graph_instantiate_func(pGraphExec, graph, flag)
 }
 
 #[allow(unused)]

@@ -128,7 +128,7 @@ pub fn init_config(config_path: Option<PathBuf>, cli_config: CliConfig) -> Resul
         config.device_threshold = device_threshold;
     }
 
-    if config.shmem_size_mb % 2 != 0 || config.hostmem_size_mb % 2 != 0 {
+    if !config.shmem_size_mb.is_multiple_of(2) || !config.hostmem_size_mb.is_multiple_of(2) {
         return Err(DaemonError::ConfigValue(
             "validate config",
             format!(

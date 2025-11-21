@@ -3,11 +3,14 @@ use std::{
     time::Duration,
 };
 
-use nihil_common::{ActivityUpdate, MemoryRequest, SchedulingArgs, general::CallParameter};
+use nihil_common::{
+    ActivityUpdate, MemoryRequest, ProcessLocalDeviceId, SchedulingArgs, general::CallParameter,
+};
 use stats::LaunchStats;
 
 use crate::{
-    check_cu_err, env_config::sidecar_config, intercept_launch::is_during_capture, set_device,
+    check_cu_err, env_config::sidecar_config, intercept::cuda_mem_get_info_impl,
+    intercept_launch::is_during_capture, set_device,
 };
 
 mod stats;
@@ -190,5 +193,22 @@ impl Scheduler {
                 });
             }
         }
+    }
+}
+
+pub(crate) fn require_reserved_memory(size: usize, device_id: i32) {
+    if cuda_mem_get_info_impl().0 < size {
+        SCHED_CTL.pause_then_require_memory(
+            LaunchType::Malloc,
+            Box::new(MemoryRequest {
+                mem_req: std::array::from_fn(|ith_dev| {
+                    if ith_dev == device_id as usize {
+                        (ProcessLocalDeviceId(device_id), vec![size as u64])
+                    } else {
+                        (ProcessLocalDeviceId(0), Vec::new())
+                    }
+                }),
+            }),
+        );
     }
 }

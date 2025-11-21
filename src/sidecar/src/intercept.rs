@@ -1,8 +1,7 @@
-use cudarc::driver::sys::{CUdevice, CUstream, cudaError_enum};
+use cudarc::driver::sys::{CUstream, cudaError_enum};
 use nihil_common::shm::AllocationEntry;
 use nihil_common::{
     CUDA_CONTROL_PLANE_RESERVATION_SIZE, MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE,
-    MemoryRequest, ProcessLocalDeviceId,
 };
 use nix::libc::{self, RTLD_NEXT, c_char, c_int, dlsym};
 use nix::sys::stat::mode_t;
@@ -12,7 +11,8 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
 use crate::memory::{deallocate_list, get_max_allocation_size, populate_entry};
-use crate::schedule::{LaunchType, SCHED_CTL};
+use crate::schedule::{LaunchType, SCHED_CTL, require_reserved_memory};
+use crate::utils::get_device;
 use crate::{GENERIC_DATA, check_cu_err, warn_eprintln};
 
 #[macro_export]
@@ -45,7 +45,7 @@ fn get_func_ptr_cuda_mem_get_info() -> &'static CudaMemGetInfoType {
     MEM_GET_INFO_FN.get_or_init(init_fn)
 }
 
-fn cuda_mem_get_info_impl() -> (usize, usize) {
+pub(crate) fn cuda_mem_get_info_impl() -> (usize, usize) {
     let mut avail = 0;
     let mut total = 0;
     check_cu_err!(
@@ -68,14 +68,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     init_cuda_env();
 
     // check against size limit
-    let device_id = {
-        let mut device_id = CUdevice::default();
-        let res = unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id as *mut _) };
-        if res != cudaError_enum::CUDA_SUCCESS {
-            panic!("Failed to get device id: {:?}", res);
-        }
-        device_id
-    };
+    let device_id = get_device();
     if CURRENT_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Relaxed) + size as u64
         > get_max_allocation_size(device_id)
     {
@@ -159,23 +152,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             );
         }
         CURRENT_ALLOCATION_SIZE.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
-        if cuda_mem_get_info_impl().0 < CUDA_CONTROL_PLANE_RESERVATION_SIZE {
-            SCHED_CTL.pause_then_require_memory(
-                LaunchType::Malloc,
-                Box::new(MemoryRequest {
-                    mem_req: std::array::from_fn(|ith_dev| {
-                        if ith_dev == device_id as usize {
-                            (
-                                ProcessLocalDeviceId(device_id),
-                                vec![CUDA_CONTROL_PLANE_RESERVATION_SIZE as u64],
-                            )
-                        } else {
-                            (ProcessLocalDeviceId(0), Vec::new())
-                        }
-                    }),
-                }),
-            );
-        }
+        require_reserved_memory(CUDA_CONTROL_PLANE_RESERVATION_SIZE, device_id);
     }
     res
 }

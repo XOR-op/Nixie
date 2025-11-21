@@ -1,4 +1,4 @@
-use cudarc::driver::sys::cudaError_enum;
+use cudarc::driver::sys::{CUdevice, cudaError_enum};
 use nihil_common::{CUDA_PROCESS_RESERVATION_SIZE, MemoryRequest, ProcessLocalDeviceId};
 
 use crate::{
@@ -73,6 +73,15 @@ pub(crate) fn set_device(dev: i32) {
     assert!(!cu_ctx.is_null());
     let res = unsafe { cudarc::driver::sys::cuCtxSetCurrent(cu_ctx) };
     check_cu_err!(res, "cuCtxSetCurrent");
+}
+
+pub(crate) fn get_device() -> i32 {
+    let mut device_id = CUdevice::default();
+    let res = unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id as *mut _) };
+    if res != cudaError_enum::CUDA_SUCCESS {
+        panic!("Failed to get device id: {:?}", res);
+    }
+    device_id
 }
 
 // restore the context when dropped
