@@ -3,7 +3,6 @@ use std::{
     io::{IoSlice, IoSliceMut},
     num::NonZeroU32,
     sync::Arc,
-    time::Duration,
 };
 
 use itertools::Itertools;
@@ -18,10 +17,10 @@ use crate::{
     runtime::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
-            BufferLocation, DataManagerHandle,
+            BufferLocation, DataManagerHandle, ShmBufferRequest,
             channel::{
                 InDataReadyRx, InDataReadyTx, OutDataReadyRx, OutDataReadyTx, RequestForSpaceRx,
-                RequestForSpaceTx, create_data_ready_channel, create_request_for_space_channel,
+                ShmCoordinator, create_data_ready_channel, create_request_for_space_channel,
             },
             hostmem_buffer::HostMemBufferManager,
             shm_buffer::ShmBlock,
@@ -326,11 +325,18 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             )
         };
         let (req_shm_tx, req_shm_rx) = create_request_for_space_channel();
+        let shm_from_gpu_notify = Arc::new(tokio::sync::Notify::new());
+        let shm_from_backend_notify = Arc::new(tokio::sync::Notify::new());
         let mut task_handles = Vec::new();
+        let shm_coor = Arc::new(ShmCoordinator::new(
+            self.data_manager.shm.clone(),
+            req_shm_tx,
+            shm_from_gpu_notify.clone(),
+            shm_from_backend_notify.clone(),
+        ));
         for (device, (in_rx, out_tx)) in device_junction {
             let src_list = src_per_device.remove(&device).unwrap_or_default();
-            let shm_buffer_mgr = self.data_manager.shm.clone();
-            let req_shm_tx = req_shm_tx.clone();
+            let shm_coor = shm_coor.clone();
             let into_gpu = self.into_gpu.as_mut().map(|into_gpu| {
                 let dst_entries = into_gpu.1.device_map.remove(&device).unwrap_or_default();
                 // Run migration for each device
@@ -347,14 +353,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
 
             task_handles.push(tokio::spawn(async move {
                 Self::run_for_device(
-                    device,
-                    src_list,
-                    into_gpu,
-                    shm_buffer_mgr,
-                    in_rx,
-                    out_tx,
-                    req_shm_tx,
-                    cancel_rx,
+                    device, src_list, into_gpu, shm_coor, in_rx, out_tx, cancel_rx,
                 )
                 .await;
             }));
@@ -362,18 +361,16 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         // interact with host mem and storage
         if !self.hostmem_to_shm.is_empty() {
             task_handles.push({
-                let shm_buffer_mgr = self.data_manager.shm.clone();
+                let shm_coor = shm_coor.clone();
                 let hostmem_buffer_mgr = self.data_manager.hostmem.clone();
                 let in_tx = in_tx.clone();
-                let req_shm_tx = req_shm_tx.clone();
                 let cancel_rx = cancel_rx.clone();
                 tokio::spawn(async move {
                     backend_to_shm_transfer(
                         self.hostmem_to_shm,
                         in_tx,
-                        shm_buffer_mgr,
+                        shm_coor,
                         BackendManager::HostMem(hostmem_buffer_mgr),
-                        req_shm_tx,
                         cancel_rx,
                     )
                     .await
@@ -383,18 +380,16 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
 
         if !self.storage_to_shm.is_empty() {
             task_handles.push({
-                let shm_buffer_mgr = self.data_manager.shm.clone();
+                let shm_coor = shm_coor.clone();
                 let storage_buffer_mgr = self.data_manager.storage.clone();
                 let in_tx = in_tx.clone();
-                let req_shm_tx = req_shm_tx.clone();
                 let cancel_rx = cancel_rx.clone();
                 tokio::spawn(async move {
                     backend_to_shm_transfer(
                         self.storage_to_shm,
                         in_tx,
-                        shm_buffer_mgr,
+                        shm_coor,
                         BackendManager::Storage(storage_buffer_mgr),
-                        req_shm_tx,
                         cancel_rx,
                     )
                     .await
@@ -420,6 +415,8 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                     hostmem_buffer_mgr,
                     storage_buffer_mgr,
                     req_shm_rx,
+                    shm_from_gpu_notify,
+                    shm_from_backend_notify,
                     cancel_rx,
                 )
                 .await
@@ -460,7 +457,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             });
         }
         drop(in_tx);
-        drop(req_shm_tx);
+        drop(shm_coor);
 
         let ts_start = std::time::Instant::now();
         // Wait for all tasks to complete
@@ -493,10 +490,9 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             SidecarClient,
             Vec<MigrationSpecEntry>,
         )>,
-        shm_buffer_mgr: Arc<ShmBufferManager>,
+        shm_coor: Arc<ShmCoordinator>,
         in_data_ready_rx: InDataReadyRx,
         out_data_ready_tx: OutDataReadyTx,
-        req_shm_tx: RequestForSpaceTx,
         cancel_rx: watch::Receiver<bool>,
     ) {
         let (transfer_token_tx, transfer_token_rx) =
@@ -506,7 +502,7 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             tokio::spawn(host_to_device_transfer(
                 global_id,
                 into_gpu,
-                shm_buffer_mgr.clone(),
+                shm_coor.shm_buffer_manager(),
                 transfer_token_rx,
                 in_data_ready_rx,
                 cancel_rx.clone(),
@@ -516,10 +512,9 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
         device_to_host_transfer(
             global_id,
             out_from_gpu,
-            shm_buffer_mgr,
+            shm_coor,
             transfer_token_tx,
             out_data_ready_tx,
-            req_shm_tx,
             cancel_rx,
         )
         .await;
@@ -559,10 +554,9 @@ async fn device_to_host_transfer(
         SidecarClient,
         Vec<MigrationSpecEntry>,
     )>,
-    shm_buffer_mgr: Arc<ShmBufferManager>,
+    shm_coor: Arc<ShmCoordinator>,
     gpu_mem_token_tx: mpsc::UnboundedSender<MigrationResponse>,
     out_data_ready_tx: OutDataReadyTx,
-    req_for_shm: RequestForSpaceTx,
     mut cancel_rx: watch::Receiver<bool>,
 ) {
     let total = out_from_gpu
@@ -575,10 +569,8 @@ async fn device_to_host_transfer(
     #[allow(unused_variables, unused_mut)]
     let mut last_time = std::time::Instant::now();
 
-    let mut moved_cnt = 0;
     for (out_from_gpu_pid, device, rpc_client, out_from_gpu_entries) in out_from_gpu {
         // Migrate each entry
-        let timeout = Duration::from_secs(5);
         for out_from_gpu_entry in out_from_gpu_entries {
             check_cancellation!(cancel_rx);
             let src_buffer_id = BufferId {
@@ -587,44 +579,8 @@ async fn device_to_host_transfer(
                 block_id: out_from_gpu_entry.handle_idx,
                 size: out_from_gpu_entry.size,
             };
-            let blocks = match shm_buffer_mgr.try_reserve(&src_buffer_id) {
-                Some(blocks) => blocks,
-                None => {
-                    // No shm is immediately available; wait for shm->backend to free up space
-                    req_for_shm.prio_request();
-                    match with_cancel_rx_async!(
-                        cancel_rx,
-                        shm_buffer_mgr.reserve_with_max_pending(
-                            &src_buffer_id,
-                            0,
-                            Some(Duration::from_secs(18))
-                        )
-                    ) {
-                        Ok(blocks) => blocks,
-                        Err(_) => {
-                            // No shm is available given the plan; we need to notify shm -> backend to free up space
-                            req_for_shm.request(1);
-                            match with_cancel_rx_async!(
-                                cancel_rx,
-                                shm_buffer_mgr.reserve_with_timeout(&src_buffer_id, Some(timeout))
-                            ) {
-                                Ok(offset) => offset,
-                                Err(_) => {
-                                    tracing::warn!(
-                                        "Failed to reserve shm for gpu->shm: {:?} for timeout {:?}; moved {}/{}",
-                                        src_buffer_id,
-                                        timeout,
-                                        moved_cnt,
-                                        total
-                                    );
-                                    tokio::time::sleep(Duration::from_secs(3600)).await;
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                }
-            };
+            let blocks =
+                with_cancel_rx_async!(cancel_rx, shm_coor.reserve_from_gpu(&src_buffer_id));
 
             let args = MigrationArgs {
                 host_buffer_offset: blocks.iter().map(|b| b.offset.0).collect(),
@@ -659,8 +615,6 @@ async fn device_to_host_transfer(
                 ));
                 last_time = std::time::Instant::now();
             }
-
-            moved_cnt += 1;
         }
     }
     drop(gpu_mem_token_tx); // close the channel
@@ -872,57 +826,19 @@ enum BackendManager {
 async fn backend_to_shm_transfer(
     host_mem_to_shm: Vec<BufferId>,
     in_data_ready_tx: InDataReadyTx,
-    shm_buffer_mgr: Arc<ShmBufferManager>,
+    shm_coor: Arc<ShmCoordinator>,
     backend_mgr: BackendManager,
-    req_for_shm: RequestForSpaceTx,
     mut cancel_rx: watch::Receiver<bool>,
 ) {
     let mut moved_cnt = 0;
     let total = host_mem_to_shm.len();
-    let timeout = Duration::from_secs(6);
     for buffer_id in host_mem_to_shm {
         check_cancellation!(cancel_rx);
 
-        let blocks = match shm_buffer_mgr.try_reserve(&buffer_id) {
-            Some(blocks) => blocks,
-            None => {
-                req_for_shm.prio_request();
-                match with_cancel_rx_async!(
-                    cancel_rx,
-                    shm_buffer_mgr.reserve_with_max_pending(
-                        &buffer_id,
-                        0,
-                        Some(Duration::from_secs(30))
-                    )
-                ) {
-                    Ok(offset) => offset,
-                    Err(_) => {
-                        // No shm is available given the plan; we need to notify shm -> backend to free up space
-                        req_for_shm.request(1);
-                        match with_cancel_rx_async!(
-                            cancel_rx,
-                            shm_buffer_mgr.reserve_with_timeout(&buffer_id, Some(timeout))
-                        ) {
-                            Ok(blocks) => blocks,
-                            Err(_) => {
-                                tracing::warn!(
-                                    "Failed to reserve shm for backend->shm; buffer {:?} after {:?}; moved {}/{}",
-                                    buffer_id,
-                                    timeout,
-                                    moved_cnt,
-                                    total
-                                );
-                                tokio::time::sleep(Duration::from_secs(3600)).await;
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        };
+        let blocks = with_cancel_rx_async!(cancel_rx, shm_coor.reserve_from_backend(&buffer_id));
         let mut buf = unsafe {
             get_buffer_ref_mut(
-                convert_to_static(&shm_buffer_mgr), // safety: the lifetime of the buffer will not exceed the end of the block
+                convert_to_static(&shm_coor.shm_buffer_manager()), // safety: the lifetime of the buffer will not exceed the end of the block
                 &blocks,
             )
         };
@@ -970,6 +886,8 @@ async fn shm_to_backend_transfer(
     hostmem_buffer_mgr: Arc<HostMemBufferManager>,
     storage_buffer_mgr: Arc<StorageBufferManager>,
     mut req_for_shm_rx: RequestForSpaceRx,
+    shm_from_gpu_notify: Arc<tokio::sync::Notify>,
+    shm_from_backend_notify: Arc<tokio::sync::Notify>,
     mut cancel_rx: watch::Receiver<bool>,
 ) {
     fn check_location(buffer_id: &BufferId, expected: BufferLocation, actual: BufferLocation) {
@@ -1059,45 +977,57 @@ async fn shm_to_backend_transfer(
     }
     loop {
         // condition for releasing shm space
-        if !shm_buffer_mgr.is_full() {
-            match with_cancel_rx_async!(cancel_rx, req_for_shm_rx.listen()) {
-                // new request
-                Some(()) => {}
-                None => {
-                    // no more needed
-                    break;
-                }
+        let req = match with_cancel_rx_async!(cancel_rx, req_for_shm_rx.listen()) {
+            // new request
+            Some(req) => req,
+            None => {
+                // no more needed
+                break;
             }
-        }
-        // Release space for error in plan
-        let Some((buf_id, _)) =
-            shm_buffer_mgr.find(|buf_id, _| !excluding_list.contains(&buf_id.pid))
-        else {
-            tracing::warn!(
-                "No buffer can be released to satisfy shm space request for pid {:?}",
+        };
+        let mut remaining_count = req.count();
+        while remaining_count.0 > 0 {
+            // Release space for error in plan
+            let Some((buf_id, _)) =
+                shm_buffer_mgr.find(|buf_id, _| !excluding_list.contains(&buf_id.pid))
+            else {
+                tracing::warn!(
+                    "No buffer can be released to satisfy shm space request for pid {:?}",
+                    excluding_list
+                );
+                continue;
+            };
+            tracing::debug!(
+                "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {:?}",
+                buf_id.pid,
+                pretty_size(buf_id.size),
                 excluding_list
             );
-            continue;
-        };
-        tracing::debug!(
-            "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {:?}",
-            buf_id.pid,
-            pretty_size(buf_id.size),
-            excluding_list
-        );
-        extra_move += 1;
+            extra_move += 1;
 
-        // always try to move to hostmem first
-        panic_on_error!(
-            shm_to_backend_transfer_inner(
-                &buf_id,
-                &shm_buffer_mgr,
-                &hostmem_buffer_mgr,
-                &storage_buffer_mgr,
-                BufferLocation::HostMem
-            )
-            .await
-        );
+            // always try to move to hostmem first
+            panic_on_error!(
+                shm_to_backend_transfer_inner(
+                    &buf_id,
+                    &shm_buffer_mgr,
+                    &hostmem_buffer_mgr,
+                    &storage_buffer_mgr,
+                    BufferLocation::HostMem
+                )
+                .await
+            );
+            remaining_count.0 = remaining_count
+                .0
+                .saturating_sub(buf_id.get_allocation_count().0);
+        }
+        match req {
+            ShmBufferRequest::FromGPU(_) => {
+                shm_from_gpu_notify.notify_waiters();
+            }
+            ShmBufferRequest::FromBackend(_) => {
+                shm_from_backend_notify.notify_waiters();
+            }
+        }
     }
     tracing::trace!(
         "Shm to backend migration completed with {} extra moves",

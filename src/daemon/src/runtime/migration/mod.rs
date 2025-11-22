@@ -21,6 +21,12 @@ pub struct BufferId {
     pub size: u32,
 }
 
+impl BufferId {
+    pub fn get_allocation_count(&self) -> AllocationCount {
+        AllocationCount(self.size.div_ceil(nihil_common::MIN_ALLOCATION_SIZE as u32))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AllocationInfo {
     addr: u64,
@@ -33,6 +39,21 @@ pub(crate) enum BufferLocation {
     Shm,
     HostMem,
     Storage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum ShmBufferRequest {
+    FromGPU(AllocationCount),
+    FromBackend(AllocationCount),
+}
+
+impl ShmBufferRequest {
+    pub fn count(&self) -> AllocationCount {
+        match self {
+            ShmBufferRequest::FromGPU(count) => *count,
+            ShmBufferRequest::FromBackend(count) => *count,
+        }
+    }
 }
 
 #[derive(Clone)]

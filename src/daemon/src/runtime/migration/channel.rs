@@ -1,7 +1,14 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use nihil_common::GlobalDeviceId;
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
+
+use crate::runtime::migration::AllocationCount;
+use crate::runtime::migration::ShmBufferManager;
+use crate::runtime::migration::ShmBufferRequest;
+use crate::runtime::migration::shm_buffer::ShmBlock;
 
 use super::BufferLocation;
 
@@ -134,42 +141,42 @@ impl OutDataReadyRx {
 
 #[derive(Clone)]
 pub(super) struct RequestForSpaceTx {
-    inner: mpsc::UnboundedSender<()>,
-    prio_channel: mpsc::Sender<()>,
+    inner: mpsc::UnboundedSender<AllocationCount>,
+    prio_channel: mpsc::UnboundedSender<AllocationCount>,
 }
 
 impl RequestForSpaceTx {
-    pub fn request(&self, n: usize) {
-        for _ in 0..n {
-            if self.inner.send(()).is_err() {
-                tracing::warn!("Failed to request shm space");
-            }
+    pub fn request(&self, n_count: AllocationCount) {
+        if self.inner.send(n_count).is_err() {
+            tracing::warn!("Failed to request shm space");
         }
     }
 
-    // Prioritized request with capacity = 1
-    pub fn prio_request(&self) {
-        let _ = self.prio_channel.try_send(());
+    pub fn prio_request(&self, n_count: AllocationCount) {
+        if self.prio_channel.send(n_count).is_err() {
+            tracing::warn!("Failed to request shm space with priority");
+        }
     }
 }
+
 pub(super) struct RequestForSpaceRx {
-    inner: mpsc::UnboundedReceiver<()>,
-    prio_channel: mpsc::Receiver<()>,
+    inner: mpsc::UnboundedReceiver<AllocationCount>,
+    prio_channel: mpsc::UnboundedReceiver<AllocationCount>,
 }
 
 impl RequestForSpaceRx {
-    pub async fn listen(&mut self) -> Option<()> {
+    pub async fn listen(&mut self) -> Option<ShmBufferRequest> {
         tokio::select! {
             biased;
-            res = self.prio_channel.recv() => res,
-            res = self.inner.recv() => res,
+            res = self.prio_channel.recv() => res.map(ShmBufferRequest::FromGPU),
+            res = self.inner.recv() => res.map(ShmBufferRequest::FromBackend),
         }
     }
 }
 
 pub(super) fn create_request_for_space_channel() -> (RequestForSpaceTx, RequestForSpaceRx) {
     let (tx, rx) = mpsc::unbounded_channel();
-    let (prio_tx, prio_rx) = mpsc::channel(1);
+    let (prio_tx, prio_rx) = mpsc::unbounded_channel();
     (
         RequestForSpaceTx {
             inner: tx,
@@ -180,4 +187,117 @@ pub(super) fn create_request_for_space_channel() -> (RequestForSpaceTx, RequestF
             prio_channel: prio_rx,
         },
     )
+}
+
+pub(super) struct ShmCoordinator {
+    inner: std::sync::Mutex<ShmCoordinatorInner>,
+    shm_mgr: Arc<ShmBufferManager>,
+    req_for_shm: RequestForSpaceTx,
+    resp_for_gpu: Arc<Notify>,
+    resp_for_backend: Arc<Notify>,
+}
+
+struct ShmCoordinatorInner {
+    gpu_to_shm_pending: u32,
+    backend_to_shm_pending: u32,
+}
+
+impl ShmCoordinator {
+    pub fn new(
+        shm_mgr: Arc<ShmBufferManager>,
+        req_for_shm: RequestForSpaceTx,
+        resp_for_gpu: Arc<Notify>,
+        resp_for_backend: Arc<Notify>,
+    ) -> Self {
+        Self {
+            inner: std::sync::Mutex::new(ShmCoordinatorInner {
+                gpu_to_shm_pending: 0,
+                backend_to_shm_pending: 0,
+            }),
+            shm_mgr,
+            req_for_shm,
+            resp_for_gpu,
+            resp_for_backend,
+        }
+    }
+
+    pub async fn reserve_from_backend(&self, buf_id: &BufferId) -> Arc<[ShmBlock]> {
+        let mut im_pending = false;
+        #[allow(unused_assignments)]
+        let mut should_wait = false;
+        loop {
+            {
+                let mut inner = self.inner.lock().unwrap();
+                if inner.gpu_to_shm_pending == 0 {
+                    if let Some(blks) = self.shm_mgr.try_reserve(buf_id) {
+                        if im_pending {
+                            assert!(inner.backend_to_shm_pending > 0);
+                            inner.backend_to_shm_pending -= 1;
+                        }
+                        return blks;
+                    }
+                    if im_pending {
+                        tracing::warn!(
+                            "Backend pending reservation but still no space {:?}",
+                            buf_id
+                        );
+                    } else {
+                        im_pending = true;
+                        inner.backend_to_shm_pending += 1;
+                    }
+                    self.req_for_shm.request(buf_id.get_allocation_count());
+                    should_wait = true;
+                } else {
+                    should_wait = false
+                }
+            }
+            // wait for notification
+            if should_wait {
+                self.resp_for_backend.notified().await;
+            } else {
+                tokio::task::yield_now().await;
+            }
+        }
+    }
+
+    pub async fn reserve_from_gpu(&self, buf_id: &BufferId) -> Arc<[ShmBlock]> {
+        let mut im_pending = false;
+        #[allow(unused_assignments)]
+        let mut should_wait = false;
+        loop {
+            {
+                let mut inner = self.inner.lock().unwrap();
+                // pending GPU has higher priority
+                if inner.backend_to_shm_pending == 0 || im_pending {
+                    if let Some(blks) = self.shm_mgr.try_reserve(buf_id) {
+                        if im_pending {
+                            assert!(inner.gpu_to_shm_pending > 0);
+                            inner.gpu_to_shm_pending -= 1;
+                        }
+                        return blks;
+                    }
+                    if im_pending {
+                        tracing::warn!("GPU pending reservation but still no space, {:?}", buf_id);
+                    } else {
+                        im_pending = true;
+                        inner.gpu_to_shm_pending += 1;
+                    }
+                    self.req_for_shm.prio_request(buf_id.get_allocation_count());
+                    should_wait = true;
+                } else {
+                    should_wait = false
+                }
+            }
+            // wait for notification
+            if should_wait {
+                self.resp_for_gpu.notified().await;
+            } else {
+                tokio::task::yield_now().await;
+            }
+        }
+    }
+
+    pub fn shm_buffer_manager(&self) -> Arc<ShmBufferManager> {
+        self.shm_mgr.clone()
+    }
 }
