@@ -23,6 +23,7 @@ pub struct ShmBlock {
 
 struct ShmBufferInner {
     bookkeeping: HashMap<BufferId, Arc<[ShmBlock]>>,
+    pid_counter: HashMap<i32, usize>,
     avail_addrs: Vec<Offset>,
     pending_reservations: VecDeque<oneshot::Sender<()>>, // TODO: deprecate
 }
@@ -32,7 +33,7 @@ impl ShmBufferInner {
         inner: &mut std::sync::MutexGuard<'_, Self>,
         buf_id: &BufferId,
     ) -> Option<Arc<[ShmBlock]>> {
-        let required_len = buf_id.size.div_ceil(MIN_ALLOCATION_SIZE as u32) as usize;
+        let required_len = buf_id.get_allocation_count().0 as usize;
         if inner.avail_addrs.len() < required_len {
             return None;
         }
@@ -57,6 +58,11 @@ impl ShmBufferInner {
             Arc::from(inited)
         };
         inner.bookkeeping.insert(buf_id.clone(), blocks.clone());
+        inner
+            .pid_counter
+            .entry(buf_id.pid)
+            .and_modify(|c| *c += required_len)
+            .or_insert(required_len);
         Some(blocks)
     }
 
@@ -90,6 +96,7 @@ impl ShmBufferManager {
             shm_buffer,
             inner: Mutex::new(ShmBufferInner {
                 bookkeeping: HashMap::new(),
+                pid_counter: HashMap::new(),
                 avail_addrs,
                 pending_reservations: VecDeque::new(),
             }),
@@ -138,6 +145,15 @@ impl ShmBufferManager {
 impl ShmBufferManager {
     pub fn try_reserve(&self, buf_id: &BufferId) -> Option<Arc<[ShmBlock]>> {
         let mut inner = self.inner.lock().unwrap();
+        // we reserve 2*128MB space for migration && no single process should occupy all shm space
+        if let Some(count) = inner.pid_counter.get(&buf_id.pid) {
+            if (*count + buf_id.get_allocation_count().0 as usize) * MIN_ALLOCATION_SIZE
+                + 2 * MAX_ALLOCATION_SIZE
+                >= self.shm_buffer.size()
+            {
+                return None;
+            }
+        }
         ShmBufferInner::reserve_inner(&mut inner, buf_id)
     }
 
@@ -156,6 +172,12 @@ impl ShmBufferManager {
     pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(blocks) = inner.bookkeeping.remove(buf_id) {
+            let count = inner.pid_counter.get_mut(&buf_id.pid).unwrap();
+            *count = count.saturating_sub(buf_id.get_allocation_count().0 as usize);
+            if *count == 0 {
+                inner.pid_counter.remove(&buf_id.pid);
+            }
+
             for blk in blocks.iter() {
                 inner.avail_addrs.push(blk.offset);
             }
@@ -181,6 +203,7 @@ impl ShmBufferManager {
                 }
                 will_keep
             });
+            inner_ref.pid_counter.remove(&pid);
         }
         ShmBufferInner::notify_reservation(&mut inner, cnt);
     }

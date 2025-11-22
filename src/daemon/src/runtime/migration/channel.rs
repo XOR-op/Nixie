@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nihil_common::GlobalDeviceId;
-use tokio::sync::Notify;
 use tokio::sync::mpsc;
 
 use crate::runtime::migration::AllocationCount;
@@ -139,29 +139,38 @@ impl OutDataReadyRx {
     }
 }
 
-#[derive(Clone)]
 pub(super) struct RequestForSpaceTx {
     inner: mpsc::UnboundedSender<AllocationCount>,
     prio_channel: mpsc::UnboundedSender<AllocationCount>,
+    notify_gpu: tokio::sync::Mutex<mpsc::UnboundedReceiver<ShmRequestRxResp>>,
+    notify_backend: tokio::sync::Mutex<mpsc::UnboundedReceiver<ShmRequestRxResp>>,
 }
 
 impl RequestForSpaceTx {
-    pub fn request(&self, n_count: AllocationCount) {
+    pub fn backend_request(&self, n_count: AllocationCount) {
         if self.inner.send(n_count).is_err() {
             tracing::warn!("Failed to request shm space");
         }
     }
 
-    pub fn prio_request(&self, n_count: AllocationCount) {
+    pub fn gpu_request(&self, n_count: AllocationCount) {
         if self.prio_channel.send(n_count).is_err() {
             tracing::warn!("Failed to request shm space with priority");
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ShmRequestRxResp {
+    Ready,
+    BusyWait,
+}
+
 pub(super) struct RequestForSpaceRx {
     inner: mpsc::UnboundedReceiver<AllocationCount>,
     prio_channel: mpsc::UnboundedReceiver<AllocationCount>,
+    notify_gpu: mpsc::UnboundedSender<ShmRequestRxResp>,
+    notify_backend: mpsc::UnboundedSender<ShmRequestRxResp>,
 }
 
 impl RequestForSpaceRx {
@@ -176,19 +185,37 @@ impl RequestForSpaceRx {
     pub fn is_closed(&self) -> bool {
         self.inner.is_closed() && self.prio_channel.is_closed()
     }
+
+    pub fn notify_gpu(&self, resp: ShmRequestRxResp) {
+        if self.notify_gpu.send(resp).is_err() {
+            tracing::warn!("Failed to notify GPU shm request response");
+        }
+    }
+
+    pub fn notify_backend(&self, resp: ShmRequestRxResp) {
+        if self.notify_backend.send(resp).is_err() {
+            tracing::warn!("Failed to notify Backend shm request response");
+        }
+    }
 }
 
 pub(super) fn create_request_for_space_channel() -> (RequestForSpaceTx, RequestForSpaceRx) {
     let (tx, rx) = mpsc::unbounded_channel();
     let (prio_tx, prio_rx) = mpsc::unbounded_channel();
+    let (notify_gpu_tx, notify_gpu_rx) = mpsc::unbounded_channel();
+    let (notify_backend_tx, notify_backend_rx) = mpsc::unbounded_channel();
     (
         RequestForSpaceTx {
             inner: tx,
             prio_channel: prio_tx,
+            notify_gpu: tokio::sync::Mutex::new(notify_gpu_rx),
+            notify_backend: tokio::sync::Mutex::new(notify_backend_rx),
         },
         RequestForSpaceRx {
             inner: rx,
             prio_channel: prio_rx,
+            notify_gpu: notify_gpu_tx,
+            notify_backend: notify_backend_tx,
         },
     )
 }
@@ -197,8 +224,6 @@ pub(super) struct ShmCoordinator {
     inner: std::sync::Mutex<ShmCoordinatorInner>,
     shm_mgr: Arc<ShmBufferManager>,
     req_for_shm: RequestForSpaceTx,
-    resp_for_gpu: Arc<Notify>,
-    resp_for_backend: Arc<Notify>,
 }
 
 struct ShmCoordinatorInner {
@@ -207,12 +232,7 @@ struct ShmCoordinatorInner {
 }
 
 impl ShmCoordinator {
-    pub fn new(
-        shm_mgr: Arc<ShmBufferManager>,
-        req_for_shm: RequestForSpaceTx,
-        resp_for_gpu: Arc<Notify>,
-        resp_for_backend: Arc<Notify>,
-    ) -> Self {
+    pub fn new(shm_mgr: Arc<ShmBufferManager>, req_for_shm: RequestForSpaceTx) -> Self {
         Self {
             inner: std::sync::Mutex::new(ShmCoordinatorInner {
                 gpu_to_shm_pending: 0,
@@ -220,8 +240,6 @@ impl ShmCoordinator {
             }),
             shm_mgr,
             req_for_shm,
-            resp_for_gpu,
-            resp_for_backend,
         }
     }
 
@@ -229,6 +247,7 @@ impl ShmCoordinator {
         let mut im_pending = false;
         #[allow(unused_assignments)]
         let mut should_wait = false;
+        let mut resp_busy_wait = false;
         loop {
             {
                 let mut inner = self.inner.lock().unwrap();
@@ -240,26 +259,39 @@ impl ShmCoordinator {
                         }
                         return blks;
                     }
-                    if im_pending {
-                        tracing::warn!(
-                            "Backend pending reservation but still no space {:?}",
-                            buf_id
-                        );
-                    } else {
-                        im_pending = true;
-                        inner.backend_to_shm_pending += 1;
+                    if !resp_busy_wait {
+                        if im_pending {
+                            tracing::warn!(
+                                "Backend pending reservation but still no space {:?}",
+                                buf_id
+                            );
+                        } else {
+                            im_pending = true;
+                            inner.backend_to_shm_pending += 1;
+                        }
+                        self.req_for_shm
+                            .backend_request(buf_id.get_allocation_count());
+                        should_wait = true;
                     }
-                    self.req_for_shm.request(buf_id.get_allocation_count());
-                    should_wait = true;
                 } else {
                     should_wait = false
                 }
             }
             // wait for notification
-            if should_wait {
-                self.resp_for_backend.notified().await;
+            if should_wait && !resp_busy_wait {
+                match self.req_for_shm.notify_backend.lock().await.recv().await {
+                    Some(ShmRequestRxResp::Ready) => {}
+                    Some(ShmRequestRxResp::BusyWait) => {
+                        resp_busy_wait = true;
+                    }
+                    None => {
+                        tracing::warn!("Backend shm reservation notified but unexpected response");
+                        tokio::task::yield_now().await;
+                        tokio::time::sleep(Duration::from_micros(500)).await;
+                    }
+                }
             } else {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_micros(500)).await;
             }
         }
     }
@@ -286,7 +318,7 @@ impl ShmCoordinator {
                         im_pending = true;
                         inner.gpu_to_shm_pending += 1;
                     }
-                    self.req_for_shm.prio_request(buf_id.get_allocation_count());
+                    self.req_for_shm.gpu_request(buf_id.get_allocation_count());
                     should_wait = true;
                 } else {
                     should_wait = false
@@ -294,7 +326,13 @@ impl ShmCoordinator {
             }
             // wait for notification
             if should_wait {
-                self.resp_for_gpu.notified().await;
+                match self.req_for_shm.notify_gpu.lock().await.recv().await {
+                    Some(ShmRequestRxResp::Ready) => {}
+                    _ => {
+                        tracing::warn!("GPU shm reservation notified but unexpected response");
+                        tokio::task::yield_now().await;
+                    }
+                }
             } else {
                 tokio::task::yield_now().await;
             }

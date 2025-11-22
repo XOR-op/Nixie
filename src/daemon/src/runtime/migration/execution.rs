@@ -20,7 +20,8 @@ use crate::{
             BufferLocation, DataManagerHandle, ShmBufferRequest,
             channel::{
                 InDataReadyRx, InDataReadyTx, OutDataReadyRx, OutDataReadyTx, RequestForSpaceRx,
-                ShmCoordinator, create_data_ready_channel, create_request_for_space_channel,
+                ShmCoordinator, ShmRequestRxResp, create_data_ready_channel,
+                create_request_for_space_channel,
             },
             hostmem_buffer::HostMemBufferManager,
             shm_buffer::ShmBlock,
@@ -325,14 +326,10 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
             )
         };
         let (req_shm_tx, req_shm_rx) = create_request_for_space_channel();
-        let shm_from_gpu_notify = Arc::new(tokio::sync::Notify::new());
-        let shm_from_backend_notify = Arc::new(tokio::sync::Notify::new());
         let mut task_handles = Vec::new();
         let shm_coor = Arc::new(ShmCoordinator::new(
             self.data_manager.shm.clone(),
             req_shm_tx,
-            shm_from_gpu_notify.clone(),
-            shm_from_backend_notify.clone(),
         ));
         for (device, (in_rx, out_tx)) in device_junction {
             let src_list = src_per_device.remove(&device).unwrap_or_default();
@@ -415,8 +412,6 @@ impl DataMigrationTask<SidecarClient, DataManagerHandle> {
                     hostmem_buffer_mgr,
                     storage_buffer_mgr,
                     req_shm_rx,
-                    shm_from_gpu_notify,
-                    shm_from_backend_notify,
                     cancel_rx,
                 )
                 .await
@@ -886,8 +881,6 @@ pub(super) async fn shm_to_backend_transfer(
     hostmem_buffer_mgr: Arc<HostMemBufferManager>,
     storage_buffer_mgr: Arc<StorageBufferManager>,
     mut req_for_shm_rx: RequestForSpaceRx,
-    shm_from_gpu_notify: Arc<tokio::sync::Notify>,
-    shm_from_backend_notify: Arc<tokio::sync::Notify>,
     mut cancel_rx: watch::Receiver<bool>,
 ) {
     let mut extra_move = 0;
@@ -944,12 +937,12 @@ pub(super) async fn shm_to_backend_transfer(
                     handle_buffer_request(
                         req,
                         &mut extra_move,
+                        &mut next_shm_handling,
                         &shm_buffer_mgr,
                         &hostmem_buffer_mgr,
                         &storage_buffer_mgr,
                         &excluding_list,
-                        &shm_from_gpu_notify,
-                        &shm_from_backend_notify,
+                        &req_for_shm_rx,
                     ).await;
                     }
                     None => continue,
@@ -1004,12 +997,12 @@ async fn handle_unfinished_shm_entry(
 async fn handle_buffer_request(
     req: ShmBufferRequest,
     extra_move: &mut u32,
+    next_shm_handling: &mut HashMap<BufferId, BufferLocation>,
     shm_buffer_mgr: &ShmBufferManager,
     hostmem_buffer_mgr: &HostMemBufferManager,
     storage_buffer_mgr: &Arc<StorageBufferManager>,
     excluding_list: &HashSet<i32>,
-    shm_from_gpu_notify: &Arc<tokio::sync::Notify>,
-    shm_from_backend_notify: &Arc<tokio::sync::Notify>,
+    req_rx: &RequestForSpaceRx,
 ) {
     let mut remaining_count = req.count();
     while remaining_count.0 > 0 {
@@ -1017,19 +1010,30 @@ async fn handle_buffer_request(
         let Some((buf_id, _)) =
             shm_buffer_mgr.find(|buf_id, _| !excluding_list.contains(&buf_id.pid))
         else {
-            tracing::warn!(
-                "No buffer can be released to satisfy shm space request for pid {:?}",
+            if matches!(req, ShmBufferRequest::FromBackend(_)) {
+                // incoming space is limited and should be back pressured to GPU soon
+                req_rx.notify_backend(ShmRequestRxResp::BusyWait);
+                return;
+            } else {
+                tracing::warn!(
+                    "No buffer can be released to satisfy shm space request {:?} for pid {:?}",
+                    req,
+                    excluding_list
+                );
+                return;
+            }
+        };
+        if next_shm_handling.contains_key(&buf_id) {
+            next_shm_handling.remove(&buf_id);
+        } else {
+            tracing::debug!(
+                "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {:?}",
+                buf_id.pid,
+                pretty_size(buf_id.size),
                 excluding_list
             );
-            return;
-        };
-        tracing::debug!(
-            "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {:?}",
-            buf_id.pid,
-            pretty_size(buf_id.size),
-            excluding_list
-        );
-        *extra_move += 1;
+            *extra_move += 1;
+        }
 
         // always try to move to hostmem first
         panic_on_error!(
@@ -1048,10 +1052,10 @@ async fn handle_buffer_request(
     }
     match req {
         ShmBufferRequest::FromGPU(_) => {
-            shm_from_gpu_notify.notify_waiters();
+            req_rx.notify_gpu(ShmRequestRxResp::Ready);
         }
         ShmBufferRequest::FromBackend(_) => {
-            shm_from_backend_notify.notify_waiters();
+            req_rx.notify_backend(ShmRequestRxResp::Ready);
         }
     }
 }
