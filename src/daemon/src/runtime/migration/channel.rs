@@ -172,6 +172,10 @@ impl RequestForSpaceRx {
             res = self.inner.recv() => res.map(ShmBufferRequest::FromBackend),
         }
     }
+
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed() && self.prio_channel.is_closed()
+    }
 }
 
 pub(super) fn create_request_for_space_channel() -> (RequestForSpaceTx, RequestForSpaceRx) {

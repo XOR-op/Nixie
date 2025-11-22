@@ -878,7 +878,7 @@ async fn backend_to_shm_transfer(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn shm_to_backend_transfer(
+pub(super) async fn shm_to_backend_transfer(
     excluding_list: HashSet<i32>,
     shm_to_hybrid: HashMap<BufferId, BufferLocation>,
     mut out_data_ready_rx: OutDataReadyRx,
@@ -890,32 +890,6 @@ async fn shm_to_backend_transfer(
     shm_from_backend_notify: Arc<tokio::sync::Notify>,
     mut cancel_rx: watch::Receiver<bool>,
 ) {
-    fn check_location(buffer_id: &BufferId, expected: BufferLocation, actual: BufferLocation) {
-        if expected != actual {
-            match expected {
-                BufferLocation::HostMem => {
-                    tracing::debug!(
-                        "Buffer {:?} expected to be in host memory, but found in storage",
-                        buffer_id
-                    );
-                }
-                BufferLocation::Storage => {
-                    tracing::warn!(
-                        "Buffer {:?} expected to be in storage, but found in host memory",
-                        buffer_id
-                    );
-                }
-                other => {
-                    tracing::error!(
-                        "Unexpected buffer location: {:?} for {:?}",
-                        other,
-                        buffer_id
-                    );
-                }
-            }
-        }
-    }
-
     let mut extra_move = 0;
 
     let mut next_shm_handling = HashMap::new();
@@ -942,97 +916,144 @@ async fn shm_to_backend_transfer(
         check_location(&buf_id, expected_location, location);
     }
     // Handle any remaining buffers that were not found
-    while !(next_shm_handling.is_empty()) {
-        let Some((buf_id, expected_location)) =
-            with_cancel_rx_async!(cancel_rx, out_data_ready_rx.recv())
-        else {
-            break;
-        };
-        if let Some(expected_location) = next_shm_handling.remove(&buf_id) {
-            let shm_buffer_mgr = shm_buffer_mgr.clone();
-            let hostmem_buffer_mgr = hostmem_buffer_mgr.clone();
-            let storage_buffer_mgr = storage_buffer_mgr.clone();
-            // spawn for multithreading
-            // TODO: profiling
-            tokio::spawn(async move {
-                let location = panic_on_error!(
-                    shm_to_backend_transfer_inner(
-                        &buf_id,
+    while !(next_shm_handling.is_empty() && req_for_shm_rx.is_closed()) {
+        tokio::select! {
+            biased;
+            _ = cancel_rx.changed() => {
+                tracing::info!("Cancellation received; aborting shm to backend migration task");
+                return;
+            }
+            res = out_data_ready_rx.recv(), if !next_shm_handling.is_empty() => {
+                match res {
+                    Some((buf_id, expected_location)) => {
+                        handle_unfinished_shm_entry(
+                            buf_id,
+                            expected_location,
+                            &mut next_shm_handling,
+                            &shm_buffer_mgr,
+                            &hostmem_buffer_mgr,
+                            &storage_buffer_mgr,
+                        ).await;
+                    }
+                    None => continue,
+                }
+            }
+            res = req_for_shm_rx.listen(), if !req_for_shm_rx.is_closed() => {
+                match res{
+                    Some(req) => {
+                    handle_buffer_request(
+                        req,
+                        &mut extra_move,
                         &shm_buffer_mgr,
                         &hostmem_buffer_mgr,
                         &storage_buffer_mgr,
-                        expected_location
-                    )
-                    .await
-                );
-                check_location(&buf_id, expected_location, location);
-            });
-        } else {
-            tracing::warn!(
-                "Received unexpected buffer ID to {:?}: {:?}",
-                expected_location,
-                buf_id
-            );
-        }
-    }
-    loop {
-        // condition for releasing shm space
-        let req = match with_cancel_rx_async!(cancel_rx, req_for_shm_rx.listen()) {
-            // new request
-            Some(req) => req,
-            None => {
-                // no more needed
-                break;
+                        &excluding_list,
+                        &shm_from_gpu_notify,
+                        &shm_from_backend_notify,
+                    ).await;
+                    }
+                    None => continue,
+                }
             }
-        };
-        let mut remaining_count = req.count();
-        while remaining_count.0 > 0 {
-            // Release space for error in plan
-            let Some((buf_id, _)) =
-                shm_buffer_mgr.find(|buf_id, _| !excluding_list.contains(&buf_id.pid))
-            else {
-                tracing::warn!(
-                    "No buffer can be released to satisfy shm space request for pid {:?}",
-                    excluding_list
-                );
-                continue;
-            };
-            tracing::debug!(
-                "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {:?}",
-                buf_id.pid,
-                pretty_size(buf_id.size),
-                excluding_list
-            );
-            extra_move += 1;
 
-            // always try to move to hostmem first
-            panic_on_error!(
-                shm_to_backend_transfer_inner(
-                    &buf_id,
-                    &shm_buffer_mgr,
-                    &hostmem_buffer_mgr,
-                    &storage_buffer_mgr,
-                    BufferLocation::HostMem
-                )
-                .await
-            );
-            remaining_count.0 = remaining_count
-                .0
-                .saturating_sub(buf_id.get_allocation_count().0);
-        }
-        match req {
-            ShmBufferRequest::FromGPU(_) => {
-                shm_from_gpu_notify.notify_waiters();
-            }
-            ShmBufferRequest::FromBackend(_) => {
-                shm_from_backend_notify.notify_waiters();
-            }
         }
     }
     tracing::trace!(
         "Shm to backend migration completed with {} extra moves",
         extra_move
     );
+}
+
+async fn handle_unfinished_shm_entry(
+    buf_id: BufferId,
+    expected_location: BufferLocation,
+    next_shm_handling: &mut HashMap<BufferId, BufferLocation>,
+    shm_buffer_mgr: &Arc<ShmBufferManager>,
+    hostmem_buffer_mgr: &Arc<HostMemBufferManager>,
+    storage_buffer_mgr: &Arc<StorageBufferManager>,
+) {
+    if let Some(expected_location) = next_shm_handling.remove(&buf_id) {
+        let shm_buffer_mgr = shm_buffer_mgr.clone();
+        let hostmem_buffer_mgr = hostmem_buffer_mgr.clone();
+        let storage_buffer_mgr = storage_buffer_mgr.clone();
+        // spawn for multithreading
+        // TODO: profiling
+        tokio::spawn(async move {
+            let location = panic_on_error!(
+                shm_to_backend_transfer_inner(
+                    &buf_id,
+                    &shm_buffer_mgr,
+                    &hostmem_buffer_mgr,
+                    &storage_buffer_mgr,
+                    expected_location
+                )
+                .await
+            );
+            check_location(&buf_id, expected_location, location);
+        });
+    } else {
+        tracing::warn!(
+            "Received unexpected buffer ID to {:?}: {:?}",
+            expected_location,
+            buf_id
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_buffer_request(
+    req: ShmBufferRequest,
+    extra_move: &mut u32,
+    shm_buffer_mgr: &ShmBufferManager,
+    hostmem_buffer_mgr: &HostMemBufferManager,
+    storage_buffer_mgr: &Arc<StorageBufferManager>,
+    excluding_list: &HashSet<i32>,
+    shm_from_gpu_notify: &Arc<tokio::sync::Notify>,
+    shm_from_backend_notify: &Arc<tokio::sync::Notify>,
+) {
+    let mut remaining_count = req.count();
+    while remaining_count.0 > 0 {
+        // Release space for error in plan
+        let Some((buf_id, _)) =
+            shm_buffer_mgr.find(|buf_id, _| !excluding_list.contains(&buf_id.pid))
+        else {
+            tracing::warn!(
+                "No buffer can be released to satisfy shm space request for pid {:?}",
+                excluding_list
+            );
+            return;
+        };
+        tracing::debug!(
+            "Releasing buffer [pid: {}, size: {}] to satisfy shm space request for pid {:?}",
+            buf_id.pid,
+            pretty_size(buf_id.size),
+            excluding_list
+        );
+        *extra_move += 1;
+
+        // always try to move to hostmem first
+        panic_on_error!(
+            shm_to_backend_transfer_inner(
+                &buf_id,
+                shm_buffer_mgr,
+                hostmem_buffer_mgr,
+                storage_buffer_mgr,
+                BufferLocation::HostMem
+            )
+            .await
+        );
+        remaining_count.0 = remaining_count
+            .0
+            .saturating_sub(buf_id.get_allocation_count().0);
+    }
+    match req {
+        ShmBufferRequest::FromGPU(_) => {
+            shm_from_gpu_notify.notify_waiters();
+        }
+        ShmBufferRequest::FromBackend(_) => {
+            shm_from_backend_notify.notify_waiters();
+        }
+    }
 }
 
 async fn hostmem_to_storage_transfer(
@@ -1184,4 +1205,30 @@ async fn shm_to_backend_transfer_inner(
         .release(buffer_id)
         .expect("BufferId released twice");
     Ok(target_loc)
+}
+
+fn check_location(buffer_id: &BufferId, expected: BufferLocation, actual: BufferLocation) {
+    if expected != actual {
+        match expected {
+            BufferLocation::HostMem => {
+                tracing::debug!(
+                    "Buffer {:?} expected to be in host memory, but found in storage",
+                    buffer_id
+                );
+            }
+            BufferLocation::Storage => {
+                tracing::warn!(
+                    "Buffer {:?} expected to be in storage, but found in host memory",
+                    buffer_id
+                );
+            }
+            other => {
+                tracing::error!(
+                    "Unexpected buffer location: {:?} for {:?}",
+                    other,
+                    buffer_id
+                );
+            }
+        }
+    }
 }
