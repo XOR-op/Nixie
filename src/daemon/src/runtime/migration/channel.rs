@@ -246,8 +246,8 @@ impl ShmCoordinator {
     pub async fn reserve_from_backend(&self, buf_id: &BufferId) -> Arc<[ShmBlock]> {
         let mut im_pending = false;
         #[allow(unused_assignments)]
-        let mut should_wait = false;
-        let mut resp_busy_wait = false;
+        let mut should_wait_for_resp = false;
+        let mut accu_wait_time = Duration::ZERO;
         loop {
             {
                 let mut inner = self.inner.lock().unwrap();
@@ -259,39 +259,36 @@ impl ShmCoordinator {
                         }
                         return blks;
                     }
-                    if !resp_busy_wait {
-                        if im_pending {
-                            tracing::warn!(
-                                "Backend pending reservation but still no space {:?}",
-                                buf_id
-                            );
-                        } else {
-                            im_pending = true;
-                            inner.backend_to_shm_pending += 1;
-                        }
-                        self.req_for_shm
-                            .backend_request(buf_id.get_allocation_count());
-                        should_wait = true;
-                    }
+                    inner.backend_to_shm_pending += 1;
+                    self.req_for_shm
+                        .backend_request(buf_id.get_allocation_count());
+                    should_wait_for_resp = true;
                 } else {
-                    should_wait = false
+                    should_wait_for_resp = false
                 }
             }
             // wait for notification
-            if should_wait && !resp_busy_wait {
+            if should_wait_for_resp {
                 match self.req_for_shm.notify_backend.lock().await.recv().await {
                     Some(ShmRequestRxResp::Ready) => {}
                     Some(ShmRequestRxResp::BusyWait) => {
-                        resp_busy_wait = true;
+                        continue;
                     }
                     None => {
-                        tracing::warn!("Backend shm reservation notified but unexpected response");
-                        tokio::task::yield_now().await;
+                        tracing::warn!("Backend shm reservation closed unexpectedly");
                         tokio::time::sleep(Duration::from_micros(500)).await;
                     }
                 }
             } else {
                 tokio::time::sleep(Duration::from_micros(500)).await;
+                accu_wait_time += Duration::from_micros(500);
+                if accu_wait_time.as_millis() > 10 {
+                    let mut inner = self.inner.lock().unwrap();
+                    // resend request
+                    accu_wait_time = Duration::ZERO;
+                    im_pending = false;
+                    inner.backend_to_shm_pending = inner.backend_to_shm_pending.saturating_sub(1);
+                }
             }
         }
     }
@@ -299,42 +296,31 @@ impl ShmCoordinator {
     pub async fn reserve_from_gpu(&self, buf_id: &BufferId) -> Arc<[ShmBlock]> {
         let mut im_pending = false;
         #[allow(unused_assignments)]
-        let mut should_wait = false;
         loop {
             {
                 let mut inner = self.inner.lock().unwrap();
                 // pending GPU has higher priority
-                if inner.backend_to_shm_pending == 0 || im_pending {
-                    if let Some(blks) = self.shm_mgr.try_reserve(buf_id) {
-                        if im_pending {
-                            assert!(inner.gpu_to_shm_pending > 0);
-                            inner.gpu_to_shm_pending -= 1;
-                        }
-                        return blks;
-                    }
+                if let Some(blks) = self.shm_mgr.try_reserve(buf_id) {
                     if im_pending {
-                        tracing::warn!("GPU pending reservation but still no space, {:?}", buf_id);
-                    } else {
-                        im_pending = true;
-                        inner.gpu_to_shm_pending += 1;
+                        assert!(inner.gpu_to_shm_pending > 0);
+                        inner.gpu_to_shm_pending -= 1;
                     }
-                    self.req_for_shm.gpu_request(buf_id.get_allocation_count());
-                    should_wait = true;
+                    return blks;
+                }
+                if im_pending {
+                    tracing::warn!("GPU pending reservation but still no space, {:?}", buf_id);
                 } else {
-                    should_wait = false
+                    im_pending = true;
+                    inner.gpu_to_shm_pending += 1;
                 }
+                self.req_for_shm.gpu_request(buf_id.get_allocation_count());
             }
-            // wait for notification
-            if should_wait {
-                match self.req_for_shm.notify_gpu.lock().await.recv().await {
-                    Some(ShmRequestRxResp::Ready) => {}
-                    _ => {
-                        tracing::warn!("GPU shm reservation notified but unexpected response");
-                        tokio::task::yield_now().await;
-                    }
+            match self.req_for_shm.notify_gpu.lock().await.recv().await {
+                Some(ShmRequestRxResp::Ready) => {}
+                _ => {
+                    tracing::warn!("GPU shm reservation notified but unexpected response");
+                    tokio::task::yield_now().await;
                 }
-            } else {
-                tokio::task::yield_now().await;
             }
         }
     }
