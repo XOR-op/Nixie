@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -258,7 +258,8 @@ where
             nihil_common::general::pretty_size(into_gpu_required_size)
         );
         let mut accu_size = 0;
-        // for every src process
+        let mut shm_self_evict_queue = VecDeque::new();
+        // for every victim process
         for (out_from_gpu_pid, out_from_gpu_entries, rpc_client, dev_mapping) in
             out_from_gpu.iter_mut()
         {
@@ -283,26 +284,53 @@ where
                     } else {
                         // pop enough entries from shm_eviction_candidates
                         while shm_free_blocks.0 < required_shm_blocks {
-                            let Some((next_id, next_capa)) = shm_eviction_candidates
+                            match shm_eviction_candidates
                                 .iter()
                                 .next()
                                 .map(|(k, v)| (k.clone(), *v))
-                            else {
-                                panic!("No more SHM eviction candidates");
-                            };
-                            assert_eq!(next_capa.0 % MIN_ALLOCATION_SIZE as u32, 0);
-                            shm_eviction_candidates.remove(&next_id);
-                            let avail_count = next_capa.0 / MIN_ALLOCATION_SIZE as u32;
-                            if host_mem_free_blocks.0 >= avail_count {
-                                host_mem_free_blocks.0 -= avail_count;
-                                shm_to_backend.insert(next_id, BufferLocation::HostMem);
-                            } else {
-                                shm_to_backend.insert(next_id, BufferLocation::Storage);
+                            {
+                                Some((next_id, next_capa)) => {
+                                    assert_eq!(next_capa.0 % MIN_ALLOCATION_SIZE as u32, 0);
+                                    shm_eviction_candidates.remove(&next_id);
+                                    let avail_count = next_capa.0 / MIN_ALLOCATION_SIZE as u32;
+                                    if host_mem_free_blocks.0 >= avail_count {
+                                        host_mem_free_blocks.0 -= avail_count;
+                                        shm_to_backend.insert(next_id, BufferLocation::HostMem);
+                                    } else {
+                                        shm_to_backend.insert(next_id, BufferLocation::Storage);
+                                    }
+                                    shm_free_blocks.0 += avail_count;
+                                }
+                                None => {
+                                    // in the FIFO order, move data from shm_self_evict_queue to backend
+                                    let mut accumulated_count = 0;
+                                    while accumulated_count < required_shm_blocks {
+                                        let Some((victim_buf_id, victim_size)) =
+                                            shm_self_evict_queue.pop_front()
+                                        else {
+                                            panic!("Not enough SHM space to migrate data into GPU");
+                                        };
+                                        accumulated_count += victim_size;
+                                        if host_mem_free_blocks.0 >= victim_size {
+                                            host_mem_free_blocks.0 -= victim_size;
+                                            shm_to_backend
+                                                .insert(victim_buf_id, BufferLocation::HostMem);
+                                        } else {
+                                            shm_to_backend
+                                                .insert(victim_buf_id, BufferLocation::Storage);
+                                        }
+                                        shm_free_blocks.0 += victim_size;
+                                    }
+                                }
                             }
-                            shm_free_blocks.0 += avail_count;
                         }
                         shm_free_blocks.0 -= required_shm_blocks;
                     };
+                    // add to bookkeeping queue
+                    shm_self_evict_queue.push_back((
+                        spec_entry.to_buffer_id(*out_from_gpu_pid, global_id),
+                        required_shm_blocks,
+                    ));
                     migration_entries.push(spec_entry);
                     accu_size += entry.size as u64;
                 }
