@@ -100,7 +100,7 @@ pub fn init_config(config_path: Option<PathBuf>, cli_config: CliConfig) -> Resul
     }
     // default value
     let mut config = Config {
-        shmem_size_mb: 36 * 1024,
+        shmem_size_mb: 32 * 1024,
         hostmem_size_mb: 32 * 1024,
         device_memory_mb,
         device_threshold: 0.95,

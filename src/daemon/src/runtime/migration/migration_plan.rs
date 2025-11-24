@@ -992,7 +992,7 @@ pub(super) mod tests {
                 },
             ],
             size_to_bytes("32GB"),
-            size_to_bytes("36GB"),
+            size_to_bytes("32GB"),
             size_to_bytes("32GB"),
         );
         println!(

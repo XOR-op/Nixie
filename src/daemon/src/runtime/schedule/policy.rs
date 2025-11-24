@@ -255,7 +255,7 @@ impl ScheduleQueue {
                     && client.priority_upd_since() > Duration::from_secs(10)
                 {
                     if client.decrease_priority(Some(PriorityLevel::Batch)) {
-                        tracing::trace!(
+                        tracing::debug!(
                             "Process {}: priority decreased to {:?}",
                             client.pid,
                             client.priority.level()
@@ -265,7 +265,7 @@ impl ScheduleQueue {
             } else if client.priority_upd_since() > Duration::from_secs(30) {
                 #[allow(clippy::collapsible_if)]
                 if client.increase_priority(None) {
-                    tracing::trace!(
+                    tracing::debug!(
                         "Process {}: priority increased to {:?}",
                         client.pid,
                         client.priority.level()
