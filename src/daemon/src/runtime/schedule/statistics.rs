@@ -129,6 +129,7 @@ pub struct ClientStatistics {
     pub state: InternalClientState,
     pub priority: Priority,
     pub last_priority_update: Instant,
+    pub last_idleness: Option<Instant>,
 }
 
 impl std::fmt::Debug for ClientStatistics {
@@ -150,6 +151,7 @@ impl ClientStatistics {
             active_time_history: History::new(32),
             priority: Priority::default_dynamic(),
             last_priority_update: Instant::now(),
+            last_idleness: None,
         }
     }
 
@@ -161,6 +163,7 @@ impl ClientStatistics {
             since: Instant::now(),
         };
         self.last_priority_update = Instant::now();
+        self.last_idleness = None;
     }
 
     pub fn make_resident_idle(&mut self, reason: StopReason) {
@@ -182,6 +185,7 @@ impl ClientStatistics {
         }
         self.state = InternalClientState::ResidentIdle;
         self.last_priority_update = Instant::now();
+        self.last_idleness = Some(Instant::now());
     }
 
     pub fn make_idle(&mut self, reason: StopReason) {
@@ -223,6 +227,10 @@ impl ClientStatistics {
 impl ClientStatistics {
     pub fn priority_upd_since(&self) -> Duration {
         self.last_priority_update.elapsed()
+    }
+
+    pub fn idle_since(&self) -> Option<Duration> {
+        self.last_idleness.map(|t| t.elapsed())
     }
 
     pub fn last_unfinished_active_time(&self, since: Option<Instant>) -> Option<Duration> {

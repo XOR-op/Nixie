@@ -62,6 +62,16 @@ impl GenericRequest {
     }
 }
 
+fn priority_level_to_time_quantum(level: PriorityLevel) -> Duration {
+    match level {
+        PriorityLevel::Interactive => Duration::from_secs(4),
+        PriorityLevel::LowInteractive => Duration::from_secs(8),
+        PriorityLevel::HighBatch => Duration::from_secs(16),
+        PriorityLevel::Batch => Duration::from_secs(32),
+        PriorityLevel::Background => Duration::from_secs(64),
+    }
+}
+
 pub struct ScheduleQueue {
     sched_req: VecDeque<SchedRequest>,
     idle_req_queue: VecDeque<IdleRequest>,
@@ -118,12 +128,7 @@ impl ScheduleQueue {
         let migration_s = Duration::from_secs_f64(migration_mb as f64 / 1024.0 / pcie_speed * 1.5);
         let cooldown = migration_s * 2;
         let cooldown = config_cooldown.unwrap_or_default().max(cooldown);
-        match current_priority.level() {
-            PriorityLevel::Interactive => cooldown,
-            PriorityLevel::LowInteractive => cooldown.max(Duration::from_secs(8)),
-            PriorityLevel::Batch => cooldown.max(Duration::from_secs(15)),
-            PriorityLevel::Background => cooldown.max(Duration::from_secs(30)),
-        }
+        cooldown.max(priority_level_to_time_quantum(current_priority.level()))
     }
 }
 
@@ -251,7 +256,7 @@ impl ScheduleQueue {
             {
                 // active client
                 #[allow(clippy::collapsible_if)]
-                if active_since.elapsed() > Duration::from_secs(10)
+                if active_since.elapsed() > priority_level_to_time_quantum(client.priority.level())
                     && client.priority_upd_since() > Duration::from_secs(10)
                 {
                     if client.decrease_priority(Some(PriorityLevel::Batch)) {
@@ -262,7 +267,12 @@ impl ScheduleQueue {
                         );
                     }
                 }
-            } else if client.priority_upd_since() > Duration::from_secs(30) {
+            } else if client.priority_upd_since()
+                > priority_level_to_time_quantum(client.priority.level())
+                && client.idle_since().is_some_and(|d| {
+                    d > priority_level_to_time_quantum(client.priority.level()) * 2
+                })
+            {
                 #[allow(clippy::collapsible_if)]
                 if client.increase_priority(None) {
                     tracing::debug!(

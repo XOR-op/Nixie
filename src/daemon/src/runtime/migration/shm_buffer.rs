@@ -146,14 +146,14 @@ impl ShmBufferManager {
     pub fn try_reserve(&self, buf_id: &BufferId) -> Option<Arc<[ShmBlock]>> {
         let mut inner = self.inner.lock().unwrap();
         // we reserve 2*128MB space for migration && no single process should occupy all shm space
-        if let Some(count) = inner.pid_counter.get(&buf_id.pid) {
-            if (*count + buf_id.get_allocation_count().0 as usize) * MIN_ALLOCATION_SIZE
+        if let Some(count) = inner.pid_counter.get(&buf_id.pid)
+            && (*count + buf_id.get_allocation_count().0 as usize) * MIN_ALLOCATION_SIZE
                 + 2 * MAX_ALLOCATION_SIZE
                 >= self.shm_buffer.size()
-            {
-                return None;
-            }
+        {
+            return None;
         }
+
         ShmBufferInner::reserve_inner(&mut inner, buf_id)
     }
 

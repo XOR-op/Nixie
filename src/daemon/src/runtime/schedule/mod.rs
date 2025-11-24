@@ -74,6 +74,7 @@ impl Priority {
 pub(crate) enum PriorityLevel {
     Interactive,
     LowInteractive,
+    HighBatch,
     Batch,
     Background,
 }
@@ -81,8 +82,9 @@ pub(crate) enum PriorityLevel {
 impl PriorityLevel {
     fn as_u8(&self) -> u8 {
         match self {
-            PriorityLevel::Interactive => 3,
-            PriorityLevel::LowInteractive => 2,
+            PriorityLevel::Interactive => 4,
+            PriorityLevel::LowInteractive => 3,
+            PriorityLevel::HighBatch => 2,
             PriorityLevel::Batch => 1,
             PriorityLevel::Background => 0,
         }
@@ -101,8 +103,9 @@ impl PriorityLevel {
 impl From<u8> for PriorityLevel {
     fn from(val: u8) -> Self {
         match val {
-            3 => PriorityLevel::Interactive,
-            2 => PriorityLevel::LowInteractive,
+            4 => PriorityLevel::Interactive,
+            3 => PriorityLevel::LowInteractive,
+            2 => PriorityLevel::HighBatch,
             1 => PriorityLevel::Batch,
             0 => PriorityLevel::Background,
             _ => panic!("Invalid priority level"),
