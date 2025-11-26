@@ -15,6 +15,7 @@ pub struct Config {
     pub device_memory_mb: Vec<usize>,
     pub device_threshold: f64,
     pub schedule_cooldown: Option<Duration>,
+    pub automatic_prefetch: bool,
     pub preallocate_hostmem: bool,
 }
 
@@ -23,6 +24,7 @@ impl Config {
         ConfigurableArgs {
             schedule_cooldown: self.schedule_cooldown,
             device_threshold: Some(self.device_threshold),
+            automatic_prefetch: Some(self.automatic_prefetch),
         }
     }
 
@@ -55,6 +57,7 @@ pub struct InitConfig {
     pub device_memory_mb: Option<Vec<usize>>,
     pub device_threshold: Option<f64>,
     pub schedule_cooldown: Option<Duration>,
+    pub automatic_prefetch: Option<bool>,
     pub preallocate_hostmem: Option<bool>,
 }
 
@@ -62,6 +65,7 @@ pub struct InitConfig {
 pub struct ConfigurableArgs {
     pub schedule_cooldown: Option<Duration>,
     pub device_threshold: Option<f64>,
+    pub automatic_prefetch: Option<bool>,
 }
 
 /// CLI configuration options that override file config
@@ -105,6 +109,7 @@ pub fn init_config(config_path: Option<PathBuf>, cli_config: CliConfig) -> Resul
         device_memory_mb,
         device_threshold: 0.95,
         schedule_cooldown: None,
+        automatic_prefetch: true,
         preallocate_hostmem: false,
     };
 

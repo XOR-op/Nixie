@@ -206,11 +206,18 @@ impl ScheduleQueue {
         } else if let Some(prefetch_req) = self.prefetch_queue.pop_front() {
             return Some(GenericRequest::Prefetch(prefetch_req));
         }
-        let will_preempt = self.compute_preemption(active_client);
-        if Instant::now() < self.cooldown_until || !will_preempt {
-            None
-        } else {
-            self.sched_req.pop_front().map(GenericRequest::Schedule)
+        let will_preempt = self.compute_can_preempt(active_client);
+        match will_preempt {
+            PreemptionDecision::DenyPreempt => None,
+            PreemptionDecision::AllowPreempt {
+                follow_same_priority_cooldown,
+            } => {
+                if follow_same_priority_cooldown && Instant::now() < self.cooldown_until {
+                    None
+                } else {
+                    self.sched_req.pop_front().map(GenericRequest::Schedule)
+                }
+            }
         }
     }
 
@@ -312,21 +319,43 @@ impl ScheduleQueue {
     }
 
     // determine if preemption event needs to be generated
-    fn compute_preemption(&mut self, active_client: ActiveClientState) -> bool {
+    fn compute_can_preempt(&mut self, active_client: ActiveClientState) -> PreemptionDecision {
         if let ActiveClientState::Active { pid, .. } = active_client
-            && let Some(front) = self.sched_req.front()
+            && let Some(queue_front) = self.sched_req.front()
         {
-            if front.pid == pid {
-                return true;
+            if queue_front.pid == pid {
+                return PreemptionDecision::AllowPreempt {
+                    follow_same_priority_cooldown: false,
+                };
             }
             if let Some(active_stat) = self.clients.get(&pid)
-                && let Some(front_stats) = self.clients.get(&front.pid)
+                && let Some(queue_front_stats) = self.clients.get(&queue_front.pid)
             {
                 // only preempt if the most front process has higher or equal priority
-                return front_stats.priority.level() > active_stat.priority.level();
+                return if queue_front_stats.priority.level() >= active_stat.priority.level() {
+                    PreemptionDecision::AllowPreempt {
+                        follow_same_priority_cooldown: queue_front_stats.priority.level()
+                            == active_stat.priority.level(),
+                    }
+                } else {
+                    PreemptionDecision::DenyPreempt
+                };
             }
-            return false;
+            tracing::warn!(
+                "Active client {} or queue front client {} stats not found",
+                pid,
+                queue_front.pid
+            );
+            return PreemptionDecision::DenyPreempt;
         }
-        true
+        PreemptionDecision::AllowPreempt {
+            follow_same_priority_cooldown: false,
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PreemptionDecision {
+    AllowPreempt { follow_same_priority_cooldown: bool },
+    DenyPreempt,
 }
