@@ -124,12 +124,13 @@ impl History {
 }
 
 pub struct ClientStatistics {
-    pub pid: i32,
-    pub active_time_history: History,
-    pub state: InternalClientState,
-    pub priority: Priority,
-    pub last_priority_update: Instant,
-    pub last_idleness: Option<Instant>,
+    pid: i32,
+    active_time_history: History,
+    state: InternalClientState,
+    priority: Priority,
+    time_used_in_current_priority: Duration,
+    last_priority_update: Instant,
+    last_idleness: Option<Instant>,
 }
 
 impl std::fmt::Debug for ClientStatistics {
@@ -148,8 +149,9 @@ impl ClientStatistics {
         Self {
             pid,
             state: InternalClientState::Idle,
-            active_time_history: History::new(32),
+            active_time_history: History::new(64),
             priority: Priority::default_dynamic(),
+            time_used_in_current_priority: Duration::ZERO,
             last_priority_update: Instant::now(),
             last_idleness: None,
         }
@@ -162,7 +164,6 @@ impl ClientStatistics {
         self.state = InternalClientState::Active {
             since: Instant::now(),
         };
-        self.last_priority_update = Instant::now();
         self.last_idleness = None;
     }
 
@@ -184,7 +185,6 @@ impl ClientStatistics {
             }
         }
         self.state = InternalClientState::ResidentIdle;
-        self.last_priority_update = Instant::now();
         self.last_idleness = Some(Instant::now());
     }
 
@@ -209,7 +209,7 @@ impl ClientStatistics {
             }
         }
         self.state = InternalClientState::Idle;
-        self.last_priority_update = Instant::now();
+        self.last_idleness = Some(Instant::now());
     }
 
     pub fn increase_priority(&mut self, until: Option<PriorityLevel>) -> bool {
@@ -220,6 +220,11 @@ impl ClientStatistics {
     pub fn decrease_priority(&mut self, until: Option<PriorityLevel>) -> bool {
         self.last_priority_update = Instant::now();
         self.priority.decrease(until)
+    }
+
+    pub fn set_priority(&mut self, priority: Priority) {
+        self.last_priority_update = Instant::now();
+        self.priority = priority;
     }
 }
 
@@ -262,5 +267,20 @@ impl ClientStatistics {
             }
         }
         last_unfinished
+    }
+
+    #[inline(always)]
+    pub fn priority(&self) -> Priority {
+        self.priority
+    }
+
+    #[inline(always)]
+    pub fn pid(&self) -> i32 {
+        self.pid
+    }
+
+    #[inline(always)]
+    pub fn state_ref(&self) -> &InternalClientState {
+        &self.state
     }
 }

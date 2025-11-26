@@ -102,7 +102,7 @@ impl Scheduler {
                 let res = self
                     .sched_queue
                     .get_client(pid)
-                    .map(|stat| (stat.priority, stat.state.as_client_state()));
+                    .map(|stat| (stat.priority(), stat.state_ref().as_client_state()));
                 let (state, priority) = match res {
                     Some((priority, state)) => (Some(state), Some(priority)),
                     None => (None, None),
@@ -255,11 +255,11 @@ impl Scheduler {
                         .sched_queue
                         .get_client(incoming_pid)
                         // incoming client not exists, by default with the highest
-                        .map_or_else(PriorityLevel::max, |c| c.priority.level());
+                        .map_or_else(PriorityLevel::max, |c| c.priority().level());
 
                     if let Some(client) = self.sched_queue.get_client_mut(pid) {
                         let preemption_reason = {
-                            if incoming_level > client.priority.level() {
+                            if incoming_level > client.priority().level() {
                                 PreemptionReason::HigherPriority
                             } else {
                                 PreemptionReason::RoundRobin
@@ -335,7 +335,7 @@ impl Scheduler {
         let cooldown = ScheduleQueue::compute_cooldown(
             swap_out.map(|x| x / (1024 * 1024)).unwrap_or_default(),
             config.schedule_cooldown,
-            client.priority,
+            client.priority(),
         );
         // prevent thrashing
         self.sched_queue.cooldown(Some(cooldown));

@@ -64,6 +64,16 @@ impl GenericRequest {
 
 fn priority_level_to_time_quantum(level: PriorityLevel) -> Duration {
     match level {
+        PriorityLevel::Interactive => Duration::from_secs(8),
+        PriorityLevel::LowInteractive => Duration::from_secs(16),
+        PriorityLevel::HighBatch => Duration::from_secs(32),
+        PriorityLevel::Batch => Duration::from_secs(64),
+        PriorityLevel::Background => Duration::from_secs(128),
+    }
+}
+
+fn priority_level_to_cooldown(level: PriorityLevel) -> Duration {
+    match level {
         PriorityLevel::Interactive => Duration::from_secs(4),
         PriorityLevel::LowInteractive => Duration::from_secs(8),
         PriorityLevel::HighBatch => Duration::from_secs(16),
@@ -79,6 +89,7 @@ pub struct ScheduleQueue {
     clients: HashMap<i32, ClientStatistics>,
     cooldown_until: Instant,
     active_client: ActiveClientState,
+    last_mlfq_reset_timer: Instant,
 }
 
 // interface to the scheduler
@@ -91,6 +102,7 @@ impl ScheduleQueue {
             clients: HashMap::new(),
             cooldown_until: Instant::now(),
             active_client: ActiveClientState::None,
+            last_mlfq_reset_timer: Instant::now(),
         }
     }
 
@@ -230,66 +242,89 @@ impl ScheduleQueue {
             return SetPriorityResponse::FailureProcessNotExist;
         };
         match new_level {
-            SetPriorityLevel::FixToDynamic => match client.priority {
+            SetPriorityLevel::FixToDynamic => match client.priority() {
                 Priority::Fixed(level) => {
-                    client.priority = Priority::Dynamic { level, weight: 0 };
+                    client.set_priority(Priority::Dynamic { level, weight: 0 });
                     SetPriorityResponse::Success
                 }
                 Priority::Dynamic { .. } => SetPriorityResponse::FailurePriorityNotFixed,
             },
-            SetPriorityLevel::UnsetToDefault => match client.priority {
+            SetPriorityLevel::UnsetToDefault => match client.priority() {
                 Priority::Dynamic { .. } => SetPriorityResponse::FailurePriorityNotFixed,
                 Priority::Fixed(_) => {
-                    client.priority = Priority::default_dynamic();
+                    client.set_priority(Priority::default_dynamic());
                     SetPriorityResponse::Success
                 }
             },
             SetPriorityLevel::Set(level) => {
-                client.priority = level;
+                client.set_priority(level);
                 SetPriorityResponse::Success
             }
         }
     }
 
     fn update_priority(&mut self) {
+        if self.last_mlfq_reset_timer.elapsed() > Duration::from_secs(300) {
+            self.reset_all_priorities();
+            self.last_mlfq_reset_timer = Instant::now();
+            tracing::debug!("All process priorities have been reset due to inactivity");
+        }
+
         let active = match self.active_client {
             ActiveClientState::Active { pid, since } => Some((pid, since)),
             _ => None,
         };
         for (_, client) in self.clients.iter_mut() {
             if let Some(active_since) = active
-                .filter(|(pid, _)| *pid == client.pid)
+                .filter(|(pid, _)| *pid == client.pid())
                 .map(|(_, since)| since)
             {
-                // active client
-                #[allow(clippy::collapsible_if)]
-                if active_since.elapsed() > priority_level_to_time_quantum(client.priority.level())
+                // is the active process
+                if active_since.elapsed()
+                    > priority_level_to_time_quantum(client.priority().level())
                     && client.priority_upd_since() > Duration::from_secs(10)
                 {
+                    #[allow(clippy::collapsible_if)]
                     if client.decrease_priority(Some(PriorityLevel::Batch)) {
                         tracing::debug!(
                             "Process {}: priority decreased to {:?}",
-                            client.pid,
-                            client.priority.level()
+                            client.pid(),
+                            client.priority().level()
                         );
                     }
                 }
-            } else if client.priority_upd_since()
-                > priority_level_to_time_quantum(client.priority.level())
-                && client.idle_since().is_some_and(|d| {
-                    d > priority_level_to_time_quantum(client.priority.level()) * 2
-                })
-            {
-                #[allow(clippy::collapsible_if)]
-                if client.increase_priority(None) {
-                    tracing::debug!(
-                        "Process {}: priority increased to {:?}",
-                        client.pid,
-                        client.priority.level()
-                    );
+            } else {
+                // is an idle process
+                if client.priority_upd_since()
+                    > priority_level_to_time_quantum(client.priority().level()) * 2
+                    && client.idle_since().is_some_and(|d| {
+                        d > priority_level_to_time_quantum(client.priority().level()) * 2
+                    })
+                {
+                    #[allow(clippy::collapsible_if)]
+                    if client.increase_priority(None) {
+                        tracing::debug!(
+                            "Process {}: priority increased to {:?}",
+                            client.pid(),
+                            client.priority().level()
+                        );
+                    }
                 }
             }
         }
+    }
+
+    fn reset_all_priorities(&mut self) -> bool {
+        let mut changed = false;
+        for (_, client) in self.clients.iter_mut() {
+            if matches!(client.priority(), Priority::Dynamic { .. }) {
+                if client.priority().level() != PriorityLevel::Interactive {
+                    changed = true;
+                }
+                client.set_priority(Priority::default_dynamic());
+            }
+        }
+        changed
     }
 
     fn compute_prioritization(&mut self) {
@@ -301,7 +336,7 @@ impl ScheduleQueue {
             let Some(stat_b) = self.clients.get(&b.pid) else {
                 return std::cmp::Ordering::Less;
             };
-            match stat_a.priority.level().cmp(&stat_b.priority.level()) {
+            match stat_a.priority().level().cmp(&stat_b.priority().level()) {
                 std::cmp::Ordering::Equal => {
                     // if same priority, sort by time
                     a.time.cmp(&b.time)
@@ -332,10 +367,10 @@ impl ScheduleQueue {
                 && let Some(queue_front_stats) = self.clients.get(&queue_front.pid)
             {
                 // only preempt if the most front process has higher or equal priority
-                return if queue_front_stats.priority.level() >= active_stat.priority.level() {
+                return if queue_front_stats.priority().level() >= active_stat.priority().level() {
                     PreemptionDecision::AllowPreempt {
-                        follow_same_priority_cooldown: queue_front_stats.priority.level()
-                            == active_stat.priority.level(),
+                        follow_same_priority_cooldown: queue_front_stats.priority().level()
+                            == active_stat.priority().level(),
                     }
                 } else {
                     PreemptionDecision::DenyPreempt
