@@ -275,12 +275,10 @@ impl ScheduleQueue {
             _ => None,
         };
         for (_, client) in self.clients.iter_mut() {
-            if let Some(active_since) = active
-                .filter(|(pid, _)| *pid == client.pid())
-                .map(|(_, since)| since)
-            {
+            if active.is_some_and(|(pid, _)| pid == client.pid()) {
+                client.update_if_active();
                 // is the active process
-                if active_since.elapsed()
+                if client.accumulated_time_in_current_priority()
                     > priority_level_to_time_quantum(client.priority().level())
                     && client.priority_upd_since() > Duration::from_secs(10)
                 {
@@ -295,16 +293,29 @@ impl ScheduleQueue {
                 }
             } else {
                 // is an idle process
-                if client.priority_upd_since()
+                if client.accumulated_time_in_current_priority()
+                    > priority_level_to_time_quantum(client.priority().level())
+                {
+                    #[allow(clippy::collapsible_if)]
+                    if client.decrease_priority(Some(PriorityLevel::Batch)) {
+                        tracing::debug!(
+                            "Idle Process {}: priority decreased to {:?}",
+                            client.pid(),
+                            client.priority().level()
+                        );
+                    }
+                } else if client.priority_upd_since()
                     > priority_level_to_time_quantum(client.priority().level()) * 2
                     && client.idle_since().is_some_and(|d| {
-                        d > priority_level_to_time_quantum(client.priority().level()) * 2
+                        // TQ of last level + accumulated time in current level
+                        d > priority_level_to_time_quantum(client.priority().level()) / 2
+                            + client.accumulated_time_in_current_priority()
                     })
                 {
                     #[allow(clippy::collapsible_if)]
                     if client.increase_priority(None) {
                         tracing::debug!(
-                            "Process {}: priority increased to {:?}",
+                            "Idle Process {}: priority increased to {:?}",
                             client.pid(),
                             client.priority().level()
                         );

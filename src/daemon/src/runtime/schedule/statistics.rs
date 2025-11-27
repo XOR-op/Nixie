@@ -26,6 +26,8 @@ pub enum StopReason {
 pub struct RunningChunk {
     pub start: Instant,
     pub end: Instant,
+    pub start_priority: PriorityLevel,
+    pub end_priority: PriorityLevel,
     pub reason: StopReason,
 }
 
@@ -55,16 +57,21 @@ pub(crate) enum ClientState {
 
 #[derive(Clone)]
 pub(super) enum InternalClientState {
-    Active { since: Instant },
+    Active {
+        since: Instant,
+        start_priority: PriorityLevel,
+    },
     Idle,
     ResidentIdle,
-    ScheduleWaiting { since: Instant },
+    ScheduleWaiting {
+        since: Instant,
+    },
 }
 
 impl std::fmt::Debug for InternalClientState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InternalClientState::Active { since } => {
+            InternalClientState::Active { since, .. } => {
                 write!(f, "Active since {:.2}s ago", since.elapsed().as_secs_f64())
             }
             InternalClientState::Idle => {
@@ -134,6 +141,7 @@ pub struct ClientStatistics {
     state: InternalClientState,
     priority: Priority,
     time_used_in_current_priority: Duration,
+    last_in_current_priority: Instant,
     last_priority_update: Instant,
     last_state: StateSinceLastActive,
 }
@@ -157,6 +165,7 @@ impl ClientStatistics {
             active_time_history: History::new(64),
             priority: Priority::default_dynamic(),
             time_used_in_current_priority: Duration::ZERO,
+            last_in_current_priority: Instant::now(),
             last_priority_update: Instant::now(),
             last_state: StateSinceLastActive::Idle(Instant::now()),
         }
@@ -168,16 +177,23 @@ impl ClientStatistics {
         }
         self.state = InternalClientState::Active {
             since: Instant::now(),
+            start_priority: self.priority.level(),
         };
         self.last_state = StateSinceLastActive::Active(Instant::now());
+        self.last_in_current_priority = Instant::now();
     }
 
     pub fn make_resident_idle(&mut self, reason: StopReason) {
         match &self.state {
-            InternalClientState::Active { since } => {
+            InternalClientState::Active {
+                since,
+                start_priority,
+            } => {
                 self.active_time_history.push(RunningChunk {
                     start: *since,
                     end: Instant::now(),
+                    start_priority: *start_priority,
+                    end_priority: self.priority.level(),
                     reason,
                 });
             }
@@ -195,10 +211,15 @@ impl ClientStatistics {
 
     pub fn make_idle(&mut self, reason: StopReason) {
         match &self.state {
-            InternalClientState::Active { since } => {
+            InternalClientState::Active {
+                since,
+                start_priority,
+            } => {
                 self.active_time_history.push(RunningChunk {
                     start: *since,
                     end: Instant::now(),
+                    start_priority: *start_priority,
+                    end_priority: self.priority.level(),
                     reason,
                 });
             }
@@ -219,18 +240,33 @@ impl ClientStatistics {
 
     pub fn increase_priority(&mut self, until: Option<PriorityLevel>) -> bool {
         self.last_priority_update = Instant::now();
-        self.priority.increase(until)
+        let changed = self.priority.increase(until);
+        self.time_used_in_current_priority = Duration::ZERO;
+        changed
     }
 
     pub fn decrease_priority(&mut self, until: Option<PriorityLevel>) -> bool {
         self.last_priority_update = Instant::now();
-        self.priority.decrease(until)
+        let changed = self.priority.decrease(until);
+        self.time_used_in_current_priority = Duration::ZERO;
+        changed
     }
 
     pub fn set_priority(&mut self, priority: Priority) {
         self.last_priority_update = Instant::now();
-        self.time_used_in_current_priority = Duration::ZERO;
         self.priority = priority;
+        self.time_used_in_current_priority = Duration::ZERO;
+    }
+
+    pub fn update_if_active(&mut self) {
+        if let InternalClientState::Active {
+            since: _,
+            start_priority: _,
+        } = &self.state
+        {
+            self.time_used_in_current_priority += self.last_in_current_priority.elapsed();
+            self.last_in_current_priority = Instant::now();
+        }
     }
 }
 
@@ -291,5 +327,9 @@ impl ClientStatistics {
     #[inline(always)]
     pub fn state_ref(&self) -> &InternalClientState {
         &self.state
+    }
+
+    pub fn accumulated_time_in_current_priority(&self) -> Duration {
+        self.time_used_in_current_priority
     }
 }
