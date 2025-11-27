@@ -329,6 +329,11 @@ impl ClientStatistics {
         &self.state
     }
 
+    #[inline(always)]
+    pub fn get_history(&self) -> Vec<RunningChunk> {
+        self.active_time_history.inner.iter().cloned().collect()
+    }
+
     pub fn accumulated_time_in_current_priority(&self) -> Duration {
         self.time_used_in_current_priority
     }

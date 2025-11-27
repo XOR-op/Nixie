@@ -124,6 +124,13 @@ struct SetPriorityArgs {
 }
 
 #[derive(Debug, Parser)]
+struct ShowHistoryArgs {
+    /// Process ID to show history for
+    #[arg(short, long)]
+    pid: String,
+}
+
+#[derive(Debug, Parser)]
 #[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
     Daemon(DaemonArgs),
@@ -131,6 +138,7 @@ enum Args {
     List(ListArgs),
     Usage(UsageArgs),
     SetPriority(SetPriorityArgs),
+    ShowHistory(ShowHistoryArgs),
     #[clap(subcommand)]
     Config(ConfigArgs),
 }
@@ -238,6 +246,16 @@ fn main() {
                             .unwrap();
                     }
                 }
+            }
+            Args::ShowHistory(args) => {
+                let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
+                let pid = parse_pid(&args.pid)
+                    .map_err(|e| {
+                        eprintln!("{}: {}", "Error".red(), e);
+                        std::process::exit(1);
+                    })
+                    .unwrap();
+                client.show_history(pid).await.unwrap();
             }
             Args::Usage(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);

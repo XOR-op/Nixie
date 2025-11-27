@@ -124,6 +124,13 @@ impl Scheduler {
                 }
                 self.poll_queue(last_polled).await;
             }
+            ScheduleControlReq::GetHistory(param) => {
+                let (args, ret_tx) = param.into_parts();
+                let res = self.sched_queue.get_history(args.pid);
+                if ret_tx.ret(res).is_err() {
+                    tracing::warn!("Failed to send GetHistoryResult");
+                }
+            }
         }
     }
 

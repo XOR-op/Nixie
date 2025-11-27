@@ -5,7 +5,10 @@ use std::{
 
 use nihil_common::{ActivityUpdate, general::CallParameter};
 
-use crate::control::{PrefetchArgs, PrefetchResponse, SetPriorityLevel, SetPriorityResponse};
+use crate::control::{
+    GetHistoryResponse, GetHistoryResult, HistoryEntry, PrefetchArgs, PrefetchResponse,
+    SetPriorityLevel, SetPriorityResponse,
+};
 
 use super::{Priority, scheduler::ActiveClientState};
 
@@ -267,7 +270,7 @@ impl ScheduleQueue {
         if self.last_mlfq_reset_timer.elapsed() > Duration::from_secs(300) {
             self.reset_all_priorities();
             self.last_mlfq_reset_timer = Instant::now();
-            tracing::debug!("All process priorities have been reset due to inactivity");
+            tracing::trace!("All process priorities have been reset due to inactivity");
         }
 
         let active = match self.active_client {
@@ -396,6 +399,31 @@ impl ScheduleQueue {
         }
         PreemptionDecision::AllowPreempt {
             follow_same_priority_cooldown: false,
+        }
+    }
+
+    pub fn get_history(&self, pid: i32) -> GetHistoryResult {
+        match self.clients.get(&pid) {
+            Some(client) => {
+                let history = client.get_history();
+                let now = Instant::now();
+                let entries = history
+                    .into_iter()
+                    .map(|chunk| {
+                        // Calculate when the chunk started relative to now
+                        let time_since_start = now.duration_since(chunk.start);
+                        HistoryEntry {
+                            start_ms: time_since_start.as_millis(),
+                            duration_ms: chunk.duration().as_millis(),
+                            start_priority: chunk.start_priority as u8,
+                            end_priority: chunk.end_priority as u8,
+                            stop_reason: format!("{:?}", chunk.reason),
+                        }
+                    })
+                    .collect();
+                GetHistoryResult::Success(GetHistoryResponse { entries })
+            }
+            None => GetHistoryResult::FailureProcessNotExist,
         }
     }
 }

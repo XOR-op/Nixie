@@ -25,6 +25,8 @@ pub(crate) trait Controllable {
 
     async fn prefetch(args: PrefetchArgs) -> Result<PrefetchResponse, ()>;
 
+    async fn get_history(args: GetHistoryArgs) -> Result<GetHistoryResult, ()>;
+
     async fn update_config(config: ConfigurableArgs);
 
     async fn get_config() -> Config;
@@ -63,6 +65,31 @@ pub(crate) enum SetPriorityResponse {
     Success,
     FailureProcessNotExist,
     FailurePriorityNotFixed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GetHistoryArgs {
+    pub pid: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GetHistoryResponse {
+    pub entries: Vec<HistoryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum GetHistoryResult {
+    Success(GetHistoryResponse),
+    FailureProcessNotExist,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct HistoryEntry {
+    pub start_ms: u128,
+    pub duration_ms: u128,
+    pub start_priority: u8,
+    pub end_priority: u8,
+    pub stop_reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -7,7 +7,8 @@ use tokio_serde::formats::Cbor;
 use crate::{
     ProcArgs, UpdateConfigArgs,
     control::{
-        PrefetchResponse, ProcessMetadata, SetPriorityArgs, SetPriorityLevel, SetPriorityResponse,
+        GetHistoryArgs, GetHistoryResult, PrefetchResponse, ProcessMetadata, SetPriorityArgs,
+        SetPriorityLevel, SetPriorityResponse,
     },
     error::ClientError,
     runtime::Priority,
@@ -405,6 +406,71 @@ impl ControlClient {
             },
             Err(_) => {
                 eprintln!("{}", "Failed to set priority: Unknown Error".red());
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn show_history(&self, pid: ProcArgs) -> Result<(), ClientError> {
+        let pid_list = self.get_pid_list().await?;
+        let pid = get_pid_checked(pid, &pid_list)?;
+
+        let process_name = std::fs::read_to_string(format!("/proc/{}/comm", pid))
+            .map(|s| s.trim().to_string())
+            .ok()
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let resp = self
+            .client
+            .get_history(tarpc::context::current(), GetHistoryArgs { pid })
+            .await
+            .map_err(|e| ClientError::ClientRpc("get_history", e))?;
+
+        match resp {
+            Ok(result) => match result {
+                GetHistoryResult::Success(history) => {
+                    println!(
+                        "Scheduling history for [{}] {}:",
+                        pid.to_string().yellow(),
+                        process_name.green()
+                    );
+                    println!(
+                        "{} entries (up to 64 most recent)",
+                        history.entries.len().to_string().cyan()
+                    );
+                    println!();
+
+                    if history.entries.is_empty() {
+                        println!("{}", "No history available".bright_black());
+                    } else {
+                        for (idx, entry) in history.entries.iter().enumerate() {
+                            let priority_str = if entry.start_priority == entry.end_priority {
+                                format!("Priority: {}", entry.start_priority).purple()
+                            } else {
+                                format!(
+                                    "Priority: {} -> {}",
+                                    entry.start_priority, entry.end_priority
+                                )
+                                .bright_yellow()
+                            };
+
+                            println!(
+                                "{} Start: {}ms | Duration: {}ms | {} | Stop: {}",
+                                format!("#{}", idx).magenta(),
+                                entry.start_ms.to_string().blue(),
+                                entry.duration_ms.to_string().cyan(),
+                                priority_str,
+                                entry.stop_reason.bright_black()
+                            );
+                        }
+                    }
+                }
+                GetHistoryResult::FailureProcessNotExist => {
+                    eprintln!("{}", "Failed to get history: Process Not Exist".red());
+                }
+            },
+            Err(_) => {
+                eprintln!("{}", "Failed to get history: Unknown Error".red());
             }
         }
         Ok(())

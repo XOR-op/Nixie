@@ -19,8 +19,8 @@ use tokio::{
 use crate::{
     config::{Config, ConfigurableArgs, load_config, update_config},
     control::{
-        self, Controllable, DataManagerMetadata, PrefetchArgs, PrefetchResponse, SetPriorityArgs,
-        SetPriorityResponse,
+        self, Controllable, DataManagerMetadata, GetHistoryArgs, GetHistoryResult, PrefetchArgs,
+        PrefetchResponse, SetPriorityArgs, SetPriorityResponse,
     },
     error::{DaemonError, NihilphaseError},
     runtime::{
@@ -268,6 +268,24 @@ impl Controllable for ControllableDaemon {
         let (para, ret_rx) = CallParameter::new(args);
         self.control_tx
             .send(ScheduleControlReq::SetPriority(para))
+            .map_err(|_| ())?;
+        ret_rx.await.ok_or(())
+    }
+
+    async fn get_history(
+        self,
+        _context: Context,
+        args: GetHistoryArgs,
+    ) -> Result<GetHistoryResult, ()> {
+        let guard = self.data.processes.read().await;
+        if !guard.contains_key(&args.pid) {
+            tracing::warn!("Process with pid {} not found", args.pid);
+            return Err(());
+        }
+        drop(guard);
+        let (para, ret_rx) = CallParameter::new(args);
+        self.control_tx
+            .send(ScheduleControlReq::GetHistory(para))
             .map_err(|_| ())?;
         ret_rx.await.ok_or(())
     }
