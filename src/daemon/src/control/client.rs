@@ -1,5 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
+use chrono::DateTime;
 use colored::Colorize;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
 use tokio_serde::formats::Cbor;
@@ -445,19 +446,19 @@ impl ControlClient {
                     } else {
                         for (idx, entry) in history.entries.iter().enumerate() {
                             let priority_str = if entry.start_priority == entry.end_priority {
-                                format!("Priority: {}", entry.start_priority).purple()
+                                format!("Priority: {:?}", entry.start_priority).purple()
                             } else {
                                 format!(
-                                    "Priority: {} -> {}",
+                                    "Priority: {:?} -> {:?}",
                                     entry.start_priority, entry.end_priority
                                 )
                                 .bright_yellow()
                             };
-
+                            let datetime: DateTime<chrono::Local> = entry.start.into();
                             println!(
-                                "{} Start: {}ms | Duration: {}ms | {} | Stop: {}",
+                                "{} [{}] Duration: {:>5}ms | {} | Stop: {}",
                                 format!("#{}", idx).magenta(),
-                                entry.start_ms.to_string().blue(),
+                                datetime.format("%H:%M:%S").to_string().blue(),
                                 entry.duration_ms.to_string().cyan(),
                                 priority_str,
                                 entry.stop_reason.bright_black()

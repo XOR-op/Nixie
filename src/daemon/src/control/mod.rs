@@ -1,14 +1,14 @@
 pub mod client;
 pub(crate) mod parse;
 
-use std::{collections::HashMap, num::NonZeroU32};
+use std::{collections::HashMap, num::NonZeroU32, time::SystemTime};
 
 use nihil_common::GlobalDeviceId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{Config, ConfigurableArgs},
-    runtime::{ClientState, Priority, migration::BufferLocation},
+    runtime::{ClientState, Priority, PriorityLevel, migration::BufferLocation},
 };
 
 pub static CONTROL_PATH: &str = "/tmp/nihilphase-ctl.sock";
@@ -85,10 +85,10 @@ pub(crate) enum GetHistoryResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HistoryEntry {
-    pub start_ms: u128,
+    pub start: SystemTime,
     pub duration_ms: u128,
-    pub start_priority: u8,
-    pub end_priority: u8,
+    pub start_priority: PriorityLevel,
+    pub end_priority: PriorityLevel,
     pub stop_reason: String,
 }
 

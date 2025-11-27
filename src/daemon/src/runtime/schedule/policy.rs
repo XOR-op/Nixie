@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use nihil_common::{ActivityUpdate, general::CallParameter};
@@ -413,10 +413,10 @@ impl ScheduleQueue {
                         // Calculate when the chunk started relative to now
                         let time_since_start = now.duration_since(chunk.start);
                         HistoryEntry {
-                            start_ms: time_since_start.as_millis(),
+                            start: SystemTime::now() - time_since_start,
                             duration_ms: chunk.duration().as_millis(),
-                            start_priority: chunk.start_priority as u8,
-                            end_priority: chunk.end_priority as u8,
+                            start_priority: chunk.start_priority,
+                            end_priority: chunk.end_priority,
                             stop_reason: format!("{:?}", chunk.reason),
                         }
                     })
