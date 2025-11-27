@@ -123,6 +123,11 @@ impl History {
     }
 }
 
+enum StateSinceLastActive {
+    Active(Instant),
+    Idle(Instant),
+}
+
 pub struct ClientStatistics {
     pid: i32,
     active_time_history: History,
@@ -130,7 +135,7 @@ pub struct ClientStatistics {
     priority: Priority,
     time_used_in_current_priority: Duration,
     last_priority_update: Instant,
-    last_idleness: Option<Instant>,
+    last_state: StateSinceLastActive,
 }
 
 impl std::fmt::Debug for ClientStatistics {
@@ -153,7 +158,7 @@ impl ClientStatistics {
             priority: Priority::default_dynamic(),
             time_used_in_current_priority: Duration::ZERO,
             last_priority_update: Instant::now(),
-            last_idleness: None,
+            last_state: StateSinceLastActive::Idle(Instant::now()),
         }
     }
 
@@ -164,7 +169,7 @@ impl ClientStatistics {
         self.state = InternalClientState::Active {
             since: Instant::now(),
         };
-        self.last_idleness = None;
+        self.last_state = StateSinceLastActive::Active(Instant::now());
     }
 
     pub fn make_resident_idle(&mut self, reason: StopReason) {
@@ -185,7 +190,7 @@ impl ClientStatistics {
             }
         }
         self.state = InternalClientState::ResidentIdle;
-        self.last_idleness = Some(Instant::now());
+        self.last_state = StateSinceLastActive::Idle(Instant::now());
     }
 
     pub fn make_idle(&mut self, reason: StopReason) {
@@ -209,7 +214,7 @@ impl ClientStatistics {
             }
         }
         self.state = InternalClientState::Idle;
-        self.last_idleness = Some(Instant::now());
+        self.last_state = StateSinceLastActive::Idle(Instant::now());
     }
 
     pub fn increase_priority(&mut self, until: Option<PriorityLevel>) -> bool {
@@ -224,6 +229,7 @@ impl ClientStatistics {
 
     pub fn set_priority(&mut self, priority: Priority) {
         self.last_priority_update = Instant::now();
+        self.time_used_in_current_priority = Duration::ZERO;
         self.priority = priority;
     }
 }
@@ -235,7 +241,10 @@ impl ClientStatistics {
     }
 
     pub fn idle_since(&self) -> Option<Duration> {
-        self.last_idleness.map(|t| t.elapsed())
+        match &self.last_state {
+            StateSinceLastActive::Idle(since) => Some(since.elapsed()),
+            StateSinceLastActive::Active(_) => None,
+        }
     }
 
     pub fn last_unfinished_active_time(&self, since: Option<Instant>) -> Option<Duration> {
