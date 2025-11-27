@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
 use nihil_common::{
-    ActivityUpdate, GlobalDeviceId, MAX_GPUS, MemoryRequest, SchedulingArgs,
+    ActivityUpdate, ActivityUpdateContent, GlobalDeviceId, MAX_GPUS, MemoryRequest, SchedulingArgs,
     general::CallParameter, rpc::SidecarClient,
 };
 use tokio::sync::mpsc;
@@ -168,17 +168,18 @@ impl Scheduler {
                     IdleRequestType::Yield => self.handle_activity_yield(req.pid),
                 },
                 GenericRequest::Schedule(req) => {
-                    let res = match req.args {
-                        ActivityUpdate::RequestScheduling => {
+                    let res = match req.args.content {
+                        ActivityUpdateContent::RequestScheduling => {
                             self.handle_sched_request(req.pid, None).await
                         }
-                        ActivityUpdate::YieldThenRequestSchedulingAndMem { memory_request } => {
+                        ActivityUpdateContent::YieldThenRequestSchedulingAndMem {
+                            memory_request,
+                        } => {
                             // convert local device ids to global device ids
-
                             self.handle_sched_request(req.pid, Some(memory_request))
                                 .await
                         }
-                        ActivityUpdate::Idle => unreachable!(),
+                        ActivityUpdateContent::Idle => unreachable!(),
                     };
                     if let Err(e) = res {
                         tracing::error!(
@@ -209,23 +210,6 @@ impl Scheduler {
             }
         }
         *last_polled = Instant::now();
-    }
-    async fn handle_activity_update(
-        &mut self,
-        pid: i32,
-        data: ActivityUpdate,
-    ) -> Result<(), ScheduleError> {
-        match data {
-            ActivityUpdate::RequestScheduling => self.handle_sched_request(pid, None).await,
-            ActivityUpdate::YieldThenRequestSchedulingAndMem { memory_request } => {
-                self.handle_activity_yield(pid);
-                self.handle_sched_request(pid, Some(memory_request)).await
-            }
-            ActivityUpdate::Idle => {
-                self.handle_activity_idle(pid);
-                Ok(())
-            }
-        }
     }
 
     async fn handle_sched_request(

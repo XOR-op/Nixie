@@ -144,6 +144,9 @@ pub struct ClientStatistics {
     last_in_current_priority: Instant,
     last_priority_update: Instant,
     last_state: StateSinceLastActive,
+
+    // others
+    max_message_id_till_now: u64,
 }
 
 impl std::fmt::Debug for ClientStatistics {
@@ -168,6 +171,7 @@ impl ClientStatistics {
             last_in_current_priority: Instant::now(),
             last_priority_update: Instant::now(),
             last_state: StateSinceLastActive::Idle(Instant::now()),
+            max_message_id_till_now: 0,
         }
     }
 
@@ -267,6 +271,18 @@ impl ClientStatistics {
             self.time_used_in_current_priority += self.last_in_current_priority.elapsed();
             self.last_in_current_priority = Instant::now();
         }
+    }
+
+    pub fn record_message_id(&mut self, message_id: u64) {
+        if message_id != self.max_message_id_till_now + 1 {
+            tracing::warn!(
+                "Out-of-order message ID for client {}: last {}, current {}",
+                self.pid,
+                self.max_message_id_till_now,
+                message_id
+            );
+        }
+        self.max_message_id_till_now = self.max_message_id_till_now.max(message_id)
     }
 }
 

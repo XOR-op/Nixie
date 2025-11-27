@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use nihil_common::{ActivityUpdate, general::CallParameter};
+use nihil_common::{ActivityUpdate, ActivityUpdateContent, general::CallParameter};
 
 use crate::control::{
     GetHistoryResponse, GetHistoryResult, HistoryEntry, PrefetchArgs, PrefetchResponse,
@@ -150,8 +150,10 @@ impl ScheduleQueue {
 // scheduling logic
 impl ScheduleQueue {
     pub fn schedule_push(&mut self, pid: i32, args: ActivityUpdate) {
-        match &args {
-            ActivityUpdate::Idle => {
+        let client = self.get_client_mut_or_insert(pid);
+        client.record_message_id(args.message_id);
+        match &args.content {
+            ActivityUpdateContent::Idle => {
                 // higher priority for idle
                 self.idle_req_queue.push_front(IdleRequest {
                     pid,
@@ -159,7 +161,7 @@ impl ScheduleQueue {
                     request_type: IdleRequestType::Idle,
                 });
             }
-            ActivityUpdate::YieldThenRequestSchedulingAndMem { .. } => {
+            ActivityUpdateContent::YieldThenRequestSchedulingAndMem { .. } => {
                 self.idle_req_queue.push_front(IdleRequest {
                     pid,
                     time: Instant::now(),
@@ -171,7 +173,7 @@ impl ScheduleQueue {
                     time: Instant::now(),
                 });
             }
-            ActivityUpdate::RequestScheduling => {
+            ActivityUpdateContent::RequestScheduling => {
                 self.sched_req.push_back(SchedRequest {
                     pid,
                     args,
@@ -182,8 +184,10 @@ impl ScheduleQueue {
     }
 
     pub fn prioritized_push(&mut self, pid: i32, args: ActivityUpdate) {
-        match &args {
-            ActivityUpdate::Idle => {
+        let client = self.get_client_mut_or_insert(pid);
+        client.record_message_id(args.message_id);
+        match &args.content {
+            ActivityUpdateContent::Idle => {
                 // higher priority for idle
                 self.idle_req_queue.push_front(IdleRequest {
                     pid,
@@ -191,14 +195,14 @@ impl ScheduleQueue {
                     request_type: IdleRequestType::Idle,
                 });
             }
-            ActivityUpdate::RequestScheduling => {
+            ActivityUpdateContent::RequestScheduling => {
                 self.sched_req.push_front(SchedRequest {
                     pid,
                     args,
                     time: Instant::now(),
                 });
             }
-            ActivityUpdate::YieldThenRequestSchedulingAndMem { .. } => {
+            ActivityUpdateContent::YieldThenRequestSchedulingAndMem { .. } => {
                 tracing::error!(
                     "Prioritized push with YieldThenRequestSchedulingAndMem is not supported"
                 );

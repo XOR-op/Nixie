@@ -59,6 +59,14 @@ impl Controller {
                             Ok(())
                         }
                         A2SMessage::NofityActivity(msg) => {
+                            crate::debug_eprintln!(
+                                "{} Activity update: {:?}",
+                                chrono::Local::now()
+                                    .format("%H:%M:%S%.3f")
+                                    .to_string()
+                                    .dimmed(),
+                                msg
+                            );
                             self.daemon_client
                                 .notify_activity(tarpc::context::current(), msg)
                                 .await

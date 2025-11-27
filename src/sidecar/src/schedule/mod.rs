@@ -4,7 +4,8 @@ use std::{
 };
 
 use nihil_common::{
-    ActivityUpdate, MemoryRequest, ProcessLocalDeviceId, SchedulingArgs, general::CallParameter,
+    ActivityUpdate, ActivityUpdateContent, MemoryRequest, ProcessLocalDeviceId, SchedulingArgs,
+    general::CallParameter,
 };
 use stats::LaunchStats;
 
@@ -27,6 +28,7 @@ enum ProgramState {
 struct Context {
     program_state: ProgramState,
     stats: LaunchStats,
+    next_update_counter: u64,
 }
 
 impl Context {
@@ -34,7 +36,14 @@ impl Context {
         Self {
             program_state: ProgramState::Paused,
             stats: LaunchStats::new(),
+            next_update_counter: 1,
         }
+    }
+
+    pub fn incr_counter(&mut self) -> u64 {
+        let current = self.next_update_counter;
+        self.next_update_counter = self.next_update_counter.wrapping_add(1);
+        current
     }
 }
 
@@ -103,11 +112,14 @@ impl Scheduler {
         mem_req: Option<Box<MemoryRequest>>,
     ) {
         if sched_ctx.program_state == ProgramState::Paused {
-            crate::comm::update_activity(match mem_req {
-                Some(req) => ActivityUpdate::YieldThenRequestSchedulingAndMem {
-                    memory_request: req,
+            crate::comm::update_activity(ActivityUpdate {
+                message_id: sched_ctx.incr_counter(),
+                content: match mem_req {
+                    Some(req) => ActivityUpdateContent::YieldThenRequestSchedulingAndMem {
+                        memory_request: req,
+                    },
+                    None => ActivityUpdateContent::RequestScheduling,
                 },
-                None => ActivityUpdate::RequestScheduling,
             });
         }
         while sched_ctx.program_state == ProgramState::Paused {
@@ -183,7 +195,10 @@ impl Scheduler {
                                     {
                                         // should not use disable() here since we don't need prefetch
                                         context.program_state = ProgramState::Paused;
-                                        crate::comm::update_activity(ActivityUpdate::Idle);
+                                        crate::comm::update_activity(ActivityUpdate {
+                                            message_id: context.incr_counter(),
+                                            content: ActivityUpdateContent::Idle,
+                                        });
                                     }
                                 }
                             }
