@@ -1,6 +1,6 @@
 use std::{
     sync::{Condvar, Mutex, MutexGuard, atomic::AtomicBool},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use nihil_common::{
@@ -11,7 +11,7 @@ use stats::LaunchStats;
 
 use crate::{
     check_cu_err, env_config::sidecar_config, intercept::cuda_mem_get_info_impl,
-    intercept_launch::is_during_capture, set_device,
+    intercept_launch::is_during_capture, set_device, warn_eprintln,
 };
 
 mod stats;
@@ -28,6 +28,7 @@ enum ProgramState {
 struct Context {
     program_state: ProgramState,
     stats: LaunchStats,
+    last_state_to_running: SystemTime,
     next_update_counter: u64,
 }
 
@@ -36,6 +37,7 @@ impl Context {
         Self {
             program_state: ProgramState::Paused,
             stats: LaunchStats::new(),
+            last_state_to_running: SystemTime::UNIX_EPOCH,
             next_update_counter: 1,
         }
     }
@@ -44,6 +46,17 @@ impl Context {
         let current = self.next_update_counter;
         self.next_update_counter = self.next_update_counter.wrapping_add(1);
         current
+    }
+
+    pub fn set_as_running(&mut self) {
+        self.program_state = ProgramState::Running;
+        self.last_state_to_running = SystemTime::now();
+    }
+
+    pub fn since_last_state_to_running(&self) -> Duration {
+        SystemTime::now()
+            .duration_since(self.last_state_to_running)
+            .unwrap_or_default()
     }
 }
 
@@ -69,9 +82,19 @@ impl Scheduler {
         let mut allow_running = self.allow_running.lock().unwrap();
         match params.param {
             SchedulingArgs::Enable => {
-                allow_running.program_state = ProgramState::Running;
+                if !matches!(allow_running.program_state, ProgramState::Paused) {
+                    warn_eprintln!(
+                        "set_allow_running(): Scheduler is already running when enabling"
+                    );
+                }
+                allow_running.set_as_running();
             }
             SchedulingArgs::Disable => {
+                if !matches!(allow_running.program_state, ProgramState::Running) {
+                    warn_eprintln!(
+                        "set_allow_running(): Scheduler is already paused when disabling"
+                    );
+                }
                 allow_running.program_state = ProgramState::Paused;
                 let mut dev_count = 0;
                 unsafe {
@@ -101,6 +124,9 @@ impl Scheduler {
         mem_req: Box<MemoryRequest>,
     ) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
+        if !matches!(sched_ctx.program_state, ProgramState::Running) {
+            warn_eprintln!("pause_then_require_memory(): Scheduler is already paused when pausing");
+        }
         sched_ctx.program_state = ProgramState::Paused;
         Self::launch_allowed_with(sched_ctx, &self.cond_var, launch_type, Some(mem_req));
     }
@@ -122,6 +148,14 @@ impl Scheduler {
                 },
             });
         }
+        /*
+         * We had a potential A-B-A deadlock here when:
+         * 1. program_state is set to Running, and the condvar is notified
+         * 2. the idle checker get the lock first, and then set program_state to Paused
+         * 3. we wake up here, and we see program_state is Paused as if the request has not finished; then pause forever
+         *
+         * Now the mitigation is to set a cooldown time after switching to Running state, so that the idle checker will not set it back to Paused too quickly.
+         */
         while sched_ctx.program_state == ProgramState::Paused {
             sched_ctx = cond_var.wait(sched_ctx).unwrap();
         }
@@ -167,9 +201,10 @@ impl Scheduler {
             const KERNEL_INTERVAL: Duration = Duration::from_millis(100);
             const GRAPH_INTERVAL: Duration = Duration::from_millis(100);
             const TRANSFER_INTERVAL: Duration = Duration::from_millis(300);
-            const SYNC_INTERVAL: Duration = Duration::from_millis(50);
+            const SYNC_INTERVAL: Duration = Duration::from_millis(75);
 
             const CHECK_INTERVAL: Duration = Duration::from_millis(20);
+            const NOT_SLEEP_COOLDOWN: Duration = Duration::from_millis(100);
 
             assert!(KERNEL_INTERVAL <= GRAPH_INTERVAL);
             if sidecar_config().auto_idle {
@@ -178,7 +213,11 @@ impl Scheduler {
                     loop {
                         {
                             let mut context = self.allow_running.lock().unwrap();
-                            if context.program_state == ProgramState::Running {
+                            if context.program_state == ProgramState::Running
+                                // here is the mitigation of the A-B-A deadlock mentioned above, since the idle conditions below are stale
+                                // and will trigger immediately just before no new activity happens
+                                && context.since_last_state_to_running() > NOT_SLEEP_COOLDOWN
+                            {
                                 // check idle
                                 if context.stats.pending_sync_elapsed().is_none() {
                                     let (transfer_interval, transfer_size) =

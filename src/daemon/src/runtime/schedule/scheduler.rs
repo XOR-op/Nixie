@@ -84,7 +84,7 @@ impl Scheduler {
             tokio::select! {
                 Some((pid, data)) = self.rpc_data_rx.recv() => {
                     self.received_data(pid, data).await;
-                    while let Some((pid, data)) = self.rpc_data_rx.try_recv().ok() {
+                    while let Ok((pid, data)) = self.rpc_data_rx.try_recv() {
                         self.received_data(pid, data).await;
                     }
                     self.poll_queue(&mut last_polled).await;
