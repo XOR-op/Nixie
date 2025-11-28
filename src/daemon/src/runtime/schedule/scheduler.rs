@@ -30,7 +30,7 @@ use crate::{
         schedule::{
             PriorityLevel,
             control::{GetStateResponse, ScheduleControlReq},
-            policy::IdleRequestType,
+            policy::{IdleRequest, IdleRequestType},
             statistics::PreemptionReason,
         },
     },
@@ -83,7 +83,11 @@ impl Scheduler {
             let sleep_duration = Duration::from_millis(100).saturating_sub(last_polled.elapsed());
             tokio::select! {
                 Some((pid, data)) = self.rpc_data_rx.recv() => {
-                    self.received_data(pid, data, &mut last_polled).await;
+                    self.received_data(pid, data).await;
+                    while let Some((pid, data)) = self.rpc_data_rx.try_recv().ok() {
+                        self.received_data(pid, data).await;
+                    }
+                    self.poll_queue(&mut last_polled).await;
                 }
                 Some(req) = self.control_msg_rx.recv() =>{
                     self.handle_ctrl(req, &mut last_polled).await;
@@ -144,10 +148,9 @@ impl Scheduler {
         self.poll_queue(last_polled).await;
     }
 
-    async fn received_data(&mut self, pid: i32, data: ActivityUpdate, last_polled: &mut Instant) {
+    async fn received_data(&mut self, pid: i32, data: ActivityUpdate) {
         tracing::trace!("Received data from process {}: {:?}", pid, data);
         self.sched_queue.schedule_push(pid, data);
-        self.poll_queue(last_polled).await;
     }
 
     async fn poll_queue(&mut self, last_polled: &mut Instant) {
@@ -164,7 +167,7 @@ impl Scheduler {
         if let Some(req) = self.sched_queue.schedule_pop(self.active_client) {
             match req {
                 GenericRequest::Idle(req) => match req.request_type {
-                    IdleRequestType::Idle => self.handle_activity_idle(req.pid),
+                    IdleRequestType::Idle => self.handle_activity_idle(req),
                     IdleRequestType::Yield => self.handle_activity_yield(req.pid),
                 },
                 GenericRequest::Schedule(req) => {
@@ -597,24 +600,32 @@ impl Scheduler {
         Ok(swap_out)
     }
 
-    fn handle_activity_idle(&mut self, pid: i32) {
+    fn handle_activity_idle(&mut self, req: IdleRequest) {
         // TODO: LastActive
+        let elapsed = req.time.elapsed();
+        if elapsed > Duration::from_millis(1) {
+            tracing::warn!(
+                "Process {} sent idle request after {}ms, which is too long ago",
+                req.pid,
+                elapsed.as_millis()
+            );
+        }
         if let ActiveClientState::Active {
             pid: active_pid, ..
         } = self.active_client
-            && let Some(client) = self.sched_queue.get_client_mut(pid)
-            && active_pid == pid
+            && let Some(client) = self.sched_queue.get_client_mut(req.pid)
+            && active_pid == req.pid
         {
             client.make_resident_idle(StopReason::Idle);
             self.active_client = ActiveClientState::LastActive {
-                pid,
+                pid: req.pid,
                 last_active: Instant::now(),
             };
-            tracing::debug!("Process {} becomes idle", pid);
+            tracing::debug!("Process {} becomes idle", req.pid);
             self.sched_queue.cooldown(None);
             return;
         }
-        tracing::error!("Process {} becomes idle but is not active client", pid);
+        tracing::error!("Process {} becomes idle but is not active client", req.pid);
     }
 
     fn handle_activity_yield(&mut self, pid: i32) {

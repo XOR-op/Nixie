@@ -155,14 +155,14 @@ impl ScheduleQueue {
         match &args.content {
             ActivityUpdateContent::Idle => {
                 // higher priority for idle
-                self.idle_req_queue.push_front(IdleRequest {
+                self.idle_req_queue.push_back(IdleRequest {
                     pid,
                     time: Instant::now(),
                     request_type: IdleRequestType::Idle,
                 });
             }
             ActivityUpdateContent::YieldThenRequestSchedulingAndMem { .. } => {
-                self.idle_req_queue.push_front(IdleRequest {
+                self.idle_req_queue.push_back(IdleRequest {
                     pid,
                     time: Instant::now(),
                     request_type: IdleRequestType::Yield,
@@ -220,6 +220,13 @@ impl ScheduleQueue {
     pub fn schedule_pop(&mut self, active_client: ActiveClientState) -> Option<GenericRequest> {
         self.update_priority();
         self.compute_prioritization();
+        if self.idle_req_queue.len() > 1 {
+            tracing::warn!(
+                "There are {} idle requests pending: {:?}",
+                self.idle_req_queue.len(),
+                self.idle_req_queue
+            );
+        }
         if let Some(front) = self.idle_req_queue.pop_front() {
             return Some(GenericRequest::Idle(front));
         } else if let Some(prefetch_req) = self.prefetch_queue.pop_front() {
