@@ -103,6 +103,9 @@ impl StreamingMemoryMigrator {
         );
         assert_eq!(args.host_buffer_offset.len(), args.size.len());
         assert!(!args.size.is_empty());
+        let mut table = GENERIC_DATA
+            .get_or_init(should_have_initialized)
+            .lock(self.device_id as usize);
         if args.host_to_device {
             // allocate physical memory
             let mut cu_handle = 0u64;
@@ -119,9 +122,6 @@ impl StreamingMemoryMigrator {
             }
             check_cu_err!(res, "Failed to allocate memory on device");
             let virtual_addr = {
-                let mut table = GENERIC_DATA
-                    .get_or_init(should_have_initialized)
-                    .lock(self.device_id as usize);
                 let phy_handle = table
                     .handle_list
                     .get_handle_mut(args.handle_idx)
@@ -167,9 +167,6 @@ impl StreamingMemoryMigrator {
         } else {
             // d2h
             let virtual_addr = {
-                let table = GENERIC_DATA
-                    .get_or_init(should_have_initialized)
-                    .lock(self.device_id as usize);
                 let phy_handle = table
                     .handle_list
                     .get_handle(args.handle_idx)
