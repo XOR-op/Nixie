@@ -5,7 +5,7 @@ pub(super) mod migration_plan;
 mod shm_buffer;
 mod storage_buffer;
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::{num::NonZeroU64, sync::Arc};
 
 pub use hostmem_buffer::HostMemBufferManager;
 use nihil_common::GlobalDeviceId;
@@ -17,7 +17,7 @@ pub use storage_buffer::StorageBufferManager;
 pub struct BufferId {
     pub pid: i32,
     pub device_id: GlobalDeviceId,
-    pub block_id: NonZeroU32,
+    pub block_id: NonZeroU64,
     pub size: u32,
 }
 

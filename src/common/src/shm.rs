@@ -1,5 +1,5 @@
 use core::{ffi::c_int, pin::Pin};
-use std::num::NonZeroU32;
+use std::num::NonZeroU64;
 
 use nix::libc;
 
@@ -19,7 +19,7 @@ pub struct AllocationTable {
 pub struct HandleList {
     // NonZeroU32
     handles: [PhysicalMemoryHandle; HANDLE_NUM],
-    freelist_head: Option<NonZeroU32>,
+    freelist_head: Option<NonZeroU64>,
 }
 
 impl AllocationTable {
@@ -53,15 +53,15 @@ impl HandleList {
         }; HANDLE_NUM];
         #[allow(clippy::needless_range_loop)]
         for i in 1..HANDLE_NUM {
-            handles[i].next_handle_idx = NonZeroU32::new(i as u32 + 1);
+            handles[i].next_handle_idx = NonZeroU64::new(i as u64 + 1);
         }
         Self {
             handles,
-            freelist_head: NonZeroU32::new(1),
+            freelist_head: NonZeroU64::new(1),
         }
     }
 
-    pub fn allocate_handle(&mut self, addr: u64, size: usize) -> Option<NonZeroU32> {
+    pub fn allocate_handle(&mut self, addr: u64, size: usize) -> Option<NonZeroU64> {
         if let Some(idx) = self.freelist_head {
             let handle = &mut self.handles[idx.get() as usize];
             self.freelist_head = handle.next_handle_idx;
@@ -76,7 +76,7 @@ impl HandleList {
         }
     }
 
-    pub fn free_handle(&mut self, idx: NonZeroU32) {
+    pub fn free_handle(&mut self, idx: NonZeroU64) {
         let handle = &mut self.handles[idx.get() as usize];
         handle.addr = 0;
         handle.size = 0;
@@ -86,14 +86,14 @@ impl HandleList {
         self.freelist_head = Some(idx);
     }
 
-    pub fn get_handle(&self, idx: NonZeroU32) -> Option<&PhysicalMemoryHandle> {
+    pub fn get_handle(&self, idx: NonZeroU64) -> Option<&PhysicalMemoryHandle> {
         if idx.get() as usize >= HANDLE_NUM {
             return None;
         }
         Some(&self.handles[idx.get() as usize])
     }
 
-    pub fn get_handle_mut(&mut self, idx: NonZeroU32) -> Option<&mut PhysicalMemoryHandle> {
+    pub fn get_handle_mut(&mut self, idx: NonZeroU64) -> Option<&mut PhysicalMemoryHandle> {
         if idx.get() as usize >= HANDLE_NUM {
             return None;
         }
@@ -101,7 +101,7 @@ impl HandleList {
     }
 
     // return (on_gpu, not_on_gpu)
-    pub fn memory_usage(&self, handle_idx: NonZeroU32) -> (usize, usize) {
+    pub fn memory_usage(&self, handle_idx: NonZeroU64) -> (usize, usize) {
         let mut on_gpu = 0;
         let mut not_on_gpu = 0;
         let mut cur_index = Some(handle_idx);
@@ -129,9 +129,9 @@ impl ReInitializable for HandleList {
             handle.valid = false;
         }
         for i in 1..HANDLE_NUM {
-            self.handles[i].next_handle_idx = NonZeroU32::new(i as u32 + 1);
+            self.handles[i].next_handle_idx = NonZeroU64::new(i as u64 + 1);
         }
-        self.freelist_head = NonZeroU32::new(1);
+        self.freelist_head = NonZeroU64::new(1);
     }
 }
 
@@ -146,7 +146,7 @@ pub struct PhysicalMemoryHandle {
     pub addr: u64,
     pub size: usize,
     pub cu_handle: Option<cudarc::driver::sys::CUmemGenericAllocationHandle>,
-    pub next_handle_idx: Option<NonZeroU32>,
+    pub next_handle_idx: Option<NonZeroU64>,
     pub on_gpu: bool,
     pub valid: bool,
 }
@@ -156,7 +156,7 @@ pub struct PhysicalMemoryHandle {
 pub struct AllocationEntry {
     pub addr: u64,
     pub len: usize,
-    pub handle_idx: NonZeroU32,
+    pub handle_idx: NonZeroU64,
 }
 
 impl Default for AllocationEntry {
@@ -164,7 +164,7 @@ impl Default for AllocationEntry {
         Self {
             addr: 0,
             len: 0,
-            handle_idx: NonZeroU32::new(u32::MAX).unwrap(),
+            handle_idx: NonZeroU64::new(u64::MAX).unwrap(),
         }
     }
 }

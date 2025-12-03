@@ -1,5 +1,5 @@
 mod streaming;
-use std::{collections::HashMap, num::NonZeroU32};
+use std::{collections::HashMap, num::NonZeroU64};
 
 use cudarc::driver::sys::{
     CUmemAccessDesc, CUmemAllocationHandleType, CUmemAllocationProp, CUmemAllocationType,
@@ -159,7 +159,7 @@ pub(super) fn unmap_and_release_mem_handle(handle: &PhysicalMemoryHandle) {
     );
 }
 
-pub(crate) fn deallocate_list(start_idx: NonZeroU32, handle_list: &mut HandleList) {
+pub(crate) fn deallocate_list(start_idx: NonZeroU64, handle_list: &mut HandleList) {
     let mut cur_index = Some(start_idx);
     while let Some(index) = cur_index {
         let handle = handle_list.get_handle_mut(index).unwrap();

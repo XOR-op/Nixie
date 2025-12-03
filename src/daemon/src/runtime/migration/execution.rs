@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     io::{IoSlice, IoSliceMut},
-    num::NonZeroU32,
+    num::NonZeroU64,
     sync::Arc,
 };
 
@@ -43,7 +43,7 @@ macro_rules! warn_on_send_error {
 #[derive(Debug, Clone)]
 pub struct MigrationSpecEntry {
     pub size: u32,
-    pub handle_idx: NonZeroU32,
+    pub handle_idx: NonZeroU64,
     // When ready is true, the buffer should be on GPU or in shm.
     pub ready_for_pcie_xfer: bool,
 }

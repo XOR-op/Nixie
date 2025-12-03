@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::NonZeroU64;
 
 use serde::{Deserialize, Serialize};
 
@@ -58,19 +58,19 @@ pub struct MigrationArgs {
     pub host_buffer_offset: Vec<u64>,
     pub size: Vec<u32>,
     pub device: ProcessLocalDeviceId,
-    pub handle_idx: NonZeroU32,
+    pub handle_idx: NonZeroU64,
     pub host_to_device: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum MigrationResponse {
     Success {
-        handle_idx: NonZeroU32,
+        handle_idx: NonZeroU64,
         device: ProcessLocalDeviceId,
         size: u64,
     },
     AlreadyFreed {
-        handle_idx: NonZeroU32,
+        handle_idx: NonZeroU64,
         device: ProcessLocalDeviceId,
         size: u64,
     },

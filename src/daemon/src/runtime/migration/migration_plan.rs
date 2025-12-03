@@ -689,7 +689,7 @@ pub(super) mod tests {
     use super::*;
     use std::{
         collections::{BTreeMap, HashMap},
-        num::NonZeroU32,
+        num::NonZeroU64,
     };
 
     use crate::{control::PhysicalMemoryData, runtime::migration::BufferId};
@@ -723,7 +723,7 @@ pub(super) mod tests {
                     .map(|i| BufferId {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
-                        block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
+                        block_id: NonZeroU64::new(i as u64 + 1).unwrap(),
                         size: block_size as u32,
                     })
                     .collect(),
@@ -731,7 +731,7 @@ pub(super) mod tests {
                     .map(|i| BufferId {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
-                        block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
+                        block_id: NonZeroU64::new(i as u64 + 1).unwrap(),
                         size: block_size as u32,
                     })
                     .collect(),
@@ -739,7 +739,7 @@ pub(super) mod tests {
                     .map(|i| BufferId {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
-                        block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
+                        block_id: NonZeroU64::new(i as u64 + 1).unwrap(),
                         size: block_size as u32,
                     })
                     .collect(),
@@ -747,7 +747,7 @@ pub(super) mod tests {
                     .map(|i| BufferId {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
-                        block_id: NonZeroU32::new(i as u32 + 1).unwrap(),
+                        block_id: NonZeroU64::new(i as u64 + 1).unwrap(),
                         size: block_size as u32,
                     })
                     .collect(),
