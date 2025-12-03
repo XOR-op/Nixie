@@ -178,6 +178,11 @@ impl Scheduler {
         );
     }
 
+    pub fn get_running_is_allowed(&'static self) -> bool {
+        let sched_ctx = self.allow_running.lock().unwrap();
+        sched_ctx.program_state == ProgramState::Running
+    }
+
     pub fn record_sync_start(&'static self) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         sched_ctx.stats.record_sync_start();

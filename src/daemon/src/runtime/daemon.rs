@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use hashlink::LinkedHashMap;
-use nihil_common::{ActivityUpdate, general::pretty_size};
+use nihil_common::general::pretty_size;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -30,7 +30,7 @@ use crate::{
             AllocationCapacity, BufferId, DataManagerHandle, HostMemBufferManager,
             ShmBufferManager, StorageBufferManager,
         },
-        schedule::control::ScheduleControlReq,
+        schedule::{ScheduleRpcMessage, control::ScheduleControlReq},
     },
 };
 use nihil_common::general::{CallFuture, CallParameter};
@@ -194,7 +194,7 @@ impl Daemon {
         ret_tx: mpsc::UnboundedSender<DaemonServerHandle>,
         exit_tx: mpsc::UnboundedSender<i32>,
         sched_ctl_tx: mpsc::UnboundedSender<ScheduleControlReq>,
-        rpc_data_tx: mpsc::UnboundedSender<(i32, ActivityUpdate)>,
+        rpc_data_tx: mpsc::UnboundedSender<(i32, ScheduleRpcMessage)>,
         shm_buffer_path: String,
         shm_buffer_size: usize,
     ) -> Result<(), DaemonError> {

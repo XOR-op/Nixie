@@ -1,7 +1,8 @@
 use cudarc::driver::sys::{CUstream, cudaError_enum};
 use nihil_common::shm::{AllocationEntry, PhysicalMemoryHandleId};
 use nihil_common::{
-    CUDA_CONTROL_PLANE_RESERVATION_SIZE, MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE,
+    CUDA_CONTROL_PLANE_RESERVATION_SIZE, GpuMemoryFreeUpdate, MAX_ALLOCATION_SIZE, MAX_GPUS,
+    MIN_ALLOCATION_SIZE, ProcessLocalDeviceId,
 };
 use nix::libc::{self, RTLD_NEXT, c_char, c_int, dlsym};
 use nix::sys::stat::mode_t;
@@ -9,6 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Mutex, OnceLock};
 
+use crate::comm::update_gpu_memory_free;
 use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
 use crate::memory::{deallocate_list, get_max_allocation_size, populate_entry};
 use crate::schedule::{LaunchType, SCHED_CTL, require_reserved_memory};
@@ -178,6 +180,8 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         return free_func(dev_ptr);
     }
 
+    let running_allowed = SCHED_CTL.get_running_is_allowed();
+
     for possible_dev in 0..MAX_GPUS {
         let mut table_guard = GENERIC_DATA
             .get_or_init(should_have_initialized)
@@ -197,14 +201,31 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
             let handle_idx = entry.handle_idx.idx;
             let mut cur_index = Some(entry.handle_idx.idx);
             deallocate_list(handle_idx, &mut table.handle_list);
+            let mut released_handles = Vec::new();
             while let Some(index) = cur_index {
                 let handle = table.handle_list.get_handle_by_raw_idx(index).unwrap();
+                // when is not running, these data may on CPU; daemon should be informed to release them
+                if !running_allowed {
+                    released_handles.push((
+                        ProcessLocalDeviceId(possible_dev as i32),
+                        PhysicalMemoryHandleId {
+                            alloc_generation: handle.alloc_generation,
+                            idx: index,
+                        },
+                        handle.size,
+                    ));
+                }
                 cur_index = handle.next_handle_idx;
                 table.handle_list.free_handle_by_raw_idx(index);
             }
             CURRENT_ALLOCATION_SIZE
                 .fetch_sub(entry.len as u64, std::sync::atomic::Ordering::Relaxed);
             table.entry.remove(entry_idx);
+            if !released_handles.is_empty() {
+                update_gpu_memory_free(GpuMemoryFreeUpdate {
+                    freed_memory: released_handles,
+                });
+            }
             return cudaError_enum::CUDA_SUCCESS;
         }
     }

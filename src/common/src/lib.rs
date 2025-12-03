@@ -37,6 +37,11 @@ pub struct ActivityUpdate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuMemoryFreeUpdate {
+    pub freed_memory: Vec<(ProcessLocalDeviceId, PhysicalMemoryHandleId, usize)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActivityUpdateContent {
     RequestScheduling,
     YieldThenRequestSchedulingAndMem { memory_request: Box<MemoryRequest> },

@@ -188,6 +188,29 @@ impl ShmBufferManager {
         }
     }
 
+    pub fn batch_release(&self, buf_ids: &[BufferId]) -> usize {
+        let mut inner = self.inner.lock().unwrap();
+        let mut release_count = 0;
+        let mut cnt = 0;
+        for buf_id in buf_ids.iter() {
+            if let Some(blocks) = inner.bookkeeping.remove(buf_id) {
+                let count = inner.pid_counter.get_mut(&buf_id.pid).unwrap();
+                *count = count.saturating_sub(buf_id.get_allocation_count().0 as usize);
+                if *count == 0 {
+                    inner.pid_counter.remove(&buf_id.pid);
+                }
+
+                for blk in blocks.iter() {
+                    inner.avail_addrs.push(blk.offset);
+                }
+                release_count += 1;
+                cnt += blocks.len();
+            }
+        }
+        ShmBufferInner::notify_reservation(&mut inner, cnt);
+        release_count
+    }
+
     pub fn release_process_residual(&self, pid: i32) {
         let mut inner = self.inner.lock().unwrap();
         let mut cnt = 0;

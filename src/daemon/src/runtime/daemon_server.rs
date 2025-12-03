@@ -1,6 +1,10 @@
 use crate::{
     error::{DaemonError, UvmError},
-    runtime::{proc_ctl::ProcessControl, schedule::control::ScheduleControlReq, shm::open_shm},
+    runtime::{
+        proc_ctl::ProcessControl,
+        schedule::{ScheduleRpcMessage, control::ScheduleControlReq},
+        shm::open_shm,
+    },
 };
 use futures::StreamExt;
 use nihil_common::{
@@ -133,7 +137,7 @@ impl DaemonServer {
     pub fn launch(
         conn: UnixStream,
         exit_tx: mpsc::UnboundedSender<i32>,
-        rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
+        rpc_data_tx: mpsc::UnboundedSender<(i32, ScheduleRpcMessage)>,
         sched_ctl_tx: mpsc::UnboundedSender<ScheduleControlReq>,
         buffer_shmem_path: String,
         buffer_len: usize,
@@ -184,7 +188,7 @@ struct StateOfStarting {
     rpc_client: SidecarClient,
     inst_rx: mpsc::UnboundedReceiver<ProcCtlReq>,
     exit_tx: mpsc::UnboundedSender<i32>,
-    rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
+    rpc_data_tx: mpsc::UnboundedSender<(i32, ScheduleRpcMessage)>,
     sched_ctl_tx: mpsc::UnboundedSender<ScheduleControlReq>,
     ret: mpsc::Sender<(JoinHandle<()>, i32, Arc<DeviceOrdinalMapping>)>,
     buffer_shmem_path: String,
@@ -193,7 +197,7 @@ struct StateOfStarting {
 
 struct DaemonServerState {
     client_pid: i32,
-    rpc_data_tx: mpsc::UnboundedSender<(i32, nihil_common::ActivityUpdate)>,
+    rpc_data_tx: mpsc::UnboundedSender<(i32, ScheduleRpcMessage)>,
 }
 
 enum ServerState {
@@ -290,7 +294,22 @@ impl nihil_common::rpc::Daemon for DaemonServer {
     async fn notify_activity(self, _context: Context, params: nihil_common::ActivityUpdate) {
         let mut state_guard = self.state.lock().await;
         let state = extract_guard!(state_guard, ServerState::Launched, "notify_activity");
-        let _ = state.rpc_data_tx.send((state.client_pid, params));
+        let _ = state
+            .rpc_data_tx
+            .send((state.client_pid, ScheduleRpcMessage::ActivityUpdate(params)));
+    }
+
+    async fn notify_gpu_memory_free(
+        self,
+        _context: Context,
+        params: nihil_common::GpuMemoryFreeUpdate,
+    ) -> () {
+        let mut state_guard = self.state.lock().await;
+        let state = extract_guard!(state_guard, ServerState::Launched, "notify_gpu_memory_free");
+        let _ = state.rpc_data_tx.send((
+            state.client_pid,
+            ScheduleRpcMessage::GpuMemoryFreeUpdate(params),
+        ));
     }
 }
 

@@ -3,7 +3,8 @@ use nihil_common::{MigrationArgs, SchedulingArgs, general::CallParameter};
 
 pub enum A2SMessage {
     Handshake(Handshake),
-    NofityActivity(ActivityUpdate),
+    ActivityUpdate(ActivityUpdate),
+    GpuMemoryFreeUpdate(GpuMemoryFreeUpdate),
 }
 
 pub enum S2AMessage {

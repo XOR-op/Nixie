@@ -1,3 +1,4 @@
+use nihil_common::GpuMemoryFreeUpdate;
 use nihil_common::{
     ActivityUpdate, MigrationArgs, MigrationResponse, SchedulingArgs, general::CallParameter,
 };
@@ -18,7 +19,14 @@ pub(crate) fn update_activity(activity: ActivityUpdate) {
     let Some(chan) = COMM.get_or_init(init_comm) else {
         return;
     };
-    chan_send!(chan.send(A2SMessage::NofityActivity(activity)));
+    chan_send!(chan.send(A2SMessage::ActivityUpdate(activity)));
+}
+
+pub(crate) fn update_gpu_memory_free(param: GpuMemoryFreeUpdate) {
+    let Some(chan) = COMM.get_or_init(init_comm) else {
+        return;
+    };
+    chan_send!(chan.send(A2SMessage::GpuMemoryFreeUpdate(param)));
 }
 
 #[derive(Clone)]

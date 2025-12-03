@@ -58,7 +58,7 @@ impl Controller {
                             }
                             Ok(())
                         }
-                        A2SMessage::NofityActivity(msg) => {
+                        A2SMessage::ActivityUpdate(msg) => {
                             crate::debug_eprintln!(
                                 "{} Activity update: {:?}",
                                 chrono::Local::now()
@@ -69,6 +69,19 @@ impl Controller {
                             );
                             self.daemon_client
                                 .notify_activity(tarpc::context::current(), msg)
+                                .await
+                        }
+                        A2SMessage::GpuMemoryFreeUpdate(msg) => {
+                            crate::debug_eprintln!(
+                                "{} GPU memory free update: {:?}",
+                                chrono::Local::now()
+                                    .format("%H:%M:%S%.3f")
+                                    .to_string()
+                                    .dimmed(),
+                                msg
+                            );
+                            self.daemon_client
+                                .notify_gpu_memory_free(tarpc::context::current(), msg)
                                 .await
                         }
                     } {

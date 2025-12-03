@@ -21,14 +21,14 @@ use crate::{
     runtime::{
         daemon_server::DeviceOrdinalMapping,
         migration::{
-            BufferLocation, DataManagerHandle,
+            BufferId, BufferLocation, DataManagerHandle,
             migration_plan::{
                 DeviceRequestArgs, MigrationRequirement, gpu_prefetch_task, local_prefetch_task,
                 realtime_migrate_task,
             },
         },
         schedule::{
-            PriorityLevel,
+            PriorityLevel, ScheduleRpcMessage,
             control::{GetStateResponse, ScheduleControlReq},
             policy::{IdleRequest, IdleRequestType},
             statistics::PreemptionReason,
@@ -52,7 +52,7 @@ pub(super) enum ActiveClientState {
 
 pub struct Scheduler {
     list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
-    rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+    rpc_data_rx: mpsc::UnboundedReceiver<(i32, ScheduleRpcMessage)>,
     control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
     active_client: ActiveClientState,
     sched_queue: ScheduleQueue,
@@ -62,7 +62,7 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(
         list: Arc<RwLock<LinkedHashMap<i32, DaemonServerHandle>>>,
-        rpc_data_rx: mpsc::UnboundedReceiver<(i32, ActivityUpdate)>,
+        rpc_data_rx: mpsc::UnboundedReceiver<(i32, ScheduleRpcMessage)>,
         control_msg_rx: mpsc::UnboundedReceiver<ScheduleControlReq>,
         data_manager: DataManagerHandle,
     ) -> Self {
@@ -148,9 +148,37 @@ impl Scheduler {
         self.poll_queue(last_polled).await;
     }
 
-    async fn received_data(&mut self, pid: i32, data: ActivityUpdate) {
-        tracing::trace!("Received data from process {}: {:?}", pid, data);
-        self.sched_queue.schedule_push(pid, data);
+    async fn received_data(&mut self, pid: i32, data: ScheduleRpcMessage) {
+        match data {
+            ScheduleRpcMessage::ActivityUpdate(data) => {
+                tracing::trace!("Received data from process {}: {:?}", pid, data);
+                self.sched_queue.schedule_push(pid, data);
+            }
+            ScheduleRpcMessage::GpuMemoryFreeUpdate(data) => {
+                let dev_mapping = {
+                    let control = self.list.read().await;
+                    let Some(handle) = control.get(&pid).map(|h| h.dev_mapping()) else {
+                        return;
+                    };
+                    handle
+                };
+                let buf_ids = data
+                    .freed_memory
+                    .into_iter()
+                    .filter_map(|(proc_dev_id, mem_handle_id, size)| {
+                        Some(BufferId {
+                            pid,
+                            device_id: dev_mapping.visible_to_real(proc_dev_id)?,
+                            block_id: mem_handle_id,
+                            size: size as u32,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                self.data_manager.shm.batch_release(&buf_ids);
+                self.data_manager.hostmem.batch_release(&buf_ids);
+                self.data_manager.storage.batch_release(&buf_ids);
+            }
+        }
     }
 
     async fn poll_queue(&mut self, last_polled: &mut Instant) {

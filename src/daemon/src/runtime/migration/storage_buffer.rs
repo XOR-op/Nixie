@@ -68,6 +68,18 @@ impl StorageBufferManager {
         }
     }
 
+    pub fn batch_release(&self, buffer_ids: &[BufferId]) -> usize {
+        let inner = &mut *self.inner.lock().unwrap();
+        let mut released_count = 0;
+        for buffer_id in buffer_ids {
+            if let Some(info) = inner.disk_bookkeeping.remove(buffer_id) {
+                inner.put_back_disk(info);
+                released_count += 1;
+            }
+        }
+        released_count
+    }
+
     pub fn release_process_residual(&self, pid: i32) {
         let inner = &mut *self.inner.lock().unwrap();
         for (id, alloc_info) in std::mem::take(&mut inner.disk_bookkeeping) {

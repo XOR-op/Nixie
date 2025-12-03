@@ -258,8 +258,15 @@ impl StreamingMemoryMigrator {
                         .get_handle_mut(args.handle_idx)
                         .expect("PhyHandle shoule remain valid in migration");
                     // d2h
-                    unmap_and_release_mem_handle(handle);
-                    handle.on_gpu = false;
+                    if handle.valid && handle.alloc_generation == args.handle_idx.alloc_generation {
+                        unmap_and_release_mem_handle(handle);
+                        handle.on_gpu = false;
+                    } else {
+                        debug_eprintln!(
+                            "Memory handle became invalid during migration: {:?}",
+                            args
+                        );
+                    }
                 }
                 response
             } else {

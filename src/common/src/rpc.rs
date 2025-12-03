@@ -1,5 +1,6 @@
 use crate::{
-    ActivityUpdate, Handshake, HandshakeResponse, MigrationArgs, MigrationResponse, SchedulingArgs,
+    ActivityUpdate, GpuMemoryFreeUpdate, Handshake, HandshakeResponse, MigrationArgs,
+    MigrationResponse, SchedulingArgs,
 };
 use futures::future::{AbortHandle, Abortable};
 use futures::{Sink, SinkExt, Stream, StreamExt, TryStreamExt};
@@ -15,6 +16,8 @@ pub trait Daemon {
     async fn handshake(params: Handshake) -> Option<HandshakeResponse>;
 
     async fn notify_activity(params: ActivityUpdate);
+
+    async fn notify_gpu_memory_free(params: GpuMemoryFreeUpdate);
 }
 
 // Services exposed by attached sidecars for applications

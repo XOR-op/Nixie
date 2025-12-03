@@ -214,6 +214,20 @@ impl HostMemBufferManager {
         }
     }
 
+    pub fn batch_release(&self, buffer_ids: &[BufferId]) -> usize {
+        let inner = &mut *self.inner.lock().unwrap();
+        let mut released_count = 0;
+        for buffer_id in buffer_ids {
+            if let Some(mems) = inner.mem_bookkeeping.remove(buffer_id) {
+                for mem in mems {
+                    inner.put_back_mem(mem);
+                }
+                released_count += 1;
+            }
+        }
+        released_count
+    }
+
     pub fn release_process_residual(&self, pid: i32) {
         let inner = &mut *self.inner.lock().unwrap();
         for (id, mems) in std::mem::take(&mut inner.mem_bookkeeping) {

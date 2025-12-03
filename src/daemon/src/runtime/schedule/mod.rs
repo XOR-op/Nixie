@@ -124,3 +124,8 @@ impl Ord for PriorityLevel {
         self.as_u8().cmp(&other.as_u8())
     }
 }
+
+pub(crate) enum ScheduleRpcMessage {
+    ActivityUpdate(nihil_common::ActivityUpdate),
+    GpuMemoryFreeUpdate(nihil_common::GpuMemoryFreeUpdate),
+}
