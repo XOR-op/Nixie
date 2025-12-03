@@ -726,9 +726,11 @@ async fn host_to_device_transfer(
             && let Some(d2h_resp) = with_cancel_rx_async!(cancel_rx, gpu_mem_token_rx.recv())
         {
             let resp_size = match d2h_resp {
-                MigrationResponse::AlreadyFreed => {
+                MigrationResponse::AlreadyFreed { size, .. } => {
                     tracing::debug!("Received AlreadyFreed token from GPU; skipping");
-                    continue;
+                    // we assume that only after we pause the current application will we compute mirgation plan
+                    // thus the space should be enough for new
+                    size
                 }
                 MigrationResponse::Success { size, .. } => size,
             };

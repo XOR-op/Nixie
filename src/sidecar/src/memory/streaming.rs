@@ -264,7 +264,11 @@ impl StreamingMemoryMigrator {
                 response
             } else {
                 debug_eprintln!("Already freed memory handle during migration: {:?}", args);
-                MigrationResponse::AlreadyFreed
+                MigrationResponse::AlreadyFreed {
+                    handle_idx: args.handle_idx,
+                    device: args.device,
+                    size: args.size.iter().map(|&s| s as u64).sum(),
+                }
             };
             if ret_chan.ret(response).is_err() {
                 debug_eprintln!("Failed to send migration response");

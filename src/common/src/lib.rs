@@ -69,7 +69,11 @@ pub enum MigrationResponse {
         device: ProcessLocalDeviceId,
         size: u64,
     },
-    AlreadyFreed,
+    AlreadyFreed {
+        handle_idx: NonZeroU32,
+        device: ProcessLocalDeviceId,
+        size: u64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
