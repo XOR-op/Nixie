@@ -725,7 +725,14 @@ async fn host_to_device_transfer(
         if !gpu_mem_token_rx.is_closed()
             && let Some(d2h_resp) = with_cancel_rx_async!(cancel_rx, gpu_mem_token_rx.recv())
         {
-            accu_length += d2h_resp.size;
+            let resp_size = match d2h_resp {
+                MigrationResponse::AlreadyFreed => {
+                    tracing::debug!("Received AlreadyFreed token from GPU; skipping");
+                    continue;
+                }
+                MigrationResponse::Success { size, .. } => size,
+            };
+            accu_length += resp_size;
 
             token_received += 1;
 

@@ -63,10 +63,13 @@ pub struct MigrationArgs {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct MigrationResponse {
-    pub handle_idx: NonZeroU32,
-    pub device: ProcessLocalDeviceId,
-    pub size: u64,
+pub enum MigrationResponse {
+    Success {
+        handle_idx: NonZeroU32,
+        device: ProcessLocalDeviceId,
+        size: u64,
+    },
+    AlreadyFreed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

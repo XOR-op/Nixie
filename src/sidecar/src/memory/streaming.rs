@@ -52,20 +52,19 @@ impl MemoryMigrationControl {
 struct CUeventWrapper(CUevent);
 unsafe impl Send for CUeventWrapper {}
 
+struct TaskItem {
+    event: CUeventWrapper,
+    args: MigrationArgs,
+    is_valid: bool,
+    ret_chan: CallReturnChannel<MigrationResponse>,
+}
+
 struct StreamingMemoryMigrator {
     device_id: i32,
     d2h_stream: CuStreamWrapper,
     h2d_stream: CuStreamWrapper,
-    d2h_sender: flume::Sender<(
-        CUeventWrapper,
-        MigrationArgs,
-        CallReturnChannel<MigrationResponse>,
-    )>,
-    h2d_sender: flume::Sender<(
-        CUeventWrapper,
-        MigrationArgs,
-        CallReturnChannel<MigrationResponse>,
-    )>,
+    d2h_sender: flume::Sender<TaskItem>,
+    h2d_sender: flume::Sender<TaskItem>,
 }
 
 impl StreamingMemoryMigrator {
@@ -158,10 +157,12 @@ impl StreamingMemoryMigrator {
                 "Failed to record CUDA event for h2d copy"
             );
             // send request to worker thread
-            if let Err(e) = self
-                .h2d_sender
-                .send((CUeventWrapper(event), args, ret_chan))
-            {
+            if let Err(e) = self.h2d_sender.send(TaskItem {
+                event: CUeventWrapper(event),
+                args,
+                is_valid: true,
+                ret_chan,
+            }) {
                 warn_eprintln!("Failed to send h2d migration request: {}", e);
             }
         } else {
@@ -171,6 +172,18 @@ impl StreamingMemoryMigrator {
                     .handle_list
                     .get_handle(args.handle_idx)
                     .expect("PhyHandle should remain valid in migration");
+                if !phy_handle.valid {
+                    // already freed
+                    if let Err(e) = self.d2h_sender.send(TaskItem {
+                        event: CUeventWrapper(event),
+                        args,
+                        is_valid: false,
+                        ret_chan,
+                    }) {
+                        warn_eprintln!("Failed to send d2h migration request: {}", e);
+                    }
+                    return;
+                }
                 assert!(phy_handle.on_gpu);
                 assert_eq!(phy_handle.size, total_size);
                 phy_handle.addr
@@ -199,49 +212,60 @@ impl StreamingMemoryMigrator {
                 "Failed to record CUDA event for d2h copy"
             );
             // send request to worker thread
-            if let Err(e) = self
-                .d2h_sender
-                .send((CUeventWrapper(event), args, ret_chan))
-            {
+            if let Err(e) = self.d2h_sender.send(TaskItem {
+                event: CUeventWrapper(event),
+                args,
+                is_valid: true,
+                ret_chan,
+            }) {
                 warn_eprintln!("Failed to send d2h migration request: {}", e);
             }
         }
     }
 
-    fn worker_thread(
-        device_id: i32,
-        req_queue: flume::Receiver<(
-            CUeventWrapper,
-            MigrationArgs,
-            CallReturnChannel<MigrationResponse>,
-        )>,
-    ) {
+    fn worker_thread(device_id: i32, req_queue: flume::Receiver<TaskItem>) {
         set_device(device_id);
-        while let Ok((event, args, ret_chan)) = req_queue.recv() {
+        while let Ok(TaskItem {
+            event,
+            args,
+            is_valid,
+            ret_chan,
+        }) = req_queue.recv()
+        {
             // wait for the event to complete
             check_cu_err!(
                 unsafe { cudarc::driver::sys::cuEventSynchronize(event.0) },
                 "Failed to synchronize CUDA event"
             );
-            // send back response
-            let response = MigrationResponse {
-                handle_idx: args.handle_idx,
-                device: args.device,
-                size: args.size.iter().map(|&s| s as u64).sum(),
+            check_cu_err!(
+                unsafe { cudarc::driver::sys::cuEventDestroy_v2(event.0) },
+                "Failed to destroy CUDA event"
+            );
+            let response = if is_valid {
+                // send back response
+                let response = MigrationResponse::Success {
+                    handle_idx: args.handle_idx,
+                    device: args.device,
+                    size: args.size.iter().map(|&s| s as u64).sum(),
+                };
+                // copy finished, do the post-processing
+                if !args.host_to_device {
+                    let mut table = GENERIC_DATA
+                        .get_or_init(should_have_initialized)
+                        .lock(device_id as usize);
+                    let handle = table
+                        .handle_list
+                        .get_handle_mut(args.handle_idx)
+                        .expect("PhyHandle shoule remain valid in migration");
+                    // d2h
+                    unmap_and_release_mem_handle(handle);
+                    handle.on_gpu = false;
+                }
+                response
+            } else {
+                debug_eprintln!("Already freed memory handle during migration: {:?}", args);
+                MigrationResponse::AlreadyFreed
             };
-            // copy finished, do the post-processing
-            if !args.host_to_device {
-                let mut table = GENERIC_DATA
-                    .get_or_init(should_have_initialized)
-                    .lock(device_id as usize);
-                let handle = table
-                    .handle_list
-                    .get_handle_mut(args.handle_idx)
-                    .expect("PhyHandle shoule remain valid in migration");
-                // d2h
-                unmap_and_release_mem_handle(handle);
-                handle.on_gpu = false;
-            }
             if ret_chan.ret(response).is_err() {
                 debug_eprintln!("Failed to send migration response");
             }
