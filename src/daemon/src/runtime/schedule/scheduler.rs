@@ -192,7 +192,8 @@ impl Scheduler {
             }
         }
         self.sched_queue.update_active(self.active_client);
-        if let Some(req) = self.sched_queue.schedule_pop(self.active_client) {
+        // if we meet pending or yield, we continue trying to poll the queue
+        while let Some(req) = self.sched_queue.schedule_pop(self.active_client) {
             match req {
                 GenericRequest::Idle(req) => match req.request_type {
                     IdleRequestType::Idle => self.handle_activity_idle(req),
@@ -219,6 +220,7 @@ impl Scheduler {
                             e
                         );
                     }
+                    break;
                 }
                 GenericRequest::Prefetch(req) => {
                     let should_reset_last_active = match self.active_client {
@@ -238,6 +240,7 @@ impl Scheduler {
                     if rx_used && ret_tx.ret(res.unwrap_or(PrefetchResponse)).is_err() {
                         tracing::warn!("Failed to send PrefetchResponse");
                     }
+                    break;
                 }
             }
         }

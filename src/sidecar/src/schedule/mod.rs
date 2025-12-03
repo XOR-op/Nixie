@@ -3,6 +3,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use colored::Colorize;
 use nihil_common::{
     ActivityUpdate, ActivityUpdateContent, MemoryRequest, ProcessLocalDeviceId, SchedulingArgs,
     general::CallParameter,
@@ -80,6 +81,14 @@ impl Scheduler {
             std::thread::yield_now();
         }
         let mut allow_running = self.allow_running.lock().unwrap();
+        debug_eprintln!(
+            "{} set_allow_running(): changing scheduling to {:?}",
+            chrono::Local::now()
+                .format("%H:%M:%S%.3f")
+                .to_string()
+                .dimmed(),
+            params.param
+        );
         match params.param {
             SchedulingArgs::Enable => {
                 if !matches!(allow_running.program_state, ProgramState::Paused) {
@@ -140,6 +149,15 @@ impl Scheduler {
         mem_req: Option<Box<MemoryRequest>>,
     ) {
         if sched_ctx.program_state == ProgramState::Paused {
+            debug_eprintln!(
+                "{} try to request scheduling {:?} with mem_req={:?}",
+                chrono::Local::now()
+                    .format("%H:%M:%S%.3f")
+                    .to_string()
+                    .dimmed(),
+                launch_type,
+                mem_req
+            );
             crate::comm::update_activity(ActivityUpdate {
                 message_id: sched_ctx.incr_counter(),
                 content: match mem_req {
