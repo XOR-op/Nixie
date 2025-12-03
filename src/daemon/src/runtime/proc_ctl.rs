@@ -2,7 +2,10 @@
 use std::{collections::HashMap, os::fd::OwnedFd};
 
 use nihil_common::{
-    MAX_GPUS, ProcessLocalDeviceId, general::CallParameter, rpc::SidecarClient, shm::ShmGuard,
+    MAX_GPUS, ProcessLocalDeviceId,
+    general::CallParameter,
+    rpc::SidecarClient,
+    shm::{PhysicalMemoryHandleId, ShmGuard},
 };
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
@@ -87,14 +90,20 @@ impl ProcessControl {
                         let mut list = Vec::new();
                         for entry in mapping.entry.iter() {
                             let mut physical = Vec::new();
-                            let mut cur_handle = Some(entry.handle_idx);
+                            let mut cur_handle = Some(entry.handle_idx.idx);
                             let mut on_gpu_bytes = 0;
                             let mut off_gpu_bytes = 0;
                             while let Some(handle_idx) = cur_handle {
-                                let handle = mapping.handle_list.get_handle(handle_idx).unwrap();
+                                let handle = mapping
+                                    .handle_list
+                                    .get_handle_by_raw_idx(handle_idx)
+                                    .unwrap();
                                 physical.push(PhysicalMemoryData {
                                     on_gpu: handle.on_gpu,
-                                    handle_idx,
+                                    handle_idx: PhysicalMemoryHandleId::new(
+                                        handle.alloc_generation,
+                                        handle_idx,
+                                    ),
                                     size: handle.size as u32,
                                 });
                                 cur_handle = handle.next_handle_idx;
@@ -139,13 +148,19 @@ impl ProcessControl {
                         let mut mem_list = Vec::new();
                         let mapping = self.shm.inner.alloc_tables[proc_local_id.0 as usize].lock();
                         for entry in mapping.entry.iter() {
-                            let mut cur_handle = Some(entry.handle_idx);
+                            let mut cur_handle = Some(entry.handle_idx.idx);
                             while let Some(handle_idx) = cur_handle {
-                                let handle = mapping.handle_list.get_handle(handle_idx).unwrap();
+                                let handle = mapping
+                                    .handle_list
+                                    .get_handle_by_raw_idx(handle_idx)
+                                    .unwrap();
                                 if handle.on_gpu == param.on_gpu {
                                     mem_list.push(PhysicalMemoryData {
                                         on_gpu: handle.on_gpu,
-                                        handle_idx,
+                                        handle_idx: PhysicalMemoryHandleId::new(
+                                            handle.alloc_generation,
+                                            handle_idx,
+                                        ),
                                         size: handle.size as u32,
                                     });
                                 }

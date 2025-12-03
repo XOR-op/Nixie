@@ -5,10 +5,10 @@ pub(super) mod migration_plan;
 mod shm_buffer;
 mod storage_buffer;
 
-use std::{num::NonZeroU64, sync::Arc};
+use std::sync::Arc;
 
 pub use hostmem_buffer::HostMemBufferManager;
-use nihil_common::GlobalDeviceId;
+use nihil_common::{GlobalDeviceId, shm::PhysicalMemoryHandleId};
 use serde::{Deserialize, Serialize};
 pub use shm_buffer::ShmBufferManager;
 pub use storage_buffer::StorageBufferManager;
@@ -17,7 +17,7 @@ pub use storage_buffer::StorageBufferManager;
 pub struct BufferId {
     pub pid: i32,
     pub device_id: GlobalDeviceId,
-    pub block_id: NonZeroU64,
+    pub block_id: PhysicalMemoryHandleId,
     pub size: u32,
 }
 

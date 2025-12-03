@@ -1,5 +1,5 @@
 use cudarc::driver::sys::{CUstream, cudaError_enum};
-use nihil_common::shm::AllocationEntry;
+use nihil_common::shm::{AllocationEntry, PhysicalMemoryHandleId};
 use nihil_common::{
     CUDA_CONTROL_PLANE_RESERVATION_SIZE, MAX_ALLOCATION_SIZE, MAX_GPUS, MIN_ALLOCATION_SIZE,
 };
@@ -116,7 +116,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                     .get_handle_mut(new_idx)
                     .unwrap()
                     .next_handle_idx = handle_idx;
-                handle_idx = Some(new_idx);
+                handle_idx = Some(new_idx.idx);
                 cur_addr += alloc_size as u64;
                 remaining_size -= alloc_size;
             } else {
@@ -132,14 +132,21 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         let alloc_entry = AllocationEntry {
             addr: unsafe { *dev_ptr } as u64,
             len: rounded_up_size,
-            handle_idx: handle_idx.expect("Failed to allocate handle"),
+            handle_idx: PhysicalMemoryHandleId {
+                alloc_generation: table
+                    .handle_list
+                    .get_handle_by_raw_idx(handle_idx.expect("Failed to allocate handle"))
+                    .unwrap()
+                    .alloc_generation,
+                idx: handle_idx.expect("Failed to allocate handle"),
+            },
         };
         if !populate_entry(&alloc_entry, device_id, &mut table) {
             // deallocate all handles
             while let Some(idx) = handle_idx {
-                let handle = table.handle_list.get_handle(idx).unwrap();
+                let handle = table.handle_list.get_handle_by_raw_idx(idx).unwrap();
                 handle_idx = handle.next_handle_idx;
-                table.handle_list.free_handle(idx);
+                table.handle_list.free_handle_by_raw_idx(idx);
             }
             return cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY;
         }
@@ -187,13 +194,13 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         // on this device, we found the entry
         if let Some(entry_idx) = possible_entry_indx {
             let entry = table.entry.at(entry_idx).unwrap();
-            let handle_idx = entry.handle_idx;
-            let mut cur_index = Some(entry.handle_idx);
+            let handle_idx = entry.handle_idx.idx;
+            let mut cur_index = Some(entry.handle_idx.idx);
             deallocate_list(handle_idx, &mut table.handle_list);
             while let Some(index) = cur_index {
-                let handle = table.handle_list.get_handle(index).unwrap();
+                let handle = table.handle_list.get_handle_by_raw_idx(index).unwrap();
                 cur_index = handle.next_handle_idx;
-                table.handle_list.free_handle(index);
+                table.handle_list.free_handle_by_raw_idx(index);
             }
             CURRENT_ALLOCATION_SIZE
                 .fetch_sub(entry.len as u64, std::sync::atomic::Ordering::Relaxed);

@@ -1,5 +1,3 @@
-use std::num::NonZeroU64;
-
 use serde::{Deserialize, Serialize};
 
 mod constant;
@@ -9,6 +7,8 @@ pub mod shm;
 pub mod shm_buffer;
 pub mod sync;
 pub use constant::*;
+
+use crate::shm::PhysicalMemoryHandleId;
 
 // Device IDs for processes may be overridden by CUDA_VISIBLE_DEVICES.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -58,19 +58,19 @@ pub struct MigrationArgs {
     pub host_buffer_offset: Vec<u64>,
     pub size: Vec<u32>,
     pub device: ProcessLocalDeviceId,
-    pub handle_idx: NonZeroU64,
+    pub handle_idx: PhysicalMemoryHandleId,
     pub host_to_device: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum MigrationResponse {
     Success {
-        handle_idx: NonZeroU64,
+        handle_idx: PhysicalMemoryHandleId,
         device: ProcessLocalDeviceId,
         size: u64,
     },
     AlreadyFreed {
-        handle_idx: NonZeroU64,
+        handle_idx: PhysicalMemoryHandleId,
         device: ProcessLocalDeviceId,
         size: u64,
     },

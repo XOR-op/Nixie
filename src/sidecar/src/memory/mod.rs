@@ -1,5 +1,5 @@
 mod streaming;
-use std::{collections::HashMap, num::NonZeroU64};
+use std::{collections::HashMap, num::NonZeroU32};
 
 use cudarc::driver::sys::{
     CUmemAccessDesc, CUmemAllocationHandleType, CUmemAllocationProp, CUmemAllocationType,
@@ -47,10 +47,10 @@ pub(crate) fn populate_entry(
     // Populate memory
     let mut has_requested_reservation = false;
     let mut remaining_size = entry.len;
-    let mut cur_index = Some(entry.handle_idx);
+    let mut cur_index = Some(entry.handle_idx.idx);
     let alloc_prop = default_alloc_prop(device_id);
     while let Some(index) = cur_index {
-        let handle = table.handle_list.get_handle_mut(index).unwrap();
+        let handle = table.handle_list.get_handle_by_raw_idx_mut(index).unwrap();
         let res = alloc_for_mem_handle(handle, &alloc_prop);
         if let Err(mut res) = res {
             if res == cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY && !has_requested_reservation {
@@ -81,7 +81,7 @@ pub(crate) fn populate_entry(
             }
             if res != cudaError_enum::CUDA_SUCCESS {
                 // deallocate all previously allocated handles
-                deallocate_list(entry.handle_idx, &mut table.handle_list);
+                deallocate_list(entry.handle_idx.idx, &mut table.handle_list);
                 return false;
             }
         }
@@ -91,9 +91,9 @@ pub(crate) fn populate_entry(
     }
     assert_eq!(remaining_size, 0);
     let access_desc = default_access_desc(device_id);
-    cur_index = Some(entry.handle_idx);
+    cur_index = Some(entry.handle_idx.idx);
     while let Some(index) = cur_index {
-        let handle = table.handle_list.get_handle_mut(index).unwrap();
+        let handle = table.handle_list.get_handle_by_raw_idx_mut(index).unwrap();
         if handle.on_gpu {
             // Map memory to the device
             map_mem_handle(handle, &access_desc);
@@ -159,10 +159,10 @@ pub(super) fn unmap_and_release_mem_handle(handle: &PhysicalMemoryHandle) {
     );
 }
 
-pub(crate) fn deallocate_list(start_idx: NonZeroU64, handle_list: &mut HandleList) {
+pub(crate) fn deallocate_list(start_idx: NonZeroU32, handle_list: &mut HandleList) {
     let mut cur_index = Some(start_idx);
     while let Some(index) = cur_index {
-        let handle = handle_list.get_handle_mut(index).unwrap();
+        let handle = handle_list.get_handle_by_raw_idx_mut(index).unwrap();
         if handle.on_gpu {
             // unmap first, where the access will be invalidated automatically
             check_cu_err!(

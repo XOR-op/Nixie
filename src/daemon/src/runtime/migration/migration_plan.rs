@@ -684,12 +684,12 @@ where
 #[cfg(test)]
 pub(super) mod tests {
     use colored::Colorize;
-    use nihil_common::{ProcessLocalDeviceId, general::pretty_size};
+    use nihil_common::{ProcessLocalDeviceId, general::pretty_size, shm::PhysicalMemoryHandleId};
 
     use super::*;
     use std::{
         collections::{BTreeMap, HashMap},
-        num::NonZeroU64,
+        num::NonZeroU32,
     };
 
     use crate::{control::PhysicalMemoryData, runtime::migration::BufferId};
@@ -723,7 +723,10 @@ pub(super) mod tests {
                     .map(|i| BufferId {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
-                        block_id: NonZeroU64::new(i as u64 + 1).unwrap(),
+                        block_id: PhysicalMemoryHandleId::new(
+                            1,
+                            NonZeroU32::new(i as u32 + 1).unwrap(),
+                        ),
                         size: block_size as u32,
                     })
                     .collect(),
@@ -731,7 +734,10 @@ pub(super) mod tests {
                     .map(|i| BufferId {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
-                        block_id: NonZeroU64::new(i as u64 + 1).unwrap(),
+                        block_id: PhysicalMemoryHandleId::new(
+                            1,
+                            NonZeroU32::new(i as u32 + 1).unwrap(),
+                        ),
                         size: block_size as u32,
                     })
                     .collect(),
@@ -739,7 +745,10 @@ pub(super) mod tests {
                     .map(|i| BufferId {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
-                        block_id: NonZeroU64::new(i as u64 + 1).unwrap(),
+                        block_id: PhysicalMemoryHandleId::new(
+                            1,
+                            NonZeroU32::new(i as u32 + 1).unwrap(),
+                        ),
                         size: block_size as u32,
                     })
                     .collect(),
@@ -747,7 +756,10 @@ pub(super) mod tests {
                     .map(|i| BufferId {
                         pid: input.pid,
                         device_id: GlobalDeviceId(0),
-                        block_id: NonZeroU64::new(i as u64 + 1).unwrap(),
+                        block_id: PhysicalMemoryHandleId::new(
+                            1,
+                            NonZeroU32::new(i as u32 + 1).unwrap(),
+                        ),
                         size: block_size as u32,
                     })
                     .collect(),

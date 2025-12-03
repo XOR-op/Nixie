@@ -1,14 +1,13 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     io::{IoSlice, IoSliceMut},
-    num::NonZeroU64,
     sync::Arc,
 };
 
 use itertools::Itertools;
 use nihil_common::{
     GlobalDeviceId, MigrationArgs, MigrationResponse, ProcessLocalDeviceId, general::pretty_size,
-    rpc::SidecarClient,
+    rpc::SidecarClient, shm::PhysicalMemoryHandleId,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -43,7 +42,7 @@ macro_rules! warn_on_send_error {
 #[derive(Debug, Clone)]
 pub struct MigrationSpecEntry {
     pub size: u32,
-    pub handle_idx: NonZeroU64,
+    pub handle_idx: PhysicalMemoryHandleId,
     // When ready is true, the buffer should be on GPU or in shm.
     pub ready_for_pcie_xfer: bool,
 }
@@ -683,9 +682,10 @@ async fn host_to_device_transfer(
             {
                 if pending_dst_entries.remove(&buffer_id) {
                     tracing::trace!(
-                        "To H2D: {{\"pid\": {}, \"block_id\":,\"{}\"  \"size\": \"{}\"}}",
+                        "To H2D: {{\"pid\": {}, \"block_id\":,\"{}<{}>\"  \"size\": \"{}\"}}",
                         buffer_id.pid,
-                        buffer_id.block_id,
+                        buffer_id.block_id.idx,
+                        buffer_id.block_id.alloc_generation,
                         pretty_size(buffer_id.size)
                     );
                     next_entry = Some((buffer_id, BufferSource::Pending));
@@ -868,11 +868,12 @@ async fn backend_to_shm_transfer(
 
         moved_cnt += 1;
         tracing::trace!(
-            "[Ongoing] Moved {}/{} buffers from backend to shm: {{\"pid\": {}, \"block_id\":,\"{}\"  \"size\": \"{}\"}}",
+            "[Ongoing] Moved {}/{} buffers from backend to shm: {{\"pid\": {}, \"block_id\":,\"{}<{}>\"  \"size\": \"{}\"}}",
             moved_cnt,
             total,
             buffer_id.pid,
-            buffer_id.block_id,
+            buffer_id.block_id.idx,
+            buffer_id.block_id.alloc_generation,
             pretty_size(buffer_id.size)
         );
     }

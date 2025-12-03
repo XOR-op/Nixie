@@ -1,9 +1,9 @@
 pub mod client;
 pub(crate) mod parse;
 
-use std::{collections::HashMap, num::NonZeroU64, time::SystemTime};
+use std::{collections::HashMap, time::SystemTime};
 
-use nihil_common::GlobalDeviceId;
+use nihil_common::{GlobalDeviceId, shm::PhysicalMemoryHandleId};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -124,7 +124,7 @@ pub(crate) struct AllocationData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PhysicalMemoryData {
     pub on_gpu: bool,
-    pub handle_idx: NonZeroU64,
+    pub handle_idx: PhysicalMemoryHandleId,
     pub size: u32,
 }
 
