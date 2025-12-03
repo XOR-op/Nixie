@@ -91,6 +91,7 @@ impl ControlClient {
                     })
                 })
                 .collect::<Result<Vec<_>, ClientError>>()?,
+            rx_used: true,
         };
         let mut rpc_ctx = tarpc::context::current();
         rpc_ctx.deadline = std::time::Instant::now() + Duration::from_secs(120);

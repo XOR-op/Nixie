@@ -10,7 +10,7 @@ use nihil_common::{
 use stats::LaunchStats;
 
 use crate::{
-    check_cu_err, env_config::sidecar_config, intercept::cuda_mem_get_info_impl,
+    check_cu_err, debug_eprintln, env_config::sidecar_config, intercept::cuda_mem_get_info_impl,
     intercept_launch::is_during_capture, set_device, warn_eprintln,
 };
 
@@ -125,7 +125,9 @@ impl Scheduler {
     ) {
         let mut sched_ctx = self.allow_running.lock().unwrap();
         if !matches!(sched_ctx.program_state, ProgramState::Running) {
-            warn_eprintln!("pause_then_require_memory(): Scheduler is already paused when pausing");
+            debug_eprintln!(
+                "pause_then_require_memory(): Scheduler is already paused when pausing"
+            );
         }
         sched_ctx.program_state = ProgramState::Paused;
         Self::launch_allowed_with(sched_ctx, &self.cond_var, launch_type, Some(mem_req));

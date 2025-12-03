@@ -5,9 +5,13 @@ use std::{
 
 use nihil_common::{ActivityUpdate, ActivityUpdateContent, general::CallParameter};
 
-use crate::control::{
-    GetHistoryResponse, GetHistoryResult, HistoryEntry, PrefetchArgs, PrefetchResponse,
-    SetPriorityLevel, SetPriorityResponse,
+use crate::{
+    config::load_config,
+    control::{
+        GetHistoryResponse, GetHistoryResult, HistoryEntry, PrefetchArgs, PrefetchMsg,
+        PrefetchResponse, SetPriorityLevel, SetPriorityResponse,
+    },
+    runtime::migration::{BufferLocation, DataManagerHandle},
 };
 
 use super::{Priority, scheduler::ActiveClientState};
@@ -86,6 +90,7 @@ fn priority_level_to_cooldown(level: PriorityLevel) -> Duration {
 }
 
 pub struct ScheduleQueue {
+    data_manager_handle: DataManagerHandle,
     sched_req: VecDeque<SchedRequest>,
     idle_req_queue: VecDeque<IdleRequest>,
     prefetch_queue: VecDeque<PrefetchRequest>,
@@ -93,12 +98,15 @@ pub struct ScheduleQueue {
     cooldown_until: Instant,
     active_client: ActiveClientState,
     last_mlfq_reset_timer: Instant,
+    last_auto_prefetch_pop: Instant,
+    last_schedule_pop: Instant,
 }
 
 // interface to the scheduler
 impl ScheduleQueue {
-    pub fn new() -> Self {
+    pub fn new(data_manager_handle: DataManagerHandle) -> Self {
         Self {
+            data_manager_handle,
             sched_req: VecDeque::new(),
             idle_req_queue: VecDeque::new(),
             prefetch_queue: VecDeque::new(),
@@ -106,6 +114,8 @@ impl ScheduleQueue {
             cooldown_until: Instant::now(),
             active_client: ActiveClientState::None,
             last_mlfq_reset_timer: Instant::now(),
+            last_auto_prefetch_pop: Instant::now(),
+            last_schedule_pop: Instant::now(),
         }
     }
 
@@ -233,17 +243,38 @@ impl ScheduleQueue {
             return Some(GenericRequest::Prefetch(prefetch_req));
         }
         let will_preempt = self.compute_can_preempt(active_client);
-        match will_preempt {
-            PreemptionDecision::DenyPreempt => None,
-            PreemptionDecision::AllowPreempt {
-                follow_same_priority_cooldown,
-            } => {
-                if follow_same_priority_cooldown && Instant::now() < self.cooldown_until {
-                    None
-                } else {
-                    self.sched_req.pop_front().map(GenericRequest::Schedule)
-                }
+        if let PreemptionDecision::AllowPreempt {
+            follow_same_priority_cooldown,
+        } = will_preempt
+            // (higher priority) or (same priority but cooldown passed)
+            && !(follow_same_priority_cooldown && Instant::now() < self.cooldown_until)
+        {
+            self.last_schedule_pop = Instant::now();
+            return self.sched_req.pop_front().map(GenericRequest::Schedule);
+        }
+
+        // auto prefetch if allowed
+        let config_allow_auto_prefetch = load_config().automatic_prefetch;
+        let already_prefetched = self.last_auto_prefetch_pop > self.last_schedule_pop;
+        if config_allow_auto_prefetch && !self.sched_req.is_empty() && !already_prefetched {
+            let pid = self.sched_req.front().unwrap().pid;
+            let new_plan = construct_prefetch_plan(pid, &self.data_manager_handle);
+            if !new_plan.is_empty() {
+                tracing::debug!("Auto prefetch plan for pid {}: {:?}", pid, new_plan);
+                self.last_auto_prefetch_pop = Instant::now();
+                let (req, _unused_rx) = CallParameter::new(PrefetchArgs {
+                    list: new_plan,
+                    rx_used: false,
+                });
+                Some(GenericRequest::Prefetch(PrefetchRequest {
+                    time: Instant::now(),
+                    parameter: req,
+                }))
+            } else {
+                None
             }
+        } else {
+            None
         }
     }
 
@@ -276,7 +307,64 @@ impl ScheduleQueue {
             }
         }
     }
+}
 
+fn construct_prefetch_plan(pid: i32, data_manager: &DataManagerHandle) -> Vec<PrefetchMsg> {
+    let mut shm_usage = data_manager
+        .shm
+        .dump_buffers()
+        .into_keys()
+        .map(|buf| if buf.pid == pid { buf.size as usize } else { 0 })
+        .sum::<usize>();
+    let mut hostmem_usage = data_manager
+        .hostmem
+        .dump_buffers()
+        .into_keys()
+        .map(|buf| if buf.pid == pid { buf.size as usize } else { 0 })
+        .sum::<usize>();
+    let mut disk_usage = data_manager
+        .storage
+        .dump_buffers()
+        .into_keys()
+        .map(|buf| if buf.pid == pid { buf.size as usize } else { 0 })
+        .sum::<usize>();
+    let shm_capacity = data_manager.shm.capacity();
+    let hostmem_capacity = data_manager.hostmem.capacity();
+    let mut prefetch_list = Vec::new();
+    if disk_usage > 0 && shm_usage < shm_capacity {
+        let can_moved = (shm_capacity - shm_usage).min(disk_usage);
+        prefetch_list.push(PrefetchMsg {
+            pid,
+            from: BufferLocation::Storage,
+            to: BufferLocation::Shm,
+            size: can_moved as u64,
+        });
+        shm_usage += can_moved;
+        disk_usage -= can_moved;
+    }
+    if hostmem_usage > 0 && shm_usage < shm_capacity {
+        let can_moved = (shm_capacity - shm_usage).min(hostmem_usage);
+        prefetch_list.push(PrefetchMsg {
+            pid,
+            from: BufferLocation::HostMem,
+            to: BufferLocation::Shm,
+            size: can_moved as u64,
+        });
+        hostmem_usage -= can_moved;
+    }
+    if disk_usage > 0 && hostmem_usage < hostmem_capacity {
+        let can_moved = (hostmem_capacity - hostmem_usage).min(disk_usage);
+        prefetch_list.push(PrefetchMsg {
+            pid,
+            from: BufferLocation::Storage,
+            to: BufferLocation::HostMem,
+            size: can_moved as u64,
+        });
+    }
+    prefetch_list
+}
+
+impl ScheduleQueue {
     fn update_priority(&mut self) {
         if self.last_mlfq_reset_timer.elapsed() > Duration::from_secs(300) {
             self.reset_all_priorities();

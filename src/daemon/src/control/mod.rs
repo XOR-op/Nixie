@@ -34,6 +34,7 @@ pub(crate) trait Controllable {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PrefetchArgs {
     pub list: Vec<PrefetchMsg>,
+    pub rx_used: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

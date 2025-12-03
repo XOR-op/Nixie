@@ -71,7 +71,7 @@ impl Scheduler {
             rpc_data_rx,
             control_msg_rx,
             active_client: ActiveClientState::None,
-            sched_queue: ScheduleQueue::new(),
+            sched_queue: ScheduleQueue::new(data_manager.clone()),
             data_manager,
         }
     }
@@ -204,9 +204,10 @@ impl Scheduler {
                         tracing::trace!("Clearing active client due to prefetch request");
                     }
                     let (param, ret_tx) = req.parameter.into_parts();
+                    let rx_used = param.rx_used;
                     let res = self.handle_prefetch_request(param).await;
-                    // TODO: handle error
-                    if ret_tx.ret(res.unwrap_or(PrefetchResponse)).is_err() {
+                    // TODO: handle error of `res`
+                    if rx_used && ret_tx.ret(res.unwrap_or(PrefetchResponse)).is_err() {
                         tracing::warn!("Failed to send PrefetchResponse");
                     }
                 }
