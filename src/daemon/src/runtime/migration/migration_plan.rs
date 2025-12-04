@@ -348,10 +348,52 @@ where
         }
         if accu_size < into_gpu_required_size {
             tracing::warn!(
-                "Not enough data to migrate for device {:?}: required {}, but only {}",
+                "Not enough data to migrate for pid={}, device={:?}: required {}, but only {}",
+                into_gpu.0,
                 global_id,
                 into_gpu_required_size,
                 accu_size
+            );
+            // create a detailed report of the current memory state
+            let shm_process_usage: HashMap<i32, String> = data_manager
+                .shm_buffer_ids()
+                .keys()
+                .fold(HashMap::new(), |mut acc, buf_id| {
+                    *acc.entry(buf_id.pid).or_insert(0) += buf_id.size as u64;
+                    acc
+                })
+                .iter()
+                .map(|(pid, size)| (*pid, nihil_common::general::pretty_size(*size)))
+                .collect();
+            let hostmem_process_usage: HashMap<i32, String> = data_manager
+                .hostmem_buffer_ids()
+                .keys()
+                .fold(HashMap::new(), |mut acc, buf_id| {
+                    *acc.entry(buf_id.pid).or_insert(0) += buf_id.size as u64;
+                    acc
+                })
+                .iter()
+                .map(|(pid, size)| (*pid, nihil_common::general::pretty_size(*size)))
+                .collect();
+            let gpu_process_usage: HashMap<i32, String> = out_from_gpu
+                .iter()
+                .map(|(pid, residual_data, _, _)| {
+                    let total_size: u64 = residual_data
+                        .allocations
+                        .values()
+                        .flat_map(|entries| entries.iter().map(|e| e.size as u64))
+                        .sum();
+                    (*pid, total_size)
+                })
+                .map(|(pid, size)| (pid, nihil_common::general::pretty_size(size)))
+                .collect();
+            tracing::warn!(
+                "\nCurrent requirement for {}: {}\nCurrent memory usage state:\nGPU: {:?}\nSHM: {:?}\nHostMem: {:?}",
+                into_gpu.0,
+                nihil_common::general::pretty_size(into_gpu_required_size),
+                gpu_process_usage,
+                shm_process_usage,
+                hostmem_process_usage,
             );
             return None;
         }

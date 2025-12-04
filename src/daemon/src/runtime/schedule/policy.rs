@@ -23,6 +23,7 @@ pub struct SchedRequest {
     pub pid: i32,
     pub args: ActivityUpdate,
     pub time: Instant,
+    pub is_yield: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +182,7 @@ impl ScheduleQueue {
                     pid,
                     args,
                     time: Instant::now(),
+                    is_yield: true,
                 });
             }
             ActivityUpdateContent::RequestScheduling => {
@@ -188,6 +190,7 @@ impl ScheduleQueue {
                     pid,
                     args,
                     time: Instant::now(),
+                    is_yield: false,
                 });
             }
         }
@@ -210,6 +213,7 @@ impl ScheduleQueue {
                     pid,
                     args,
                     time: Instant::now(),
+                    is_yield: false,
                 });
             }
             ActivityUpdateContent::YieldThenRequestSchedulingAndMem { .. } => {
@@ -452,7 +456,18 @@ impl ScheduleQueue {
             match stat_a.priority().level().cmp(&stat_b.priority().level()) {
                 std::cmp::Ordering::Equal => {
                     // if same priority, sort by time
-                    a.time.cmp(&b.time)
+                    // TODO: if we do not prioritize yield requests, we will have a deadlock for
+                    // the process waiting for malloc; FIXME
+                    if a.is_yield == b.is_yield {
+                        a.time.cmp(&b.time)
+                    } else {
+                        // yield has higher priority
+                        if a.is_yield {
+                            std::cmp::Ordering::Less
+                        } else {
+                            std::cmp::Ordering::Greater
+                        }
+                    }
                 }
                 std::cmp::Ordering::Less => {
                     // a has lower priority

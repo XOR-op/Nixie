@@ -698,7 +698,7 @@ async fn collect_all_residuals(
             });
             let _ = handle.inst_tx().send(ProcCtlReq::ListProcessResidual(para));
             tokio::time::timeout(
-                Duration::from_millis(1000),
+                Duration::from_millis(1200),
                 futures::FutureExt::map(fut, move |res| {
                     res.map(|data| {
                         let mapping = handle.dev_mapping().clone();
@@ -708,9 +708,18 @@ async fn collect_all_residuals(
             )
         })
         .collect::<Vec<_>>();
+    let fut_pids = list.iter().map(|(pid, _)| *pid).collect::<Vec<_>>();
     let results = futures::future::join_all(fut_list).await;
-    results
+    let res = results
         .into_iter()
         .filter_map(|x| x.ok().flatten())
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+    if res.len() < fut_pids.len() {
+        tracing::warn!(
+            "Failed to collect all residuals: expected {:?}, got {:?}",
+            fut_pids,
+            res.iter().map(|(pid, _, _, _)| *pid).collect::<Vec<_>>()
+        );
+    }
+    res
 }
