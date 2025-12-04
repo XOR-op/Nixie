@@ -11,6 +11,10 @@ use crate::{
     control::parse::{MoveOperation, parse_pid, parse_size},
     runtime::{Priority, PriorityLevel},
 };
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 mod config;
 mod control;
