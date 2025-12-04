@@ -78,6 +78,9 @@ struct DaemonArgs {
     /// Set device memory usage ratio (0.0 - 1.0)
     #[arg(long)]
     pub device_ratio: Option<f64>,
+    /// Enable auto prefetching
+    #[arg(long, default_value = "true")]
+    pub auto_prefetch: Option<bool>,
 }
 
 #[derive(Debug, Parser)]
@@ -175,6 +178,7 @@ fn main() {
             shmem_size: args.shmem,
             hostmem_size: args.hostmem,
             device_threshold: args.device_ratio,
+            automatic_prefetch: args.auto_prefetch,
         };
         if let Err(e) = init_config(args.config_path, cli_config) {
             tracing::error!("Failed to init config: {}", e);

@@ -74,6 +74,7 @@ pub struct CliConfig {
     pub shmem_size: Option<u64>,
     pub hostmem_size: Option<u64>,
     pub device_threshold: Option<f64>,
+    pub automatic_prefetch: Option<bool>,
 }
 
 static CONFIG: RwLock<Option<Arc<Config>>> = RwLock::new(None);
@@ -131,6 +132,9 @@ pub fn init_config(config_path: Option<PathBuf>, cli_config: CliConfig) -> Resul
     }
     if let Some(device_threshold) = cli_config.device_threshold {
         config.device_threshold = device_threshold;
+    }
+    if let Some(automatic_prefetch) = cli_config.automatic_prefetch {
+        config.automatic_prefetch = automatic_prefetch;
     }
 
     if !config.shmem_size_mb.is_multiple_of(2) || !config.hostmem_size_mb.is_multiple_of(2) {
