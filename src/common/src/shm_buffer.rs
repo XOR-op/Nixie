@@ -18,13 +18,8 @@ impl ShmBuffer {
             libc::O_RDWR
         };
         let cstr_shm_path = std::ffi::CString::new(shm_path).unwrap();
-        let shm_fd = unsafe {
-            libc::shm_open(
-                cstr_shm_path.as_ptr() as *const i8,
-                oflag,
-                libc::S_IRUSR | libc::S_IWUSR,
-            )
-        };
+        let shm_fd =
+            unsafe { libc::shm_open(cstr_shm_path.as_ptr(), oflag, libc::S_IRUSR | libc::S_IWUSR) };
         if shm_fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -32,7 +27,7 @@ impl ShmBuffer {
         if unsafe { libc::ftruncate(shm_fd, shm_size as libc::off_t) } < 0 {
             unsafe { libc::close(shm_fd) };
             if is_creator {
-                unsafe { libc::shm_unlink(cstr_shm_path.as_ptr() as *const i8) };
+                unsafe { libc::shm_unlink(cstr_shm_path.as_ptr()) };
             }
             return Err(std::io::Error::last_os_error());
         }
@@ -50,7 +45,7 @@ impl ShmBuffer {
         if shm_addr == libc::MAP_FAILED {
             unsafe { libc::close(shm_fd) };
             if is_creator {
-                unsafe { libc::shm_unlink(cstr_shm_path.as_ptr() as *const i8) };
+                unsafe { libc::shm_unlink(cstr_shm_path.as_ptr()) };
             }
             return Err(std::io::Error::last_os_error());
         }
