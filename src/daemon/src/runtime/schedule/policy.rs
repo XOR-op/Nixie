@@ -453,21 +453,18 @@ impl ScheduleQueue {
             let Some(stat_b) = self.clients.get(&b.pid) else {
                 return std::cmp::Ordering::Less;
             };
+            if a.is_yield != b.is_yield {
+                // yield has higher priority because sidecars will hold the metadata lock
+                return if a.is_yield {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
+            }
             match stat_a.priority().level().cmp(&stat_b.priority().level()) {
                 std::cmp::Ordering::Equal => {
                     // if same priority, sort by time
-                    // TODO: if we do not prioritize yield requests, we will have a deadlock for
-                    // the process waiting for malloc; FIXME
-                    if a.is_yield == b.is_yield {
-                        a.time.cmp(&b.time)
-                    } else {
-                        // yield has higher priority
-                        if a.is_yield {
-                            std::cmp::Ordering::Less
-                        } else {
-                            std::cmp::Ordering::Greater
-                        }
-                    }
+                    a.time.cmp(&b.time)
                 }
                 std::cmp::Ordering::Less => {
                     // a has lower priority
