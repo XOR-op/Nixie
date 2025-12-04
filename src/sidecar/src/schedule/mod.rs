@@ -211,6 +211,16 @@ impl Scheduler {
         sched_ctx.stats.record_sync_end();
     }
 
+    pub fn record_blocking_transfer_start(&'static self) {
+        let mut sched_ctx = self.allow_running.lock().unwrap();
+        sched_ctx.stats.record_blocking_transfer_start();
+    }
+
+    pub fn record_blocking_transfer_end(&'static self) {
+        let mut sched_ctx = self.allow_running.lock().unwrap();
+        sched_ctx.stats.record_blocking_transfer_end();
+    }
+
     fn spawn_idle_monitor_once(&'static self) {
         static SPAWNED: AtomicBool = AtomicBool::new(false);
         if SPAWNED
@@ -224,9 +234,10 @@ impl Scheduler {
         {
             const MALLOC_INTERVAL: Duration = Duration::from_millis(300);
             const KERNEL_INTERVAL: Duration = Duration::from_millis(100);
-            const GRAPH_INTERVAL: Duration = Duration::from_millis(100);
+            const GRAPH_INTERVAL: Duration = Duration::from_millis(200);
             const TRANSFER_INTERVAL: Duration = Duration::from_millis(300);
-            const SYNC_INTERVAL: Duration = Duration::from_millis(75);
+            const BLOCKING_TRANSFER_INTERVAL: Duration = Duration::from_millis(100);
+            const SYNC_INTERVAL: Duration = Duration::from_millis(100);
 
             const CHECK_INTERVAL: Duration = Duration::from_millis(20);
             const NOT_SLEEP_COOLDOWN: Duration = Duration::from_millis(100);
@@ -243,8 +254,10 @@ impl Scheduler {
                                 // and will trigger immediately just before no new activity happens
                                 && context.since_last_state_to_running() > NOT_SLEEP_COOLDOWN
                             {
-                                // check idle
-                                if context.stats.pending_sync_elapsed().is_none() {
+                                // check if we are pending on sync or blocking transfer
+                                if context.stats.pending_sync_elapsed().is_none()
+                                    && context.stats.pending_blocking_transfer_elapsed().is_none()
+                                {
                                     let (transfer_interval, transfer_size) =
                                         context.stats.transfer_elapsed();
                                     // no pending sync
@@ -255,6 +268,8 @@ impl Scheduler {
                                             || transfer_interval.as_millis() as usize
                                                 * (4 * 1024 * 1024 * 1024)
                                                 > transfer_size)
+                                        && context.stats.blocking_transfer_elapsed()
+                                            > BLOCKING_TRANSFER_INTERVAL
                                         && context.stats.sync_elapsed() > SYNC_INTERVAL
                                     {
                                         // should not use disable() here since we don't need prefetch

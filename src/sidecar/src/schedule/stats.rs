@@ -6,6 +6,8 @@ pub(super) struct LaunchStats {
     last_malloc: SystemTime,
     last_transfer: SystemTime,
     last_transfer_size: usize,
+    last_blocking_transfer_start: SystemTime,
+    last_blocking_transfer_end: SystemTime,
     last_sync_start: SystemTime,
     last_sync_end: SystemTime,
 }
@@ -18,6 +20,8 @@ impl LaunchStats {
             last_malloc: UNIX_EPOCH,
             last_transfer: UNIX_EPOCH,
             last_transfer_size: 0,
+            last_blocking_transfer_start: UNIX_EPOCH,
+            last_blocking_transfer_end: UNIX_EPOCH,
             last_sync_start: UNIX_EPOCH,
             last_sync_end: UNIX_EPOCH,
         }
@@ -48,6 +52,14 @@ impl LaunchStats {
         self.last_sync_end = SystemTime::now();
     }
 
+    pub fn record_blocking_transfer_start(&mut self) {
+        self.last_blocking_transfer_start = SystemTime::now();
+    }
+
+    pub fn record_blocking_transfer_end(&mut self) {
+        self.last_blocking_transfer_end = SystemTime::now();
+    }
+
     pub fn kernel_elapsed(&self) -> Duration {
         SystemTime::now()
             .duration_since(self.last_kernel)
@@ -75,11 +87,29 @@ impl LaunchStats {
         )
     }
 
+    pub fn blocking_transfer_elapsed(&self) -> Duration {
+        SystemTime::now()
+            .duration_since(self.last_blocking_transfer_end)
+            .unwrap_or_default()
+    }
+
     pub fn pending_sync_elapsed(&self) -> Option<Duration> {
         if self.last_sync_end < self.last_sync_start {
             Some(
                 SystemTime::now()
                     .duration_since(self.last_sync_start)
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        }
+    }
+
+    pub fn pending_blocking_transfer_elapsed(&self) -> Option<Duration> {
+        if self.last_blocking_transfer_end < self.last_blocking_transfer_start {
+            Some(
+                SystemTime::now()
+                    .duration_since(self.last_blocking_transfer_start)
                     .unwrap_or_default(),
             )
         } else {

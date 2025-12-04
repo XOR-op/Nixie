@@ -261,7 +261,10 @@ pub extern "C" fn cudaMemcpy(
     generate_init_fn!(CudaMemcpyType, cr"cudaMemcpy");
     let memcpy_func = MEMCPY_FN.get_or_init(init_fn);
     SCHED_CTL.launch_allowed(LaunchType::Transfer(size));
-    memcpy_func(dst, src, size, kind)
+    SCHED_CTL.record_blocking_transfer_start();
+    let res = memcpy_func(dst, src, size, kind);
+    SCHED_CTL.record_blocking_transfer_end();
+    res
 }
 
 #[allow(non_snake_case)]
@@ -284,7 +287,21 @@ pub extern "C" fn cudaMemcpyAsync(
     generate_init_fn!(CudaMemcpyAsyncType, cr"cudaMemcpyAsync");
     let memcpy_async_func = MEMCPY_ASYNC_FN.get_or_init(init_fn);
     SCHED_CTL.launch_allowed(LaunchType::Transfer(size));
-    memcpy_async_func(dst, src, size, kind, stream)
+    // when cudaMemcpyAsync is HostToDevice or DeviceToHost, it may block the host
+    match kind {
+        CudaMemcpyKind::HostToDevice | CudaMemcpyKind::DeviceToHost => {
+            SCHED_CTL.record_blocking_transfer_start();
+        }
+        _ => {}
+    }
+    let res = memcpy_async_func(dst, src, size, kind, stream);
+    match kind {
+        CudaMemcpyKind::HostToDevice | CudaMemcpyKind::DeviceToHost => {
+            SCHED_CTL.record_blocking_transfer_end();
+        }
+        _ => {}
+    }
+    res
 }
 
 #[allow(non_snake_case)]
