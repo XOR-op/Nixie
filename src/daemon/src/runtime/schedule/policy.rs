@@ -70,6 +70,7 @@ impl GenericRequest {
     }
 }
 
+// This TQ is used to determine when to decrease priority, not for preemption
 fn priority_level_to_time_quantum(level: PriorityLevel) -> Duration {
     match level {
         PriorityLevel::Interactive => Duration::from_secs(8),
@@ -80,6 +81,7 @@ fn priority_level_to_time_quantum(level: PriorityLevel) -> Duration {
     }
 }
 
+// This decides when the process will be preempted, sharing some functionality with classic TQ
 fn priority_level_to_cooldown(level: PriorityLevel) -> Duration {
     match level {
         PriorityLevel::Interactive => Duration::from_secs(4),
@@ -173,6 +175,7 @@ impl ScheduleQueue {
                 });
             }
             ActivityUpdateContent::YieldThenRequestSchedulingAndMem { .. } => {
+                client.set_is_in_schedule_queue(true);
                 self.idle_req_queue.push_back(IdleRequest {
                     pid,
                     time: Instant::now(),
@@ -186,6 +189,7 @@ impl ScheduleQueue {
                 });
             }
             ActivityUpdateContent::RequestScheduling => {
+                client.set_is_in_schedule_queue(true);
                 self.sched_req.push_back(SchedRequest {
                     pid,
                     args,
@@ -209,6 +213,7 @@ impl ScheduleQueue {
                 });
             }
             ActivityUpdateContent::RequestScheduling => {
+                client.set_is_in_schedule_queue(true);
                 self.sched_req.push_front(SchedRequest {
                     pid,
                     args,
@@ -253,8 +258,23 @@ impl ScheduleQueue {
             // (higher priority) or (same priority but cooldown passed)
             && !(follow_same_priority_cooldown && Instant::now() < self.cooldown_until)
         {
-            self.last_schedule_pop = Instant::now();
-            return self.sched_req.pop_front().map(GenericRequest::Schedule);
+            return self.sched_req.pop_front().map(|front| {
+                self.last_schedule_pop = Instant::now();
+                // sanity check
+                if self.sched_req.iter().filter(|r| r.pid == front.pid).count() > 1 {
+                    tracing::warn!(
+                        "There are multiple scheduling requests for {}: {:?}",
+                        front.pid,
+                        self.sched_req
+                            .iter()
+                            .filter(|r| r.pid == front.pid)
+                            .collect::<Vec<_>>()
+                    );
+                }
+                let client_stat = self.get_client_mut_or_insert(front.pid);
+                client_stat.set_is_in_schedule_queue(false);
+                GenericRequest::Schedule(front)
+            });
         }
 
         // auto prefetch if allowed
@@ -370,7 +390,7 @@ fn construct_prefetch_plan(pid: i32, data_manager: &DataManagerHandle) -> Vec<Pr
 
 impl ScheduleQueue {
     fn update_priority(&mut self) {
-        if self.last_mlfq_reset_timer.elapsed() > Duration::from_secs(300) {
+        if self.last_mlfq_reset_timer.elapsed() > Duration::from_secs(600) {
             self.reset_all_priorities();
             self.last_mlfq_reset_timer = Instant::now();
             tracing::trace!("All process priorities have been reset due to inactivity");
@@ -413,9 +433,17 @@ impl ScheduleQueue {
                 } else if client.priority_upd_since()
                     > priority_level_to_time_quantum(client.priority().level()) * 2
                     && client.idle_since().is_some_and(|d| {
+                        // scheduling pending is not considered as full idle time
+                        let calc_d = d.saturating_sub(
+                            client
+                                .get_time_in_schedule_queue()
+                                .map(|t| t * 3 / 4)
+                                .unwrap_or_default(),
+                        );
                         // TQ of last level + accumulated time in current level
-                        d > priority_level_to_time_quantum(client.priority().level()) / 2
-                            + client.accumulated_time_in_current_priority()
+                        calc_d
+                            > priority_level_to_time_quantum(client.priority().level()) / 2
+                                + client.accumulated_time_in_current_priority()
                     })
                 {
                     #[allow(clippy::collapsible_if)]

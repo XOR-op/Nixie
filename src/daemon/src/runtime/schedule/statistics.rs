@@ -144,6 +144,7 @@ pub struct ClientStatistics {
     last_in_current_priority: Instant,
     last_priority_update: Instant,
     last_state: StateSinceLastActive,
+    is_in_schedule_queue: Option<Instant>,
 
     // others
     max_message_id_till_now: u64,
@@ -171,6 +172,7 @@ impl ClientStatistics {
             last_in_current_priority: Instant::now(),
             last_priority_update: Instant::now(),
             last_state: StateSinceLastActive::Idle(Instant::now()),
+            is_in_schedule_queue: None,
             max_message_id_till_now: 0,
         }
     }
@@ -271,6 +273,18 @@ impl ClientStatistics {
             self.time_used_in_current_priority += self.last_in_current_priority.elapsed();
             self.last_in_current_priority = Instant::now();
         }
+    }
+
+    pub fn set_is_in_schedule_queue(&mut self, in_queue: bool) {
+        if in_queue {
+            self.is_in_schedule_queue = Some(Instant::now());
+        } else {
+            self.is_in_schedule_queue = None;
+        }
+    }
+
+    pub fn get_time_in_schedule_queue(&self) -> Option<Duration> {
+        self.is_in_schedule_queue.map(|since| since.elapsed())
     }
 
     pub fn record_message_id(&mut self, message_id: u64) {
