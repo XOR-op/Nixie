@@ -390,11 +390,11 @@ fn construct_prefetch_plan(pid: i32, data_manager: &DataManagerHandle) -> Vec<Pr
 
 impl ScheduleQueue {
     fn update_priority(&mut self) {
-        if self.last_mlfq_reset_timer.elapsed() > Duration::from_secs(600) {
-            self.reset_all_priorities();
-            self.last_mlfq_reset_timer = Instant::now();
-            tracing::trace!("All process priorities have been reset due to inactivity");
-        }
+        // if self.last_mlfq_reset_timer.elapsed() > Duration::from_secs(600) {
+        //     self.reset_all_priorities();
+        //     self.last_mlfq_reset_timer = Instant::now();
+        //     tracing::trace!("All process priorities have been reset due to inactivity");
+        // }
 
         let active = match self.active_client {
             ActiveClientState::Active { pid, since } => Some((pid, since)),
