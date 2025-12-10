@@ -400,6 +400,14 @@ impl ScheduleQueue {
             ActiveClientState::Active { pid, since } => Some((pid, since)),
             _ => None,
         };
+        let priority_level_count = self
+            .clients
+            .values()
+            .fold(HashMap::new(), |mut acc, client| {
+                let level = client.priority().level();
+                *acc.entry(level).or_insert(0u32) += 1;
+                acc
+            });
         for (_, client) in self.clients.iter_mut() {
             if active.is_some_and(|(pid, _)| pid == client.pid()) {
                 client.update_if_active();
@@ -434,10 +442,16 @@ impl ScheduleQueue {
                     > priority_level_to_time_quantum(client.priority().level()) * 2
                     && client.idle_since().is_some_and(|d| {
                         // scheduling pending is not considered as full idle time
+                        let multiplier_base = priority_level_count
+                            .get(&client.priority().level())
+                            .cloned()
+                            .unwrap_or_default()
+                            .max(2)
+                            + 1;
                         let calc_d = d.saturating_sub(
                             client
                                 .get_time_in_schedule_queue()
-                                .map(|t| t * 3 / 4)
+                                .map(|t| t * (multiplier_base - 1) / multiplier_base)
                                 .unwrap_or_default(),
                         );
                         // TQ of last level + accumulated time in current level
