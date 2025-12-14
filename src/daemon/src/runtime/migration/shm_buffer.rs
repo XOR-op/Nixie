@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
 use nihil_common::{MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE, shm_buffer::ShmBuffer};
@@ -10,6 +10,9 @@ use crate::runtime::migration::{AllocationCapacity, AllocationCount, Offset};
 
 use super::BufferId;
 
+/*
+ * Warning: This is not safe; FIXME
+ */
 pub struct ShmBufferManager {
     shm_buffer: ShmBuffer,
     inner: Mutex<ShmBufferInner>,
@@ -21,8 +24,13 @@ pub struct ShmBlock {
     pub data_size: u32,
 }
 
+struct BookKeepingEntry {
+    blocks: Arc<[ShmBlock]>,
+    in_transfer: Arc<AtomicBool>,
+}
+
 struct ShmBufferInner {
-    bookkeeping: HashMap<BufferId, Arc<[ShmBlock]>>,
+    bookkeeping: HashMap<BufferId, BookKeepingEntry>,
     pid_counter: HashMap<i32, usize>,
     avail_addrs: Vec<Offset>,
     pending_reservations: VecDeque<oneshot::Sender<()>>, // TODO: deprecate
@@ -32,7 +40,8 @@ impl ShmBufferInner {
     fn reserve_inner(
         inner: &mut std::sync::MutexGuard<'_, Self>,
         buf_id: &BufferId,
-    ) -> Option<Arc<[ShmBlock]>> {
+        in_transfer: bool,
+    ) -> Option<(Arc<[ShmBlock]>, Arc<AtomicBool>)> {
         let required_len = buf_id.get_allocation_count().0 as usize;
         if inner.avail_addrs.len() < required_len {
             return None;
@@ -57,13 +66,20 @@ impl ShmBufferInner {
             let inited = unsafe { blocks.assume_init() };
             Arc::from(inited)
         };
-        inner.bookkeeping.insert(buf_id.clone(), blocks.clone());
+        let in_transfer_flag = Arc::new(AtomicBool::new(in_transfer));
+        inner.bookkeeping.insert(
+            buf_id.clone(),
+            BookKeepingEntry {
+                blocks: blocks.clone(),
+                in_transfer: in_transfer_flag.clone(),
+            },
+        );
         inner
             .pid_counter
             .entry(buf_id.pid)
             .and_modify(|c| *c += required_len)
             .or_insert(required_len);
-        Some(blocks)
+        Some((blocks, in_transfer_flag))
     }
 
     fn notify_reservation(inner: &mut std::sync::MutexGuard<'_, Self>, mut cnt: usize) {
@@ -104,7 +120,12 @@ impl ShmBufferManager {
     }
 
     pub fn get_buffer(&self, buf_id: &BufferId) -> Option<Arc<[ShmBlock]>> {
-        self.inner.lock().unwrap().bookkeeping.get(buf_id).cloned()
+        self.inner
+            .lock()
+            .unwrap()
+            .bookkeeping
+            .get(buf_id)
+            .map(|entry| entry.blocks.clone())
     }
 
     /// Returns: length of free segments
@@ -126,7 +147,7 @@ impl ShmBufferManager {
             .map(|(k, v)| {
                 (
                     k.clone(),
-                    AllocationCapacity((v.len() * MIN_ALLOCATION_SIZE) as u32),
+                    AllocationCapacity((v.blocks.len() * MIN_ALLOCATION_SIZE) as u32),
                 )
             })
             .collect()
@@ -143,7 +164,7 @@ impl ShmBufferManager {
 
 // Allocation and release logic
 impl ShmBufferManager {
-    pub fn try_reserve(&self, buf_id: &BufferId) -> Option<Arc<[ShmBlock]>> {
+    pub fn try_reserve(&'_ self, buf_id: &BufferId) -> Option<ShmBufferTransferGuard<'_>> {
         let mut inner = self.inner.lock().unwrap();
         // we reserve 2*128MB space for migration && no single process should occupy all shm space
         if let Some(count) = inner.pid_counter.get(&buf_id.pid)
@@ -154,19 +175,25 @@ impl ShmBufferManager {
             return None;
         }
 
-        ShmBufferInner::reserve_inner(&mut inner, buf_id)
+        let val = ShmBufferInner::reserve_inner(&mut inner, buf_id, true);
+        val.map(|(blocks, in_transfer_flag)| ShmBufferTransferGuard {
+            shm_buffer: self,
+            blocks,
+            buffer_id: buf_id.clone(),
+            in_transfer_flag: Some(in_transfer_flag),
+        })
     }
 
     pub fn find<F>(&self, func: F) -> Option<(BufferId, Arc<[ShmBlock]>)>
     where
-        F: Fn(&BufferId, &[ShmBlock]) -> bool,
+        F: Fn(&BufferId, &[ShmBlock], &AtomicBool) -> bool,
     {
         let inner = self.inner.lock().unwrap();
         inner
             .bookkeeping
             .iter()
-            .find(|(buf_id, info)| func(buf_id, info))
-            .map(|(buf_id, info)| (buf_id.clone(), info.clone()))
+            .find(|(buf_id, info)| func(buf_id, &info.blocks, &info.in_transfer))
+            .map(|(buf_id, info)| (buf_id.clone(), info.blocks.clone()))
     }
 
     pub fn release(&self, buf_id: &BufferId) -> Result<(), ()> {
@@ -178,10 +205,10 @@ impl ShmBufferManager {
                 inner.pid_counter.remove(&buf_id.pid);
             }
 
-            for blk in blocks.iter() {
+            for blk in blocks.blocks.iter() {
                 inner.avail_addrs.push(blk.offset);
             }
-            ShmBufferInner::notify_reservation(&mut inner, blocks.len());
+            ShmBufferInner::notify_reservation(&mut inner, blocks.blocks.len());
             Ok(())
         } else {
             Err(())
@@ -200,11 +227,11 @@ impl ShmBufferManager {
                     inner.pid_counter.remove(&buf_id.pid);
                 }
 
-                for blk in blocks.iter() {
+                for blk in blocks.blocks.iter() {
                     inner.avail_addrs.push(blk.offset);
                 }
                 release_count += 1;
-                cnt += blocks.len();
+                cnt += blocks.blocks.len();
             }
         }
         ShmBufferInner::notify_reservation(&mut inner, cnt);
@@ -219,7 +246,7 @@ impl ShmBufferManager {
             inner_ref.bookkeeping.retain(|buf_id, blocks| {
                 let will_keep = buf_id.pid != pid;
                 if !will_keep {
-                    for blk in blocks.iter() {
+                    for blk in blocks.blocks.iter() {
                         inner_ref.avail_addrs.push(blk.offset);
                         cnt += 1;
                     }
@@ -229,5 +256,30 @@ impl ShmBufferManager {
             inner_ref.pid_counter.remove(&pid);
         }
         ShmBufferInner::notify_reservation(&mut inner, cnt);
+    }
+}
+
+pub struct ShmBufferTransferGuard<'a> {
+    shm_buffer: &'a ShmBufferManager,
+    blocks: Arc<[ShmBlock]>,
+    buffer_id: BufferId,
+    in_transfer_flag: Option<Arc<AtomicBool>>,
+}
+
+impl<'a> ShmBufferTransferGuard<'a> {
+    pub fn blocks(&self) -> &Arc<[ShmBlock]> {
+        &self.blocks
+    }
+
+    pub fn buffer_id(&self) -> &BufferId {
+        &self.buffer_id
+    }
+}
+
+impl Drop for ShmBufferTransferGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(flag) = &self.in_transfer_flag {
+            flag.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }

@@ -573,12 +573,11 @@ async fn device_to_host_transfer(
                 block_id: out_from_gpu_entry.handle_idx,
                 size: out_from_gpu_entry.size,
             };
-            let blocks =
-                with_cancel_rx_async!(cancel_rx, shm_coor.reserve_from_gpu(&src_buffer_id));
+            let guard = with_cancel_rx_async!(cancel_rx, shm_coor.reserve_from_gpu(&src_buffer_id));
 
             let args = MigrationArgs {
-                host_buffer_offset: blocks.iter().map(|b| b.offset.0).collect(),
-                size: blocks.iter().map(|b| b.data_size).collect(),
+                host_buffer_offset: guard.blocks().iter().map(|b| b.offset.0).collect(),
+                size: guard.blocks().iter().map(|b| b.data_size).collect(),
                 device,
                 handle_idx: out_from_gpu_entry.handle_idx,
                 host_to_device: false,
@@ -839,16 +838,16 @@ async fn backend_to_shm_transfer(
     for buffer_id in host_mem_to_shm {
         check_cancellation!(cancel_rx);
 
-        let blocks = with_cancel_rx_async!(cancel_rx, shm_coor.reserve_from_backend(&buffer_id));
+        let guard = with_cancel_rx_async!(cancel_rx, shm_coor.reserve_from_backend(&buffer_id));
         let mut buf = unsafe {
             get_buffer_ref_mut(
                 convert_to_static(&shm_coor.shm_buffer_manager()), // safety: the lifetime of the buffer will not exceed the end of the block
-                &blocks,
+                guard.blocks(),
             )
         };
         match &backend_mgr {
             BackendManager::HostMem(mgr) => {
-                panic_on_error!(mgr.load_to_vectored(&buffer_id, &mut buf));
+                panic_on_error!(mgr.load_to_vectored(guard.buffer_id(), &mut buf));
                 warn_on_send_error!(
                     in_data_ready_tx.send(buffer_id.clone(), BufferLocation::HostMem)
                 );
@@ -856,6 +855,7 @@ async fn backend_to_shm_transfer(
             BackendManager::Storage(mgr) => {
                 let buf_id = buffer_id.clone();
                 let mgr = mgr.clone();
+                // WARNING: must block, otherwise violating lifetime requirement
                 panic_on_error!(panic_on_error!(
                     tokio::task::spawn_blocking(move || mgr.load_to_vectored(&buf_id, &mut buf))
                         .await
@@ -1017,9 +1017,10 @@ async fn handle_buffer_request(
     let mut remaining_count = req.count();
     while remaining_count.0 > 0 {
         // Release space for error in plan
-        let Some((buf_id, _)) =
-            shm_buffer_mgr.find(|buf_id, _| !excluding_list.contains(&buf_id.pid))
-        else {
+        let Some((buf_id, _)) = shm_buffer_mgr.find(|buf_id, _, in_transfer| {
+            !excluding_list.contains(&buf_id.pid)
+                && !in_transfer.load(std::sync::atomic::Ordering::Relaxed)
+        }) else {
             if matches!(req, ShmBufferRequest::FromBackend(_)) {
                 // incoming space is limited and should be back pressured to GPU soon
                 req_rx.notify_backend(ShmRequestRxResp::BusyWait);

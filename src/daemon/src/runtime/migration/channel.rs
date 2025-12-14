@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use crate::runtime::migration::AllocationCount;
 use crate::runtime::migration::ShmBufferManager;
 use crate::runtime::migration::ShmBufferRequest;
-use crate::runtime::migration::shm_buffer::ShmBlock;
+use crate::runtime::migration::shm_buffer::ShmBufferTransferGuard;
 
 use super::BufferLocation;
 
@@ -243,7 +243,7 @@ impl ShmCoordinator {
         }
     }
 
-    pub async fn reserve_from_backend(&self, buf_id: &BufferId) -> Arc<[ShmBlock]> {
+    pub async fn reserve_from_backend(&'_ self, buf_id: &BufferId) -> ShmBufferTransferGuard<'_> {
         let mut im_pending = false;
         #[allow(unused_assignments)]
         let mut should_wait_for_resp = false;
@@ -252,12 +252,12 @@ impl ShmCoordinator {
             {
                 let mut inner = self.inner.lock().unwrap();
                 if inner.gpu_to_shm_pending == 0 {
-                    if let Some(blks) = self.shm_mgr.try_reserve(buf_id) {
+                    if let Some(guard) = self.shm_mgr.try_reserve(buf_id) {
                         if im_pending {
                             assert!(inner.backend_to_shm_pending > 0);
                             inner.backend_to_shm_pending -= 1;
                         }
-                        return blks;
+                        return guard;
                     }
                     inner.backend_to_shm_pending += 1;
                     self.req_for_shm
@@ -293,19 +293,19 @@ impl ShmCoordinator {
         }
     }
 
-    pub async fn reserve_from_gpu(&self, buf_id: &BufferId) -> Arc<[ShmBlock]> {
+    pub async fn reserve_from_gpu(&'_ self, buf_id: &BufferId) -> ShmBufferTransferGuard<'_> {
         let mut im_pending = false;
         #[allow(unused_assignments)]
         loop {
             {
                 let mut inner = self.inner.lock().unwrap();
                 // pending GPU has higher priority
-                if let Some(blks) = self.shm_mgr.try_reserve(buf_id) {
+                if let Some(guard) = self.shm_mgr.try_reserve(buf_id) {
                     if im_pending {
                         assert!(inner.gpu_to_shm_pending > 0);
                         inner.gpu_to_shm_pending -= 1;
                     }
-                    return blks;
+                    return guard;
                 }
                 if im_pending {
                     tracing::warn!("GPU pending reservation but still no space, {:?}", buf_id);
@@ -319,7 +319,7 @@ impl ShmCoordinator {
                 Some(ShmRequestRxResp::Ready) => {}
                 _ => {
                     tracing::warn!("GPU shm reservation notified but unexpected response");
-                    tokio::task::yield_now().await;
+                    tokio::time::sleep(Duration::from_millis(5000)).await;
                 }
             }
         }
