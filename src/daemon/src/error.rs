@@ -1,6 +1,8 @@
 use nix::errno::Errno;
 use thiserror::Error;
 
+use crate::runtime::migration::BufferId;
+
 #[derive(Debug, Error)]
 pub enum NihilphaseError {
     #[error("Daemon: {0}")]
@@ -48,7 +50,7 @@ pub enum HybridBufferError {
     #[error("Invalid hybrid buffer")]
     InvalidInputBuffer,
     #[error("Invalid BufferId")]
-    NoBufferId,
+    NoBufferId(BufferId),
     #[error("{1} failed with error: {0}")]
     IoError(std::io::Error, String),
     #[error("Tokio task failed: {0}")]

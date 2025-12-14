@@ -908,7 +908,7 @@ pub(super) async fn shm_to_backend_transfer(
         .await
         {
             Ok(loc) => loc,
-            Err(HybridBufferError::NoBufferId) => {
+            Err(HybridBufferError::NoBufferId(_)) => {
                 next_shm_handling.insert(buf_id, expected_location);
                 continue;
             }
@@ -1193,7 +1193,7 @@ async fn shm_to_backend_transfer_inner(
 ) -> Result<BufferLocation, HybridBufferError> {
     let blocks = shm_buffer_mgr
         .get_buffer(buffer_id)
-        .ok_or(HybridBufferError::NoBufferId)?;
+        .ok_or_else(|| HybridBufferError::NoBufferId(buffer_id.clone()))?;
     // Safety: the lifetime of the buffer will not exceed the end of the block
     let buf_ref = unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), &blocks) };
     assert!(target_loc == BufferLocation::HostMem || target_loc == BufferLocation::Storage);

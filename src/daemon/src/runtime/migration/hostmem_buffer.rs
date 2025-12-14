@@ -121,7 +121,7 @@ impl HostMemBufferManager {
         if let Some(block_buffers) = inner.mem_bookkeeping.remove(buffer_id) {
             Ok(block_buffers)
         } else {
-            Err(HybridBufferError::NoBufferId)
+            Err(HybridBufferError::NoBufferId(buffer_id.clone()))
         }
     }
 

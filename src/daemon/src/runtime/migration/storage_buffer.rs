@@ -64,7 +64,7 @@ impl StorageBufferManager {
             inner.put_back_disk(info);
             Ok(())
         } else {
-            Err(HybridBufferError::NoBufferId)
+            Err(HybridBufferError::NoBufferId(buffer_id.clone()))
         }
     }
 
