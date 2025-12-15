@@ -26,7 +26,7 @@ pub struct ShmBlock {
 
 struct BookKeepingEntry {
     blocks: Arc<[ShmBlock]>,
-    in_transfer: Arc<AtomicBool>,
+    incomplete: Arc<AtomicBool>,
 }
 
 struct ShmBufferInner {
@@ -40,7 +40,7 @@ impl ShmBufferInner {
     fn reserve_inner(
         inner: &mut std::sync::MutexGuard<'_, Self>,
         buf_id: &BufferId,
-        in_transfer: bool,
+        incomplete: bool,
     ) -> Option<(Arc<[ShmBlock]>, Arc<AtomicBool>)> {
         let required_len = buf_id.get_allocation_count().0 as usize;
         if inner.avail_addrs.len() < required_len {
@@ -66,12 +66,12 @@ impl ShmBufferInner {
             let inited = unsafe { blocks.assume_init() };
             Arc::from(inited)
         };
-        let in_transfer_flag = Arc::new(AtomicBool::new(in_transfer));
+        let in_transfer_flag = Arc::new(AtomicBool::new(incomplete));
         inner.bookkeeping.insert(
             buf_id.clone(),
             BookKeepingEntry {
                 blocks: blocks.clone(),
-                in_transfer: in_transfer_flag.clone(),
+                incomplete: in_transfer_flag.clone(),
             },
         );
         inner
@@ -176,11 +176,11 @@ impl ShmBufferManager {
         }
 
         let val = ShmBufferInner::reserve_inner(&mut inner, buf_id, true);
-        val.map(|(blocks, in_transfer_flag)| ShmBufferTransferGuard {
+        val.map(|(blocks, incomplete_flag)| ShmBufferTransferGuard {
             shm_buffer: self,
             blocks,
             buffer_id: buf_id.clone(),
-            in_transfer_flag: Some(in_transfer_flag),
+            incomplete_flag: Some(incomplete_flag),
         })
     }
 
@@ -192,7 +192,7 @@ impl ShmBufferManager {
         inner
             .bookkeeping
             .iter()
-            .find(|(buf_id, info)| func(buf_id, &info.blocks, &info.in_transfer))
+            .find(|(buf_id, info)| func(buf_id, &info.blocks, &info.incomplete))
             .map(|(buf_id, info)| (buf_id.clone(), info.blocks.clone()))
     }
 
@@ -263,7 +263,7 @@ pub struct ShmBufferTransferGuard<'a> {
     shm_buffer: &'a ShmBufferManager,
     blocks: Arc<[ShmBlock]>,
     buffer_id: BufferId,
-    in_transfer_flag: Option<Arc<AtomicBool>>,
+    incomplete_flag: Option<Arc<AtomicBool>>,
 }
 
 impl<'a> ShmBufferTransferGuard<'a> {
@@ -278,7 +278,7 @@ impl<'a> ShmBufferTransferGuard<'a> {
 
 impl Drop for ShmBufferTransferGuard<'_> {
     fn drop(&mut self) {
-        if let Some(flag) = &self.in_transfer_flag {
+        if let Some(flag) = &self.incomplete_flag {
             flag.store(false, std::sync::atomic::Ordering::Relaxed);
         }
     }

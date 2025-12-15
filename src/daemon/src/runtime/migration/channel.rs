@@ -317,8 +317,11 @@ impl ShmCoordinator {
             }
             match self.req_for_shm.notify_gpu.lock().await.recv().await {
                 Some(ShmRequestRxResp::Ready) => {}
-                _ => {
-                    tracing::warn!("GPU shm reservation notified but unexpected response");
+                others => {
+                    tracing::error!(
+                        "GPU shm reservation notified but unexpected response: {:?}",
+                        others
+                    );
                     tokio::time::sleep(Duration::from_millis(5000)).await;
                 }
             }

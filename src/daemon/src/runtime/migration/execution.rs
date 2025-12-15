@@ -918,8 +918,15 @@ pub(super) async fn shm_to_backend_transfer(
         };
         check_location(&buf_id, expected_location, location);
     }
+    // prevent false positive warning
+    let mut evicted_history = HashSet::new();
+    let mut planned_transfer_completed = false;
     // Handle any remaining buffers that were not found
     while !(next_shm_handling.is_empty() && req_for_shm_rx.is_closed()) {
+        if next_shm_handling.is_empty() && !planned_transfer_completed {
+            planned_transfer_completed = true;
+            tracing::trace!("Planned shm to backend migration completed");
+        }
         tokio::select! {
             biased;
             _ = cancel_rx.changed() => {
@@ -936,6 +943,7 @@ pub(super) async fn shm_to_backend_transfer(
                             &shm_buffer_mgr,
                             &hostmem_buffer_mgr,
                             &storage_buffer_mgr,
+                            &evicted_history,
                         ).await;
                     }
                     None => continue,
@@ -953,6 +961,7 @@ pub(super) async fn shm_to_backend_transfer(
                         &storage_buffer_mgr,
                         &excluding_list,
                         &req_for_shm_rx,
+                        &mut evicted_history,
                     ).await;
                     }
                     None => continue,
@@ -974,13 +983,17 @@ async fn handle_unfinished_shm_entry(
     shm_buffer_mgr: &Arc<ShmBufferManager>,
     hostmem_buffer_mgr: &Arc<HostMemBufferManager>,
     storage_buffer_mgr: &Arc<StorageBufferManager>,
+    evicted_history: &HashSet<BufferId>,
 ) {
     if let Some(expected_location) = next_shm_handling.remove(&buf_id) {
+        if evicted_history.contains(&buf_id) {
+            // already being transferred or have been transferred; skip
+            return;
+        }
         let shm_buffer_mgr = shm_buffer_mgr.clone();
         let hostmem_buffer_mgr = hostmem_buffer_mgr.clone();
         let storage_buffer_mgr = storage_buffer_mgr.clone();
         // spawn for multithreading
-        // TODO: profiling
         tokio::spawn(async move {
             let location = panic_on_error!(
                 shm_to_backend_transfer_inner(
@@ -994,7 +1007,7 @@ async fn handle_unfinished_shm_entry(
             );
             check_location(&buf_id, expected_location, location);
         });
-    } else {
+    } else if !evicted_history.contains(&buf_id) {
         tracing::warn!(
             "Received unexpected buffer ID to {:?}: {:?}",
             expected_location,
@@ -1013,6 +1026,7 @@ async fn handle_buffer_request(
     storage_buffer_mgr: &Arc<StorageBufferManager>,
     excluding_list: &HashSet<i32>,
     req_rx: &RequestForSpaceRx,
+    evicted_history: &mut HashSet<BufferId>,
 ) {
     let mut remaining_count = req.count();
     while remaining_count.0 > 0 {
@@ -1020,6 +1034,7 @@ async fn handle_buffer_request(
         let Some((buf_id, _)) = shm_buffer_mgr.find(|buf_id, _, in_transfer| {
             !excluding_list.contains(&buf_id.pid)
                 && !in_transfer.load(std::sync::atomic::Ordering::Relaxed)
+                && !evicted_history.contains(buf_id)
         }) else {
             if matches!(req, ShmBufferRequest::FromBackend(_)) {
                 // incoming space is limited and should be back pressured to GPU soon
@@ -1045,6 +1060,7 @@ async fn handle_buffer_request(
             );
             *extra_move += 1;
         }
+        evicted_history.insert(buf_id.clone());
 
         // always try to move to hostmem first
         panic_on_error!(
@@ -1199,25 +1215,35 @@ async fn shm_to_backend_transfer_inner(
     let buf_ref = unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), &blocks) };
     assert!(target_loc == BufferLocation::HostMem || target_loc == BufferLocation::Storage);
 
-    if target_loc == BufferLocation::HostMem {
-        match hostmem_buffer_mgr.store_vectored(buffer_id, &buf_ref) {
+    match target_loc {
+        BufferLocation::HostMem => match hostmem_buffer_mgr.store_vectored(buffer_id, &buf_ref) {
             Ok(_) => {}
             Err(HybridBufferError::MemoryExhausted) => {
                 target_loc = BufferLocation::Storage;
             }
             Err(e) => return Err(e),
-        }
-    }
-
-    if target_loc == BufferLocation::Storage {
-        let buf_id = buffer_id.clone();
-        let storage_buffer_mgr = storage_buffer_mgr.clone();
-        tokio::task::spawn_blocking(move || storage_buffer_mgr.store_vectored(&buf_id, &buf_ref))
+        },
+        BufferLocation::Storage => {
+            let buf_id = buffer_id.clone();
+            let storage_buffer_mgr = storage_buffer_mgr.clone();
+            tokio::task::spawn_blocking(move || {
+                storage_buffer_mgr.store_vectored(&buf_id, &buf_ref)
+            })
             .await??;
+        }
+        other => {
+            tracing::error!(
+                "Unexpected target buffer location: {:?} for {:?}",
+                other,
+                buffer_id
+            );
+            return Err(HybridBufferError::InvalidInputBuffer);
+        }
     }
 
     shm_buffer_mgr
         .release(buffer_id)
+        .map_err(|_| buffer_id.clone())
         .expect("BufferId released twice");
     Ok(target_loc)
 }
