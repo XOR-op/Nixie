@@ -138,6 +138,19 @@ struct ShowHistoryArgs {
 }
 
 #[derive(Debug, Parser)]
+struct RunArgs {
+    /// Command to run
+    #[arg(required = true)]
+    command: String,
+    /// Arguments for the command
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+    /// Set CUDA_VISIBLE_DEVICES (e.g., "0", "0,1", "all")
+    #[arg(short = 'd', long)]
+    device: Option<String>,
+}
+
+#[derive(Debug, Parser)]
 #[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
     Daemon(DaemonArgs),
@@ -146,6 +159,7 @@ enum Args {
     Usage(UsageArgs),
     SetPriority(SetPriorityArgs),
     ShowHistory(ShowHistoryArgs),
+    Run(RunArgs),
     #[clap(subcommand)]
     Config(ConfigArgs),
 }
@@ -269,9 +283,101 @@ fn main() {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 client.data_details(true, args.verbose).await.unwrap();
             }
+            Args::Run(args) => {
+                run_command(args);
+            }
             Args::Daemon(_) => unreachable!(),
         };
     });
+}
+
+fn find_sidecar_path() -> Option<PathBuf> {
+    use std::env;
+
+    let sidecar_name = "libnihilsidecar.so";
+
+    // Check relative to executable
+    let exe_path = env::current_exe().ok()?;
+    let exe_dir = exe_path.parent()?;
+    let sidecar_path = exe_dir.join(sidecar_name);
+    if sidecar_path.exists() {
+        return Some(sidecar_path);
+    }
+
+    // Check ../lib relative to executable
+    let alt_path = exe_dir.join("../lib").join(sidecar_name);
+    if alt_path.exists() {
+        return Some(alt_path);
+    }
+
+    // Check LD_LIBRARY_PATH
+    if let Ok(ld_library_path) = env::var("LD_LIBRARY_PATH") {
+        for lib_path in ld_library_path.split(':') {
+            let full_path = PathBuf::from(lib_path).join(sidecar_name);
+            if full_path.exists() {
+                return Some(full_path);
+            }
+        }
+    }
+
+    // System default library paths
+    let system_lib_paths = vec!["/usr/local/lib", "/usr/lib", "/usr/lib64", "/lib", "/lib64"];
+
+    for lib_path in system_lib_paths {
+        let full_path = PathBuf::from(lib_path).join(sidecar_name);
+        if full_path.exists() {
+            return Some(full_path);
+        }
+    }
+
+    None
+}
+
+fn run_command(args: RunArgs) {
+    use std::process::Command;
+    let sidecar_path = match find_sidecar_path() {
+        Some(path) => path,
+        None => {
+            eprintln!(
+                "{}: Could not find sidecar library 'libnihilsidecar.so'",
+                "Error".red()
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let mut env_vars: Vec<(&str, String)> = vec![(
+        "LD_PRELOAD".into(),
+        sidecar_path.to_string_lossy().into_owned(),
+    )];
+
+    // Set CUDA_VISIBLE_DEVICES if provided
+    if let Some(device) = args.device {
+        env_vars.push(("CUDA_VISIBLE_DEVICES", device));
+    }
+
+    let mut cmd = Command::new(&args.command);
+    cmd.args(&args.args);
+
+    for (key, value) in env_vars {
+        cmd.env(key, value);
+    }
+
+    match cmd.spawn() {
+        Ok(mut child) => match child.wait() {
+            Ok(status) => {
+                std::process::exit(status.code().unwrap_or(1));
+            }
+            Err(e) => {
+                eprintln!("{}: Failed to wait for process: {}", "Error".red(), e);
+                std::process::exit(1);
+            }
+        },
+        Err(e) => {
+            eprintln!("{}: Failed to spawn process: {}", "Error".red(), e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn is_set(set: bool, unset: bool) -> bool {
