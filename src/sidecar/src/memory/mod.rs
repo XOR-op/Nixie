@@ -25,7 +25,7 @@ pub(super) fn default_alloc_prop(device: i32) -> CUmemAllocationProp {
             id: device,
         },
         win32HandleMetaData: std::ptr::null_mut(),
-        allocFlags: Default::default(),
+        allocFlags: unsafe { std::mem::zeroed() },
     }
 }
 

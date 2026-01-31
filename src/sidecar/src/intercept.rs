@@ -232,6 +232,33 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     cudaError_enum::CUDA_ERROR_INVALID_VALUE
 }
 
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub extern "C" fn cudaMallocAsync(
+    dev_ptr: *mut *mut libc::c_void,
+    size: usize,
+    stream: CUstream,
+) -> cudaError_enum {
+    init_cuda_env();
+
+    // sync and call standard cudaMalloc
+    let err = unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+    if err != cudaError_enum::CUDA_SUCCESS {
+        return err;
+    }
+    cudaMalloc(dev_ptr, size)
+}
+
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub extern "C" fn cudaFreeAsync(dev_ptr: *mut libc::c_void, stream: CUstream) -> cudaError_enum {
+    let err = unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+    if err != cudaError_enum::CUDA_SUCCESS {
+        return err;
+    }
+    cudaFree(dev_ptr)
+}
+
 #[allow(unused)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

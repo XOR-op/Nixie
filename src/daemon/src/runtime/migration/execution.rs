@@ -662,7 +662,6 @@ async fn host_to_device_transfer(
 
     let mut dst_processed = 0;
     let mut pending_processed = 0;
-    let mut token_received = 0;
     let mut token_not_enough = 0;
 
     #[allow(unused_variables, unused_mut)]
@@ -734,8 +733,6 @@ async fn host_to_device_transfer(
                 MigrationResponse::Success { size, .. } => size,
             };
             accu_length += resp_size;
-
-            token_received += 1;
 
             if accu_length >= buffer_id.size as u64 {
                 accu_length -= buffer_id.size as u64;
