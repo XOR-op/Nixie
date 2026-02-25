@@ -160,7 +160,8 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                 device_id
             );
         }
-        CURRENT_ALLOCATION_SIZE.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
+        CURRENT_ALLOCATION_SIZE
+            .fetch_add(rounded_up_size as u64, std::sync::atomic::Ordering::Relaxed);
         require_reserved_memory(CUDA_CONTROL_PLANE_RESERVATION_SIZE, device_id);
     }
     res
