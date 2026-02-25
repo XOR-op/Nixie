@@ -1041,7 +1041,7 @@ pub(super) mod tests {
                 },
                 MockProcessInput {
                     pid: 3,
-                    shm: size_to_bytes("20GB"),
+                    shm: size_to_bytes("14GB"),
                     ..Default::default()
                 },
             ],
