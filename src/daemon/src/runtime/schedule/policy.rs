@@ -586,3 +586,565 @@ enum PreemptionDecision {
     AllowPreempt { follow_same_priority_cooldown: bool },
     DenyPreempt,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::IoSlice,
+        num::NonZeroU32,
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+        time::{Duration, Instant},
+    };
+
+    use nihil_common::{
+        GlobalDeviceId, MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE, MemoryRequest,
+        ProcessLocalDeviceId, shm::PhysicalMemoryHandleId,
+    };
+
+    use crate::runtime::{
+        migration::{
+            BufferId, DataManagerHandle, HostMemBufferManager, ShmBufferManager,
+            StorageBufferManager,
+        },
+        schedule::{Priority, PriorityLevel},
+    };
+
+    use super::*;
+
+    static TEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    struct TestQueueEnv {
+        queue: ScheduleQueue,
+        data_manager: DataManagerHandle,
+        _tmp_dir: tempfile::TempDir,
+    }
+
+    fn next_test_id() -> u64 {
+        TEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn unique_shm_path() -> String {
+        format!(
+            "/nihilphase-policy-test-{}-{}",
+            std::process::id(),
+            next_test_id()
+        )
+    }
+
+    fn new_test_data_manager() -> (DataManagerHandle, tempfile::TempDir) {
+        let tmp_dir = tempfile::tempdir().expect("failed to create tempdir for policy tests");
+        let storage_path = PathBuf::from(tmp_dir.path()).join("policy_test_storage.bin");
+        let shm = Arc::new(
+            ShmBufferManager::new(&unique_shm_path(), MAX_ALLOCATION_SIZE)
+                .expect("failed to create shm buffer manager"),
+        );
+        let hostmem = Arc::new(HostMemBufferManager::new(
+            8 * MIN_ALLOCATION_SIZE,
+            MIN_ALLOCATION_SIZE,
+            false,
+        ));
+        let storage = Arc::new(
+            StorageBufferManager::new(&storage_path)
+                .expect("failed to create storage buffer manager"),
+        );
+        (
+            DataManagerHandle {
+                shm,
+                hostmem,
+                storage,
+            },
+            tmp_dir,
+        )
+    }
+
+    fn new_test_queue() -> TestQueueEnv {
+        let (data_manager, tmp_dir) = new_test_data_manager();
+        let queue = ScheduleQueue::new(data_manager.clone());
+        TestQueueEnv {
+            queue,
+            data_manager,
+            _tmp_dir: tmp_dir,
+        }
+    }
+
+    fn req_scheduling(message_id: u64) -> ActivityUpdate {
+        ActivityUpdate {
+            message_id,
+            content: ActivityUpdateContent::RequestScheduling,
+        }
+    }
+
+    fn req_idle(message_id: u64) -> ActivityUpdate {
+        ActivityUpdate {
+            message_id,
+            content: ActivityUpdateContent::Idle,
+        }
+    }
+
+    fn req_yield_then_schedule(message_id: u64) -> ActivityUpdate {
+        let mut mem_req = std::array::from_fn(|i| (ProcessLocalDeviceId(i as i32), Vec::new()));
+        mem_req[0].1.push(1);
+        ActivityUpdate {
+            message_id,
+            content: ActivityUpdateContent::YieldThenRequestSchedulingAndMem {
+                memory_request: Box::new(MemoryRequest { mem_req }),
+            },
+        }
+    }
+
+    fn test_buf_id(pid: i32, idx: u32, size: usize) -> BufferId {
+        BufferId {
+            pid,
+            device_id: GlobalDeviceId(0),
+            block_id: PhysicalMemoryHandleId::new(1, NonZeroU32::new(idx).unwrap()),
+            size: size as u32,
+        }
+    }
+
+    fn set_client_priority(queue: &mut ScheduleQueue, pid: i32, priority: Priority) {
+        let client = queue.get_client_mut_or_insert(pid);
+        client.set_priority(priority);
+    }
+
+    #[test]
+    fn compute_cooldown_uses_max_of_inputs() {
+        let from_migration = ScheduleQueue::compute_cooldown(
+            65536,
+            None,
+            Priority::Fixed(PriorityLevel::Interactive),
+        );
+        assert_eq!(from_migration, Duration::from_secs(12));
+
+        let from_config = ScheduleQueue::compute_cooldown(
+            1,
+            Some(Duration::from_secs(200)),
+            Priority::Fixed(PriorityLevel::Background),
+        );
+        assert_eq!(from_config, Duration::from_secs(200));
+
+        let from_priority_floor = ScheduleQueue::compute_cooldown(
+            1,
+            Some(Duration::from_secs(1)),
+            Priority::Fixed(PriorityLevel::Interactive),
+        );
+        assert_eq!(from_priority_floor, Duration::from_secs(8));
+    }
+
+    #[test]
+    fn schedule_push_enqueues_idle_yield_and_schedule_correctly() {
+        let mut env = new_test_queue();
+
+        env.queue.schedule_push(1, req_idle(1));
+        env.queue.schedule_push(2, req_yield_then_schedule(1));
+        env.queue.schedule_push(3, req_scheduling(1));
+
+        assert_eq!(env.queue.idle_req_queue.len(), 2);
+        assert_eq!(env.queue.idle_req_queue[0].pid, 1);
+        assert_eq!(
+            env.queue.idle_req_queue[0].request_type,
+            IdleRequestType::Idle
+        );
+        assert_eq!(env.queue.idle_req_queue[1].pid, 2);
+        assert_eq!(
+            env.queue.idle_req_queue[1].request_type,
+            IdleRequestType::Yield
+        );
+
+        assert_eq!(env.queue.sched_req.len(), 2);
+        assert_eq!(env.queue.sched_req[0].pid, 2);
+        assert!(env.queue.sched_req[0].is_yield);
+        assert_eq!(env.queue.sched_req[1].pid, 3);
+        assert!(!env.queue.sched_req[1].is_yield);
+
+        assert!(
+            env.queue
+                .get_client(1)
+                .expect("client 1 should exist")
+                .get_time_in_schedule_queue()
+                .is_none()
+        );
+        assert!(
+            env.queue
+                .get_client(2)
+                .expect("client 2 should exist")
+                .get_time_in_schedule_queue()
+                .is_some()
+        );
+        assert!(
+            env.queue
+                .get_client(3)
+                .expect("client 3 should exist")
+                .get_time_in_schedule_queue()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn prioritized_push_puts_requests_at_front() {
+        let mut env = new_test_queue();
+
+        env.queue.schedule_push(1, req_idle(1));
+        env.queue.schedule_push(2, req_scheduling(1));
+
+        let idle_before = env.queue.idle_req_queue.len();
+        let sched_before = env.queue.sched_req.len();
+
+        env.queue.prioritized_push(3, req_idle(1));
+        env.queue.prioritized_push(4, req_scheduling(1));
+        env.queue.prioritized_push(5, req_yield_then_schedule(1));
+
+        assert_eq!(env.queue.idle_req_queue.len(), idle_before + 1);
+        assert_eq!(env.queue.sched_req.len(), sched_before + 1);
+
+        assert_eq!(env.queue.idle_req_queue[0].pid, 3);
+        assert_eq!(env.queue.idle_req_queue[1].pid, 1);
+
+        assert_eq!(env.queue.sched_req[0].pid, 4);
+        assert!(!env.queue.sched_req[0].is_yield);
+        assert_eq!(env.queue.sched_req[1].pid, 2);
+    }
+
+    #[test]
+    fn compute_prioritization_orders_by_yield_then_priority_then_time() {
+        let mut env = new_test_queue();
+
+        env.queue.schedule_push(10, req_scheduling(1));
+        env.queue.schedule_push(20, req_scheduling(1));
+        env.queue.schedule_push(30, req_yield_then_schedule(1));
+
+        set_client_priority(
+            &mut env.queue,
+            10,
+            Priority::Fixed(PriorityLevel::Interactive),
+        );
+        set_client_priority(
+            &mut env.queue,
+            20,
+            Priority::Fixed(PriorityLevel::Interactive),
+        );
+        set_client_priority(
+            &mut env.queue,
+            30,
+            Priority::Fixed(PriorityLevel::Background),
+        );
+
+        for req in env.queue.sched_req.iter_mut() {
+            req.time = match req.pid {
+                10 => Instant::now() + Duration::from_millis(5),
+                20 => Instant::now() + Duration::from_millis(1),
+                30 => Instant::now() + Duration::from_millis(3),
+                _ => req.time,
+            };
+        }
+
+        env.queue.compute_prioritization();
+        let ordered = env
+            .queue
+            .sched_req
+            .iter()
+            .map(|req| req.pid)
+            .collect::<Vec<_>>();
+        assert_eq!(ordered, vec![30, 20, 10]);
+    }
+
+    #[test]
+    fn compute_can_preempt_decision_matrix() {
+        let active_since = Instant::now();
+
+        let mut env = new_test_queue();
+        env.queue.schedule_push(1, req_scheduling(1));
+        let decision = env.queue.compute_can_preempt(ActiveClientState::Active {
+            pid: 1,
+            since: active_since,
+        });
+        match decision {
+            PreemptionDecision::AllowPreempt {
+                follow_same_priority_cooldown,
+            } => assert!(!follow_same_priority_cooldown),
+            _ => panic!("expected allow preempt when queue front equals active pid"),
+        }
+
+        let mut env = new_test_queue();
+        env.queue.schedule_push(2, req_scheduling(1));
+        env.queue.get_client_mut_or_insert(1);
+        set_client_priority(&mut env.queue, 1, Priority::Fixed(PriorityLevel::Batch));
+        set_client_priority(
+            &mut env.queue,
+            2,
+            Priority::Fixed(PriorityLevel::Interactive),
+        );
+        let decision = env.queue.compute_can_preempt(ActiveClientState::Active {
+            pid: 1,
+            since: active_since,
+        });
+        match decision {
+            PreemptionDecision::AllowPreempt {
+                follow_same_priority_cooldown,
+            } => assert!(!follow_same_priority_cooldown),
+            _ => panic!("expected allow preempt for higher-priority queue front"),
+        }
+
+        let mut env = new_test_queue();
+        env.queue.schedule_push(2, req_scheduling(1));
+        env.queue.get_client_mut_or_insert(1);
+        set_client_priority(&mut env.queue, 1, Priority::Fixed(PriorityLevel::Batch));
+        set_client_priority(&mut env.queue, 2, Priority::Fixed(PriorityLevel::Batch));
+        let decision = env.queue.compute_can_preempt(ActiveClientState::Active {
+            pid: 1,
+            since: active_since,
+        });
+        match decision {
+            PreemptionDecision::AllowPreempt {
+                follow_same_priority_cooldown,
+            } => assert!(follow_same_priority_cooldown),
+            _ => panic!("expected allow preempt for equal-priority queue front"),
+        }
+
+        let mut env = new_test_queue();
+        env.queue.schedule_push(2, req_scheduling(1));
+        env.queue.get_client_mut_or_insert(1);
+        set_client_priority(
+            &mut env.queue,
+            1,
+            Priority::Fixed(PriorityLevel::Interactive),
+        );
+        set_client_priority(&mut env.queue, 2, Priority::Fixed(PriorityLevel::Batch));
+        let decision = env.queue.compute_can_preempt(ActiveClientState::Active {
+            pid: 1,
+            since: active_since,
+        });
+        assert!(matches!(decision, PreemptionDecision::DenyPreempt));
+
+        let mut env = new_test_queue();
+        env.queue.schedule_push(2, req_scheduling(1));
+        let decision = env.queue.compute_can_preempt(ActiveClientState::Active {
+            pid: 99,
+            since: active_since,
+        });
+        assert!(matches!(decision, PreemptionDecision::DenyPreempt));
+    }
+
+    #[test]
+    fn schedule_pop_prefers_idle_then_prefetch_then_schedule() {
+        let mut env = new_test_queue();
+
+        env.queue.schedule_push(1, req_idle(1));
+        let (prefetch_param, _unused_rx) = CallParameter::new(PrefetchArgs {
+            list: Vec::new(),
+            rx_used: false,
+        });
+        env.queue.push_prefetch(prefetch_param);
+        env.queue.schedule_push(2, req_scheduling(1));
+
+        let first = env
+            .queue
+            .schedule_pop(ActiveClientState::None)
+            .expect("first pop should exist");
+        assert!(matches!(first, GenericRequest::Idle(_)));
+        assert_eq!(first.pid(), Some(1));
+        assert_eq!(first.req_type(), "Idle");
+
+        let second = env
+            .queue
+            .schedule_pop(ActiveClientState::None)
+            .expect("second pop should exist");
+        assert!(matches!(second, GenericRequest::Prefetch(_)));
+        assert_eq!(second.pid(), None);
+        assert_eq!(second.req_type(), "Prefetch");
+
+        assert!(
+            env.queue
+                .get_client(2)
+                .expect("client 2 should exist")
+                .get_time_in_schedule_queue()
+                .is_some()
+        );
+        let third = env
+            .queue
+            .schedule_pop(ActiveClientState::None)
+            .expect("third pop should exist");
+        assert!(matches!(third, GenericRequest::Schedule(_)));
+        assert_eq!(third.pid(), Some(2));
+        assert_eq!(third.req_type(), "Schedule");
+        assert!(
+            env.queue
+                .get_client(2)
+                .expect("client 2 should exist")
+                .get_time_in_schedule_queue()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn set_priority_transitions_are_consistent() {
+        let mut env = new_test_queue();
+
+        assert!(matches!(
+            env.queue.set_priority(42, SetPriorityLevel::FixToDynamic),
+            SetPriorityResponse::FailureProcessNotExist
+        ));
+
+        env.queue.schedule_push(42, req_scheduling(1));
+
+        assert!(matches!(
+            env.queue.set_priority(
+                42,
+                SetPriorityLevel::Set(Priority::Fixed(PriorityLevel::Background)),
+            ),
+            SetPriorityResponse::Success
+        ));
+        assert_eq!(
+            env.queue
+                .get_client(42)
+                .expect("client should exist")
+                .priority(),
+            Priority::Fixed(PriorityLevel::Background)
+        );
+
+        assert!(matches!(
+            env.queue.set_priority(42, SetPriorityLevel::FixToDynamic),
+            SetPriorityResponse::Success
+        ));
+        assert_eq!(
+            env.queue
+                .get_client(42)
+                .expect("client should exist")
+                .priority(),
+            Priority::Dynamic {
+                level: PriorityLevel::Background,
+                weight: 0
+            }
+        );
+
+        assert!(matches!(
+            env.queue.set_priority(42, SetPriorityLevel::FixToDynamic),
+            SetPriorityResponse::FailurePriorityNotFixed
+        ));
+
+        assert!(matches!(
+            env.queue.set_priority(
+                42,
+                SetPriorityLevel::Set(Priority::Fixed(PriorityLevel::LowInteractive)),
+            ),
+            SetPriorityResponse::Success
+        ));
+        assert!(matches!(
+            env.queue.set_priority(42, SetPriorityLevel::UnsetToDefault),
+            SetPriorityResponse::Success
+        ));
+        assert_eq!(
+            env.queue
+                .get_client(42)
+                .expect("client should exist")
+                .priority(),
+            Priority::default_dynamic()
+        );
+
+        assert!(matches!(
+            env.queue.set_priority(42, SetPriorityLevel::UnsetToDefault),
+            SetPriorityResponse::FailurePriorityNotFixed
+        ));
+    }
+
+    #[test]
+    fn remove_client_clears_pending_entries() {
+        let mut env = new_test_queue();
+
+        env.queue.schedule_push(1, req_idle(1));
+        env.queue.schedule_push(1, req_scheduling(2));
+        env.queue.schedule_push(2, req_idle(1));
+        env.queue.schedule_push(3, req_scheduling(1));
+
+        env.queue.remove_client(1);
+
+        assert!(env.queue.get_client(1).is_none());
+        assert!(env.queue.idle_req_queue.iter().all(|req| req.pid != 1));
+        assert!(env.queue.sched_req.iter().all(|req| req.pid != 1));
+        assert!(env.queue.idle_req_queue.iter().any(|req| req.pid == 2));
+        assert!(env.queue.sched_req.iter().any(|req| req.pid == 3));
+    }
+
+    #[test]
+    fn construct_prefetch_plan_builds_expected_moves() {
+        let env = new_test_queue();
+        let pid = 7;
+
+        let shm_buf = test_buf_id(pid, 1, 63 * MIN_ALLOCATION_SIZE);
+        let _guard = env
+            .data_manager
+            .shm
+            .try_reserve(&shm_buf)
+            .expect("failed to reserve shm buffer");
+
+        let hostmem_buf = test_buf_id(pid, 2, MIN_ALLOCATION_SIZE);
+        env.data_manager
+            .hostmem
+            .store(&hostmem_buf, &vec![1u8; MIN_ALLOCATION_SIZE])
+            .expect("failed to store hostmem buffer");
+
+        let storage_buf = test_buf_id(pid, 3, 2 * MIN_ALLOCATION_SIZE);
+        let storage_data = vec![2u8; 2 * MIN_ALLOCATION_SIZE];
+        let storage_slices = [IoSlice::new(storage_data.as_slice())];
+        env.data_manager
+            .storage
+            .store_vectored(&storage_buf, &storage_slices)
+            .expect("failed to store storage buffer");
+
+        let plan = construct_prefetch_plan(pid, &env.data_manager);
+        assert_eq!(plan.len(), 2);
+        assert_eq!(plan[0].pid, pid);
+        assert_eq!(plan[0].from, BufferLocation::Storage);
+        assert_eq!(plan[0].to, BufferLocation::Shm);
+        assert_eq!(plan[0].size, MIN_ALLOCATION_SIZE as u64);
+        assert_eq!(plan[1].pid, pid);
+        assert_eq!(plan[1].from, BufferLocation::Storage);
+        assert_eq!(plan[1].to, BufferLocation::HostMem);
+        assert_eq!(plan[1].size, MIN_ALLOCATION_SIZE as u64);
+
+        env.data_manager
+            .hostmem
+            .batch_release(std::slice::from_ref(&hostmem_buf));
+        env.data_manager
+            .storage
+            .batch_release(std::slice::from_ref(&storage_buf));
+        env.data_manager
+            .shm
+            .release(&shm_buf)
+            .expect("failed to release shm buffer");
+
+        let env2 = new_test_queue();
+        let pid2 = 8;
+
+        let shm_buf2 = test_buf_id(pid2, 4, 62 * MIN_ALLOCATION_SIZE);
+        let _guard2 = env2
+            .data_manager
+            .shm
+            .try_reserve(&shm_buf2)
+            .expect("failed to reserve shm buffer for second case");
+
+        let hostmem_buf2 = test_buf_id(pid2, 5, MIN_ALLOCATION_SIZE);
+        env2.data_manager
+            .hostmem
+            .store(&hostmem_buf2, &vec![3u8; MIN_ALLOCATION_SIZE])
+            .expect("failed to store hostmem buffer for second case");
+
+        let plan2 = construct_prefetch_plan(pid2, &env2.data_manager);
+        assert_eq!(plan2.len(), 1);
+        assert_eq!(plan2[0].pid, pid2);
+        assert_eq!(plan2[0].from, BufferLocation::HostMem);
+        assert_eq!(plan2[0].to, BufferLocation::Shm);
+        assert_eq!(plan2[0].size, MIN_ALLOCATION_SIZE as u64);
+
+        env2.data_manager
+            .hostmem
+            .batch_release(std::slice::from_ref(&hostmem_buf2));
+        env2.data_manager
+            .shm
+            .release(&shm_buf2)
+            .expect("failed to release shm buffer for second case");
+    }
+}
