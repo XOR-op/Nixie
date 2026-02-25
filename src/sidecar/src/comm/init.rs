@@ -97,7 +97,7 @@ pub(crate) fn init_comm() -> Option<flume::Sender<A2SMessage>> {
                 "Failed to connect to Nihilphase daemon".red(),
                 e
             );
-            None
+            std::process::exit(1);
         }
     }
 }
