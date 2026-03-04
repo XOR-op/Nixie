@@ -3,6 +3,7 @@ use nihil_common::ProcessLocalDeviceId;
 use nihil_common::shm_buffer::ShmBuffer;
 
 use crate::comm::init::{COMM, init_comm};
+use crate::memory::{MEMORY_MIGRATION_CTL, init_memory_migration_ctl};
 use crate::{GenericData, check_cu_err, set_device, shm_buf, warn_eprintln};
 
 pub(crate) fn should_have_initialized() -> GenericData {
@@ -46,6 +47,9 @@ pub(crate) fn init_cuda_env() {
     } else {
         check_cu_err!(res, "CUDA initialization test failed");
     }
+    // we init migration control in advance, to avoid OOM in stream create
+    // when we need to migrate memory back to CPU
+    MEMORY_MIGRATION_CTL.get_or_init(init_memory_migration_ctl);
     init_mapped_gpu_memory();
 }
 
