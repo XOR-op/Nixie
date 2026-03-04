@@ -56,7 +56,15 @@ impl StorageBufferManager {
         data: &mut [IoSliceMut<'_>],
     ) -> Result<(), HybridBufferError> {
         let mut inner = self.inner.lock().unwrap();
-        if buffer_id.size > (MAX_ALLOCATION_SIZE as u32) || (data.len() < buffer_id.size as usize) {
+        let total_dst_buf_size: usize = data.iter().map(|b| b.len()).sum();
+        if buffer_id.size > (MAX_ALLOCATION_SIZE as u32)
+            || (total_dst_buf_size < buffer_id.size as usize)
+        {
+            tracing::error!(
+                "Invalid input buffer for load_to_vectored: buffer_id size {}, data len {}",
+                buffer_id.size,
+                total_dst_buf_size
+            );
             return Err(HybridBufferError::InvalidInputBuffer);
         }
         if let Some(info) = inner.disk_bookkeeping.remove(buffer_id) {
