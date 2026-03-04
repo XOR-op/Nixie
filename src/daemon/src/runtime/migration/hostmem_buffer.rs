@@ -310,16 +310,6 @@ impl HostMemBufferInner {
         let allowed_extra_buffer_cnt = (self.max_mem_buffer_count
             + self.extra_burst_mem_buffer_count)
             .saturating_sub(self.bookkeeping_block_count + self.borrowed_count);
-        tracing::trace!(
-            "n={}, max={}, extra_burst={}, bookkeeping={}, book_keeping_count={}, borrowed={}, allowed_extra={}",
-            n,
-            self.max_mem_buffer_count,
-            self.extra_burst_mem_buffer_count,
-            self.mem_bookkeeping.len(),
-            self.bookkeeping_block_count,
-            self.borrowed_count,
-            allowed_extra_buffer_cnt
-        );
         if self.free_mem_buffers.len() + allowed_extra_buffer_cnt < n {
             return None;
         }
