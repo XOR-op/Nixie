@@ -43,6 +43,7 @@ impl HostMemBufferManager {
             free_mem_buffers: free_buffers,
             max_mem_buffer_count: max_buffer_count,
             extra_burst_mem_buffer_count: extra_burst_size / MIN_ALLOCATION_SIZE,
+            bookkeeping_block_count: 0,
             borrowed_count: 0,
         };
         Self {
@@ -80,9 +81,7 @@ impl HostMemBufferManager {
                 .extend_from_slice(&data[offset..offset + copy_size]);
             offset += copy_size;
         }
-        inner
-            .mem_bookkeeping
-            .insert(buffer_id.clone(), block_buffers);
+        inner.insert_buffer(buffer_id.clone(), block_buffers);
         Ok(())
     }
 
@@ -99,9 +98,7 @@ impl HostMemBufferManager {
             dst.0.clear();
             dst.0.extend_from_slice(src);
         }
-        inner
-            .mem_bookkeeping
-            .insert(buffer_id.clone(), block_buffers);
+        inner.insert_buffer(buffer_id.clone(), block_buffers);
         Ok(())
     }
 
@@ -118,7 +115,7 @@ impl HostMemBufferManager {
             );
             return Err(HybridBufferError::InvalidInputBuffer);
         }
-        if let Some(block_buffers) = inner.mem_bookkeeping.remove(buffer_id) {
+        if let Some(block_buffers) = inner.remove_buffer(buffer_id) {
             Ok(block_buffers)
         } else {
             Err(HybridBufferError::NoBufferId(buffer_id.clone()))
@@ -159,7 +156,7 @@ impl HostMemBufferManager {
 
     pub fn pop_buffer(&self, buffer_id: &BufferId) -> Option<Vec<BlockMemBuffer>> {
         let mut inner = self.inner.lock().unwrap();
-        let res = inner.mem_bookkeeping.remove(buffer_id)?;
+        let res = inner.remove_buffer(buffer_id)?;
         inner.borrowed_count += res.len();
         Some(res)
     }
@@ -202,7 +199,7 @@ impl HostMemBufferManager {
             buffer_id.size as usize
         );
         inner.borrowed_count -= 1;
-        inner.mem_bookkeeping.insert(buffer_id, buffer);
+        inner.insert_buffer(buffer_id, buffer);
     }
 
     pub fn put_back_mem(&self, buffer: Vec<BlockMemBuffer>) {
@@ -218,7 +215,7 @@ impl HostMemBufferManager {
         let inner = &mut *self.inner.lock().unwrap();
         let mut released_count = 0;
         for buffer_id in buffer_ids {
-            if let Some(mems) = inner.mem_bookkeeping.remove(buffer_id) {
+            if let Some(mems) = inner.remove_buffer(buffer_id) {
                 for mem in mems {
                     inner.put_back_mem(mem);
                 }
@@ -230,13 +227,14 @@ impl HostMemBufferManager {
 
     pub fn release_process_residual(&self, pid: i32) {
         let inner = &mut *self.inner.lock().unwrap();
+        inner.bookkeeping_block_count = 0;
         for (id, mems) in std::mem::take(&mut inner.mem_bookkeeping) {
             if id.pid == pid {
                 for mem in mems {
                     inner.put_back_mem(mem);
                 }
             } else {
-                inner.mem_bookkeeping.insert(id, mems);
+                inner.insert_buffer(id, mems);
             }
         }
     }
@@ -259,7 +257,7 @@ impl HostMemBufferManager {
     pub fn free_blocks_count(&self) -> AllocationCount {
         let inner = self.inner.lock().unwrap();
         let free_count = (inner.max_mem_buffer_count + inner.extra_burst_mem_buffer_count)
-            .saturating_sub(inner.mem_bookkeeping.len() + inner.borrowed_count);
+            .saturating_sub(inner.bookkeeping_block_count + inner.borrowed_count);
         AllocationCount(free_count as u32)
     }
 
@@ -289,6 +287,8 @@ struct HostMemBufferInner {
     max_mem_buffer_count: usize,
     extra_burst_mem_buffer_count: usize,
 
+    bookkeeping_block_count: usize,
+
     borrowed_count: usize,
 }
 
@@ -296,7 +296,7 @@ impl HostMemBufferInner {
     fn alloc_buffer(&mut self) -> Option<BlockMemBuffer> {
         if let Some(buffer) = self.free_mem_buffers.pop() {
             Some(buffer)
-        } else if self.mem_bookkeeping.len() + self.borrowed_count
+        } else if self.bookkeeping_block_count + self.borrowed_count
             < self.max_mem_buffer_count + self.extra_burst_mem_buffer_count
         {
             let new_buffer = BlockMemBuffer::new();
@@ -307,9 +307,19 @@ impl HostMemBufferInner {
     }
 
     fn alloc_n_buffers(&mut self, n: usize) -> Option<Vec<BlockMemBuffer>> {
-        let allowed_extra_buffer_cnt = self.max_mem_buffer_count
-            + self.extra_burst_mem_buffer_count
-            - (self.mem_bookkeeping.len() + self.borrowed_count);
+        let allowed_extra_buffer_cnt = (self.max_mem_buffer_count
+            + self.extra_burst_mem_buffer_count)
+            .saturating_sub(self.bookkeeping_block_count + self.borrowed_count);
+        tracing::trace!(
+            "n={}, max={}, extra_burst={}, bookkeeping={}, book_keeping_count={}, borrowed={}, allowed_extra={}",
+            n,
+            self.max_mem_buffer_count,
+            self.extra_burst_mem_buffer_count,
+            self.mem_bookkeeping.len(),
+            self.bookkeeping_block_count,
+            self.borrowed_count,
+            allowed_extra_buffer_cnt
+        );
         if self.free_mem_buffers.len() + allowed_extra_buffer_cnt < n {
             return None;
         }
@@ -328,5 +338,16 @@ impl HostMemBufferInner {
         if self.free_mem_buffers.len() < self.max_mem_buffer_count {
             self.free_mem_buffers.push(buffer);
         }
+    }
+
+    fn insert_buffer(&mut self, buffer_id: BufferId, buffer: Vec<BlockMemBuffer>) {
+        self.bookkeeping_block_count += buffer.len();
+        self.mem_bookkeeping.insert(buffer_id, buffer);
+    }
+
+    fn remove_buffer(&mut self, buffer_id: &BufferId) -> Option<Vec<BlockMemBuffer>> {
+        let res = self.mem_bookkeeping.remove(buffer_id)?;
+        self.bookkeeping_block_count -= res.len();
+        Some(res)
     }
 }
