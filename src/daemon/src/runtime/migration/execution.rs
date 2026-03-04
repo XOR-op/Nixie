@@ -1212,30 +1212,24 @@ async fn shm_to_backend_transfer_inner(
     let buf_ref = unsafe { get_buffer_ref(convert_to_static(shm_buffer_mgr), &blocks) };
     assert!(target_loc == BufferLocation::HostMem || target_loc == BufferLocation::Storage);
 
-    match target_loc {
-        BufferLocation::HostMem => match hostmem_buffer_mgr.store_vectored(buffer_id, &buf_ref) {
-            Ok(_) => {}
+    if target_loc == BufferLocation::HostMem {
+        match hostmem_buffer_mgr.store_vectored(buffer_id, &buf_ref) {
+            Ok(_) => {
+                // success, do nothing
+            }
             Err(HybridBufferError::MemoryExhausted) => {
                 target_loc = BufferLocation::Storage;
             }
             Err(e) => return Err(e),
-        },
-        BufferLocation::Storage => {
-            let buf_id = buffer_id.clone();
-            let storage_buffer_mgr = storage_buffer_mgr.clone();
-            tokio::task::spawn_blocking(move || {
-                storage_buffer_mgr.store_vectored(&buf_id, &buf_ref)
-            })
+        }
+    }
+    // if hostmem store failed due to memory exhaustion,
+    // or the target location is already storage
+    if target_loc == BufferLocation::Storage {
+        let buf_id = buffer_id.clone();
+        let storage_buffer_mgr = storage_buffer_mgr.clone();
+        tokio::task::spawn_blocking(move || storage_buffer_mgr.store_vectored(&buf_id, &buf_ref))
             .await??;
-        }
-        other => {
-            tracing::error!(
-                "Unexpected target buffer location: {:?} for {:?}",
-                other,
-                buffer_id
-            );
-            return Err(HybridBufferError::InvalidInputBuffer);
-        }
     }
 
     shm_buffer_mgr
