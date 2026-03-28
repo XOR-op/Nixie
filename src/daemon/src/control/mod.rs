@@ -3,7 +3,7 @@ pub(crate) mod parse;
 
 use std::{collections::HashMap, time::SystemTime};
 
-use nihil_common::{GlobalDeviceId, shm::PhysicalMemoryHandleId};
+use nixie_common::{GlobalDeviceId, shm::PhysicalMemoryHandleId};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     runtime::{ClientState, Priority, PriorityLevel, migration::BufferLocation},
 };
 
-pub static CONTROL_PATH: &str = "/tmp/nihilphase-ctl.sock";
+pub static CONTROL_PATH: &str = "/tmp/nixie-ctl.sock";
 
 #[tarpc::service]
 pub(crate) trait Controllable {

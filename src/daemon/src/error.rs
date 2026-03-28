@@ -4,7 +4,7 @@ use thiserror::Error;
 use crate::runtime::migration::BufferId;
 
 #[derive(Debug, Error)]
-pub enum NihilphaseError {
+pub enum NixieError {
     #[error("Daemon: {0}")]
     Daemon(#[from] DaemonError),
     #[error("Uvm: {0}")]

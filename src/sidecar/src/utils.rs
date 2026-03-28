@@ -1,5 +1,5 @@
 use cudarc::driver::sys::{CUdevice, cudaError_enum};
-use nihil_common::{CUDA_PROCESS_RESERVATION_SIZE, MemoryRequest, ProcessLocalDeviceId};
+use nixie_common::{CUDA_PROCESS_RESERVATION_SIZE, MemoryRequest, ProcessLocalDeviceId};
 
 use crate::{
     env_config::sidecar_config,
@@ -15,7 +15,7 @@ pub(crate) fn should_log(level: u8) -> bool {
 macro_rules! debug_eprintln {
     ($($arg:tt)*) => {
         if $crate::utils::should_log(3) {
-            eprintln!("{} {}", colored::Colorize::blue("NIHIL-DEBUG"), format!($($arg)*));
+            eprintln!("{} {}", colored::Colorize::blue("NIXIE-DEBUG"), format!($($arg)*));
         }
     };
 }
@@ -24,7 +24,7 @@ macro_rules! debug_eprintln {
 macro_rules! info_eprintln {
     ($($arg:tt)*) => {
         if $crate::utils::should_log(2) {
-            eprintln!("{} {}", colored::Colorize::green("NIHIL-INFO"), format!($($arg)*));
+            eprintln!("{} {}", colored::Colorize::green("NIXIE-INFO"), format!($($arg)*));
         }
     };
 }
@@ -33,7 +33,7 @@ macro_rules! info_eprintln {
 macro_rules! warn_eprintln {
     ($($arg:tt)*) => {
         if $crate::utils::should_log(1) {
-            eprintln!("{} {}", colored::Colorize::yellow("NIHIL-WARN"), format!($($arg)*));
+            eprintln!("{} {}", colored::Colorize::yellow("NIXIE-WARN"), format!($($arg)*));
         }
     };
 }

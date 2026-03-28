@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nihil_common::GlobalDeviceId;
+use nixie_common::GlobalDeviceId;
 use tokio::sync::mpsc;
 
 use crate::runtime::migration::AllocationCount;

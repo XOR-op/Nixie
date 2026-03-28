@@ -14,7 +14,7 @@ use crate::{
     error::ClientError,
     runtime::Priority,
 };
-use nihil_common::{GlobalDeviceId, general::pretty_size};
+use nixie_common::{GlobalDeviceId, general::pretty_size};
 
 use super::ControllableClient;
 

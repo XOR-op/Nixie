@@ -1,4 +1,4 @@
-# NihilPhase
+# Nixie
 
 ---
 
@@ -16,21 +16,21 @@ cargo build --release
 
 Run the compiled binary:
 ```bash
-./target/release/nihilphase daemon
+./target/release/nixie daemon
 ```
 to start the daemon.
 
 For application, use:
 ```bash
-LD_PRELOAD=<REPLACE_WITH_THIS_PATH>/target/release/libnihilsidecar.so <your_application>
+LD_PRELOAD=<REPLACE_WITH_THIS_PATH>/target/release/libnixiesidecar.so <your_application>
 ```
 
 Check with:
 ```bash
-./target/release/nihilphase list 
+./target/release/nixie list 
 ```
 
 More details can be found with:
 ```bash
-./target/release/nihilphase --help
+./target/release/nixie --help
 ```

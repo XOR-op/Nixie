@@ -740,20 +740,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "nihil_common"
-version = "0.1.0"
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
 dependencies = [
- "cudarc",
- "futures",
- "nix",
- "serde",
- "tarpc",
- "thiserror 2.0.6",
- "tokio",
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
-name = "nihilphase"
+name = "nixie"
 version = "0.1.0"
 dependencies = [
  "async-bincode",
@@ -768,8 +767,8 @@ dependencies = [
  "is-root",
  "itertools",
  "mimalloc",
- "nihil_common",
  "nix",
+ "nixie_common",
  "nvml-wrapper",
  "serde",
  "serde_json",
@@ -785,7 +784,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "nihilsidecar"
+name = "nixie_common"
+version = "0.1.0"
+dependencies = [
+ "cudarc",
+ "futures",
+ "nix",
+ "serde",
+ "tarpc",
+ "thiserror 2.0.6",
+ "tokio",
+]
+
+[[package]]
+name = "nixiesidecar"
 version = "0.1.0"
 dependencies = [
  "bincode",
@@ -794,24 +806,12 @@ dependencies = [
  "cudarc",
  "flume",
  "futures",
- "nihil_common",
  "nix",
+ "nixie_common",
  "tarpc",
  "tokio",
  "tokio-serde",
  "uuid",
-]
-
-[[package]]
-name = "nix"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
-dependencies = [
- "bitflags",
- "cfg-if",
- "cfg_aliases",
- "libc",
 ]
 
 [[package]]

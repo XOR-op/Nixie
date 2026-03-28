@@ -1,5 +1,5 @@
 use colored::Colorize;
-use nihil_common::rpc::DaemonClient;
+use nixie_common::rpc::DaemonClient;
 
 use super::msg::{A2SMessage, S2AMessage};
 use crate::{

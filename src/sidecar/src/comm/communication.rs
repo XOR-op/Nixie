@@ -1,5 +1,5 @@
-use nihil_common::GpuMemoryFreeUpdate;
-use nihil_common::{
+use nixie_common::GpuMemoryFreeUpdate;
+use nixie_common::{
     ActivityUpdate, MigrationArgs, MigrationResponse, SchedulingArgs, general::CallParameter,
 };
 use tarpc::context::Context;
@@ -34,7 +34,7 @@ pub(crate) struct SidecarServer {
     pub(super) sender: flume::Sender<S2AMessage>,
 }
 
-impl nihil_common::rpc::Sidecar for SidecarServer {
+impl nixie_common::rpc::Sidecar for SidecarServer {
     async fn migrate(self, _context: Context, params: MigrationArgs) -> MigrationResponse {
         let (params, fut) = CallParameter::new(params);
         chan_send!(self.sender.send(S2AMessage::MigrationRequest(params)));

@@ -8,7 +8,7 @@ use itertools::Itertools;
 use tokio::sync::RwLock;
 
 use hashlink::LinkedHashMap;
-use nihil_common::{
+use nixie_common::{
     ActivityUpdate, ActivityUpdateContent, GlobalDeviceId, MAX_GPUS, MemoryRequest, SchedulingArgs,
     general::CallParameter, rpc::SidecarClient,
 };
@@ -259,7 +259,7 @@ impl Scheduler {
             tracing::debug!(
                 "Process {} requests memory: {}",
                 incoming_pid,
-                nihil_common::general::pretty_size(
+                nixie_common::general::pretty_size(
                     mem_req
                         .as_ref()
                         .unwrap()

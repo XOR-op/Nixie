@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use nihil_common::{ActivityUpdate, ActivityUpdateContent, general::CallParameter};
+use nixie_common::{ActivityUpdate, ActivityUpdateContent, general::CallParameter};
 
 use crate::{
     config::load_config,
@@ -600,7 +600,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use nihil_common::{
+    use nixie_common::{
         GlobalDeviceId, MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE, MemoryRequest,
         ProcessLocalDeviceId, shm::PhysicalMemoryHandleId,
     };
@@ -629,7 +629,7 @@ mod tests {
 
     fn unique_shm_path() -> String {
         format!(
-            "/nihilphase-policy-test-{}-{}",
+            "/nixie-policy-test-{}-{}",
             std::process::id(),
             next_test_id()
         )

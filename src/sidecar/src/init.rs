@@ -1,6 +1,6 @@
 use cudarc::driver::sys::cudaError_enum;
-use nihil_common::ProcessLocalDeviceId;
-use nihil_common::shm_buffer::ShmBuffer;
+use nixie_common::ProcessLocalDeviceId;
+use nixie_common::shm_buffer::ShmBuffer;
 
 use crate::comm::init::{COMM, init_comm};
 use crate::memory::{MEMORY_MIGRATION_CTL, init_memory_migration_ctl};
@@ -64,7 +64,7 @@ pub(crate) fn init_generic_data() -> (GenericData, String) {
     // create ptr mapping
     let uuid = uuid::Uuid::new_v4();
     let shm_path = format!(
-        "/nihilphase_ipc-{}-{}.shm",
+        "/nixie_ipc-{}-{}.shm",
         std::process::id(),
         uuid.to_string().split_at(8).0
     );

@@ -5,7 +5,7 @@ use cudarc::driver::sys::{
     CUmemAccessDesc, CUmemAllocationHandleType, CUmemAllocationProp, CUmemAllocationType,
     CUmemLocation, CUmemLocationType, cudaError_enum,
 };
-use nihil_common::{
+use nixie_common::{
     MAX_ALLOCATION_SIZE, ProcessLocalDeviceId,
     shm::{AllocationEntry, AllocationTable, HandleList, PhysicalMemoryHandle},
 };
@@ -57,7 +57,7 @@ pub(crate) fn populate_entry(
                 has_requested_reservation = true;
                 SCHED_CTL.pause_then_require_memory(
                     LaunchType::Malloc,
-                    Box::new(nihil_common::MemoryRequest {
+                    Box::new(nixie_common::MemoryRequest {
                         mem_req: std::array::from_fn(|idx| {
                             if idx == device_id as usize {
                                 (

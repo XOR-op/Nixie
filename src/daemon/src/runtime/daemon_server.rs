@@ -7,11 +7,11 @@ use crate::{
     },
 };
 use futures::StreamExt;
-use nihil_common::{
+use nix::libc::c_int;
+use nixie_common::{
     GlobalDeviceId, HandshakeResponse, ProcessLocalDeviceId,
     rpc::{Daemon, SidecarClient, rpc_multiplex_twoway},
 };
-use nix::libc::c_int;
 use std::{
     collections::HashMap,
     future::Future,
@@ -217,11 +217,11 @@ impl ServerState {
     }
 }
 
-impl nihil_common::rpc::Daemon for DaemonServer {
+impl nixie_common::rpc::Daemon for DaemonServer {
     async fn handshake(
         self,
         _ctx: Context,
-        params: nihil_common::Handshake,
+        params: nixie_common::Handshake,
     ) -> Option<HandshakeResponse> {
         let mut state_guard = self.state.lock().await;
         let state = std::mem::replace(&mut *state_guard, ServerState::Partial);
@@ -291,7 +291,7 @@ impl nihil_common::rpc::Daemon for DaemonServer {
         })
     }
 
-    async fn notify_activity(self, _context: Context, params: nihil_common::ActivityUpdate) {
+    async fn notify_activity(self, _context: Context, params: nixie_common::ActivityUpdate) {
         let mut state_guard = self.state.lock().await;
         let state = extract_guard!(state_guard, ServerState::Launched, "notify_activity");
         let _ = state
@@ -302,7 +302,7 @@ impl nihil_common::rpc::Daemon for DaemonServer {
     async fn notify_gpu_memory_free(
         self,
         _context: Context,
-        params: nihil_common::GpuMemoryFreeUpdate,
+        params: nixie_common::GpuMemoryFreeUpdate,
     ) -> () {
         let mut state_guard = self.state.lock().await;
         let state = extract_guard!(state_guard, ServerState::Launched, "notify_gpu_memory_free");

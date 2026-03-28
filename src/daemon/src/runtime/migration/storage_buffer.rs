@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use nihil_common::MAX_ALLOCATION_SIZE;
+use nixie_common::MAX_ALLOCATION_SIZE;
 
 use crate::{
     error::HybridBufferError,

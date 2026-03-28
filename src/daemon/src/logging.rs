@@ -56,7 +56,7 @@ pub fn init_tracing() {
         .with_timer(SystemTime)
         .with_filter(LevelFilter::DEBUG);
     let temp_file_path = PathBuf::from_str(&format!(
-        "/tmp/tmp-nihilphase-daemon-{}.log",
+        "/tmp/tmp-nixie-daemon-{}.log",
         chrono::prelude::Local::now().format("%Y%m%d-%H%M%S")
     ))
     .unwrap();
@@ -75,7 +75,7 @@ pub fn init_tracing() {
         .with(stdout_layer)
         .with(
             EnvFilter::builder()
-                .with_default_directive(Directive::from_str("nihilphase=trace").unwrap())
+                .with_default_directive(Directive::from_str("nixie=trace").unwrap())
                 .from_env_lossy(),
         )
         .init();

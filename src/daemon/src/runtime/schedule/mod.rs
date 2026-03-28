@@ -126,6 +126,6 @@ impl Ord for PriorityLevel {
 }
 
 pub(crate) enum ScheduleRpcMessage {
-    ActivityUpdate(nihil_common::ActivityUpdate),
-    GpuMemoryFreeUpdate(nihil_common::GpuMemoryFreeUpdate),
+    ActivityUpdate(nixie_common::ActivityUpdate),
+    GpuMemoryFreeUpdate(nixie_common::GpuMemoryFreeUpdate),
 }

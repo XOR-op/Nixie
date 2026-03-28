@@ -4,8 +4,8 @@ use std::{
 };
 
 use cudarc::driver::sys::{CUgraphExec, CUstream, cudaError_enum};
-use nihil_common::CUDA_CONTROL_PLANE_RESERVATION_SIZE;
 use nix::libc::{self, RTLD_NEXT, dlsym};
+use nixie_common::CUDA_CONTROL_PLANE_RESERVATION_SIZE;
 
 use crate::{
     generate_init_fn, generate_init_fn_as,

@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use hashlink::LinkedHashMap;
-use nihil_common::general::pretty_size;
+use nixie_common::general::pretty_size;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -22,7 +22,7 @@ use crate::{
         self, Controllable, DataManagerMetadata, GetHistoryArgs, GetHistoryResult, PrefetchArgs,
         PrefetchResponse, SetPriorityArgs, SetPriorityResponse,
     },
-    error::{DaemonError, NihilphaseError},
+    error::{DaemonError, NixieError},
     runtime::{
         ProcCtlReq,
         daemon_server::DaemonServer,
@@ -33,7 +33,7 @@ use crate::{
         schedule::{ScheduleRpcMessage, control::ScheduleControlReq},
     },
 };
-use nihil_common::general::{CallFuture, CallParameter};
+use nixie_common::general::{CallFuture, CallParameter};
 
 use super::{
     ProcessMetadata, daemon_server::DaemonServerHandle, schedule::Scheduler, socket_chown,
@@ -65,12 +65,12 @@ pub struct Daemon {
 impl Daemon {
     pub fn new(shm_buffer_size: usize, ram_buffer_size: usize) -> Self {
         Self {
-            daemon_path: PathBuf::from("/tmp/nihilphase.sock"),
+            daemon_path: PathBuf::from("/tmp/nixie.sock"),
             control_path: PathBuf::from(control::CONTROL_PATH),
-            buffer_path: PathBuf::from("/tmp/nihilphase.pagebuffer"),
+            buffer_path: PathBuf::from("/tmp/nixie.pagebuffer"),
             shm_buffer_size,
             ram_buffer_size,
-            shm_buffer_path: String::from("/nihilphase_shm_buffer"),
+            shm_buffer_path: String::from("/nixie_shm_buffer"),
             data: Arc::new(DaemonData::new()),
         }
     }
@@ -81,7 +81,7 @@ impl Daemon {
             .enable_all()
             .build()
             .unwrap();
-        let r: Result<(), NihilphaseError> = rt.block_on(async move {
+        let r: Result<(), NixieError> = rt.block_on(async move {
             tokio::select! {
                 r = self.run_body() => r,
                 _ = tokio::signal::ctrl_c() => Ok(())
@@ -93,7 +93,7 @@ impl Daemon {
         }
     }
 
-    async fn run_body(self) -> Result<(), NihilphaseError> {
+    async fn run_body(self) -> Result<(), NixieError> {
         let shm_buffer = Arc::new(
             ShmBufferManager::new(&self.shm_buffer_path, self.shm_buffer_size)
                 .map_err(|e| DaemonError::Io("create shared memory buffer", e))?,

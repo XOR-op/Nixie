@@ -1,11 +1,11 @@
 use cudarc::driver::sys::{CUstream, cudaError_enum};
-use nihil_common::shm::{AllocationEntry, PhysicalMemoryHandleId};
-use nihil_common::{
+use nix::libc::{self, RTLD_NEXT, c_char, c_int, dlsym};
+use nix::sys::stat::mode_t;
+use nixie_common::shm::{AllocationEntry, PhysicalMemoryHandleId};
+use nixie_common::{
     CUDA_CONTROL_PLANE_RESERVATION_SIZE, GpuMemoryFreeUpdate, MAX_ALLOCATION_SIZE, MAX_GPUS,
     MIN_ALLOCATION_SIZE, ProcessLocalDeviceId,
 };
-use nix::libc::{self, RTLD_NEXT, c_char, c_int, dlsym};
-use nix::sys::stat::mode_t;
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Mutex, OnceLock};

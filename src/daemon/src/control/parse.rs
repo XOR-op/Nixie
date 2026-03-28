@@ -1,4 +1,4 @@
-use nihil_common::GlobalDeviceId;
+use nixie_common::GlobalDeviceId;
 
 use crate::{ProcArgs, runtime::migration::BufferLocation};
 

@@ -151,7 +151,7 @@ struct RunArgs {
 }
 
 #[derive(Debug, Parser)]
-#[clap(name = "nihilphase", about = "", version = env!("CARGO_PKG_VERSION"))]
+#[clap(name = "nixie", about = "", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
     Daemon(DaemonArgs),
     Prefetch(PrefetchArgs),
@@ -294,7 +294,7 @@ fn main() {
 fn find_sidecar_path() -> Option<PathBuf> {
     use std::env;
 
-    let sidecar_name = "libnihilsidecar.so";
+    let sidecar_name = "libnixiesidecar.so";
 
     // Check relative to executable
     let exe_path = env::current_exe().ok()?;
@@ -339,7 +339,7 @@ fn run_command(args: RunArgs) {
         Some(path) => path,
         None => {
             eprintln!(
-                "{}: Could not find sidecar library 'libnihilsidecar.so'",
+                "{}: Could not find sidecar library 'libnixiesidecar.so'",
                 "Error".red()
             );
             std::process::exit(1);

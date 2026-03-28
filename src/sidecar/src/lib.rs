@@ -1,10 +1,10 @@
 use cudarc::driver::sys::{CUstream, cudaError_enum};
-use nihil_common::{
+use nix::libc;
+use nixie_common::{
     shm::{AllocationTable, Shm, ShmGuard},
     shm_buffer::ShmBuffer,
     sync::IpcMutexGuard,
 };
-use nix::libc;
 use std::{ffi::CString, sync::OnceLock};
 use utils::set_device;
 
@@ -77,7 +77,7 @@ impl GenericData {
         }
         // create mmap
         let shm = ShmGuard::new(
-            Shm::init_at(shm_fd, nihil_common::shm::Shm::SHM_STRUCT_SIZE)
+            Shm::init_at(shm_fd, nixie_common::shm::Shm::SHM_STRUCT_SIZE)
                 .expect("Failed to init shared memory"),
         );
         // close fd but not unlink; daemon will be responsible for unlinking

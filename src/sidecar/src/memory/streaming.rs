@@ -3,8 +3,8 @@ use std::thread;
 
 use cudarc::driver::sys::CUevent;
 use cudarc::driver::sys::cudaError_enum;
-use nihil_common::general::{CallParameter, CallReturnChannel};
-use nihil_common::{MAX_GPUS, MigrationArgs, MigrationResponse};
+use nixie_common::general::{CallParameter, CallReturnChannel};
+use nixie_common::{MAX_GPUS, MigrationArgs, MigrationResponse};
 
 use crate::init::should_have_initialized;
 use crate::memory::{default_alloc_prop, map_mem_handle, unmap_and_release_mem_handle};

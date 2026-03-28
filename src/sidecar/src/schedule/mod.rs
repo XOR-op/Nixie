@@ -4,7 +4,7 @@ use std::{
 };
 
 use colored::Colorize;
-use nihil_common::{
+use nixie_common::{
     ActivityUpdate, ActivityUpdateContent, MemoryRequest, ProcessLocalDeviceId, SchedulingArgs,
     general::CallParameter,
 };

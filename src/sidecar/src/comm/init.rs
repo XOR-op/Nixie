@@ -6,8 +6,8 @@ use crate::comm::controller::Controller;
 use colored::Colorize;
 use futures::StreamExt;
 
-use nihil_common::rpc::{DaemonClient, Sidecar, rpc_multiplex_twoway};
-use nihil_common::{Handshake, HandshakeResponse};
+use nixie_common::rpc::{DaemonClient, Sidecar, rpc_multiplex_twoway};
+use nixie_common::{Handshake, HandshakeResponse};
 use tarpc::{
     server::{BaseChannel, Channel},
     tokio_util::codec::LengthDelimitedCodec,
@@ -24,7 +24,7 @@ pub(crate) static COMM: OnceLock<Option<flume::Sender<A2SMessage>>> = OnceLock::
 
 fn init_comm_inner() -> std::io::Result<flume::Sender<A2SMessage>> {
     let (tx, rx) = flume::unbounded();
-    let conn = std::os::unix::net::UnixStream::connect("/tmp/nihilphase.sock")?;
+    let conn = std::os::unix::net::UnixStream::connect("/tmp/nixie.sock")?;
     conn.set_nonblocking(true)?;
     std::thread::spawn(|| {
         tokio::runtime::Builder::new_current_thread()
@@ -94,7 +94,7 @@ pub(crate) fn init_comm() -> Option<flume::Sender<A2SMessage>> {
             eprintln!(
                 "{} {}: {}",
                 "[libcuda_hook]".bold(),
-                "Failed to connect to Nihilphase daemon".red(),
+                "Failed to connect to Nixie daemon".red(),
                 e
             );
             std::process::exit(1);

@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use nihil_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE};
+use nixie_common::{GlobalDeviceId, MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE};
 
 use crate::{
     control::ProcessResidualData,
@@ -255,7 +255,7 @@ where
         tracing::debug!(
             "Device {:?} requires {} of data to migrate in",
             global_id,
-            nihil_common::general::pretty_size(into_gpu_required_size)
+            nixie_common::general::pretty_size(into_gpu_required_size)
         );
         let mut accu_size = 0;
         let mut shm_self_evict_queue = VecDeque::new();
@@ -363,7 +363,7 @@ where
                     acc
                 })
                 .iter()
-                .map(|(pid, size)| (*pid, nihil_common::general::pretty_size(*size)))
+                .map(|(pid, size)| (*pid, nixie_common::general::pretty_size(*size)))
                 .collect();
             let hostmem_process_usage: HashMap<i32, String> = data_manager
                 .hostmem_buffer_ids()
@@ -373,7 +373,7 @@ where
                     acc
                 })
                 .iter()
-                .map(|(pid, size)| (*pid, nihil_common::general::pretty_size(*size)))
+                .map(|(pid, size)| (*pid, nixie_common::general::pretty_size(*size)))
                 .collect();
             let gpu_process_usage: HashMap<i32, String> = out_from_gpu
                 .iter()
@@ -385,12 +385,12 @@ where
                         .sum();
                     (*pid, total_size)
                 })
-                .map(|(pid, size)| (pid, nihil_common::general::pretty_size(size)))
+                .map(|(pid, size)| (pid, nixie_common::general::pretty_size(size)))
                 .collect();
             tracing::warn!(
                 "\nCurrent requirement for {}: {}\nCurrent memory usage state:\nGPU: {:?}\nSHM: {:?}\nHostMem: {:?}",
                 into_gpu.0,
-                nihil_common::general::pretty_size(into_gpu_required_size),
+                nixie_common::general::pretty_size(into_gpu_required_size),
                 gpu_process_usage,
                 shm_process_usage,
                 hostmem_process_usage,
@@ -726,7 +726,7 @@ where
 #[cfg(test)]
 pub(super) mod tests {
     use colored::Colorize;
-    use nihil_common::{ProcessLocalDeviceId, general::pretty_size, shm::PhysicalMemoryHandleId};
+    use nixie_common::{ProcessLocalDeviceId, general::pretty_size, shm::PhysicalMemoryHandleId};
 
     use super::*;
     use std::{

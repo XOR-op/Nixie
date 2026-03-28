@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
-use nihil_common::{MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE, shm_buffer::ShmBuffer};
+use nixie_common::{MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE, shm_buffer::ShmBuffer};
 use tokio::sync::oneshot;
 
 use crate::runtime::migration::{AllocationCapacity, AllocationCount, Offset};

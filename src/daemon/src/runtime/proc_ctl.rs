@@ -1,7 +1,7 @@
 #![allow(non_upper_case_globals)]
 use std::{collections::HashMap, os::fd::OwnedFd};
 
-use nihil_common::{
+use nixie_common::{
     MAX_GPUS, ProcessLocalDeviceId,
     general::CallParameter,
     rpc::SidecarClient,
@@ -11,7 +11,7 @@ use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use crate::{
     control::{AllocationData, PhysicalMemoryData, ProcessMetadata, ProcessResidualData},
-    error::NihilphaseError,
+    error::NixieError,
     runtime::schedule::control::ScheduleControlReq,
 };
 
@@ -59,7 +59,7 @@ impl ProcessControl {
         }
     }
 
-    async fn run_inner(mut self) -> Result<(), NihilphaseError> {
+    async fn run_inner(mut self) -> Result<(), NixieError> {
         tracing::info!("Listen events from process [pid={}]", self.peer_pid);
         loop {
             tokio::select! {

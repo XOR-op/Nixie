@@ -1,6 +1,6 @@
 use std::ffi::CString;
 
-use nihil_common::shm::{Shm, ShmGuard};
+use nixie_common::shm::{Shm, ShmGuard};
 
 use nix::libc;
 
@@ -18,7 +18,7 @@ pub(crate) fn open_shm(path: String) -> Result<ShmGuard, DaemonError> {
         ));
     }
     let shm = ShmGuard::new(unsafe {
-        Shm::open_copy_at(shm_fd, nihil_common::shm::Shm::SHM_STRUCT_SIZE).map_err(|e| {
+        Shm::open_copy_at(shm_fd, nixie_common::shm::Shm::SHM_STRUCT_SIZE).map_err(|e| {
             DaemonError::Errno("open_shm(): mmap failed", nix::errno::Errno::from_raw(e))
         })?
     });

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use bytes::BytesMut;
-use nihil_common::{MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE};
+use nixie_common::{MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE};
 
 use crate::{
     error::HybridBufferError,
@@ -58,7 +58,7 @@ impl HostMemBufferManager {
         if data_len > MAX_ALLOCATION_SIZE {
             tracing::warn!(
                 "Invalid store request: data length = {}",
-                nihil_common::general::pretty_size(data_len as u64)
+                nixie_common::general::pretty_size(data_len as u64)
             );
             return Err(HybridBufferError::InvalidInputBuffer);
         }
@@ -110,8 +110,8 @@ impl HostMemBufferManager {
         if buffer_id.size as usize > MAX_ALLOCATION_SIZE || data_len < buffer_id.size as usize {
             tracing::warn!(
                 "Invalid load request: buffer size = {}, data length = {}",
-                nihil_common::general::pretty_size(buffer_id.size as u64),
-                nihil_common::general::pretty_size(data_len as u64)
+                nixie_common::general::pretty_size(buffer_id.size as u64),
+                nixie_common::general::pretty_size(data_len as u64)
             );
             return Err(HybridBufferError::InvalidInputBuffer);
         }

@@ -1,4 +1,4 @@
-use nihil_common::general::CallParameter;
+use nixie_common::general::CallParameter;
 
 use crate::{
     control::{

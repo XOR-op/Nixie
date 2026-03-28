@@ -29,7 +29,7 @@ static SIDECAR_CFG: OnceLock<SidecarConfig> = OnceLock::new();
 pub(crate) fn sidecar_config() -> &'static SidecarConfig {
     SIDECAR_CFG.get_or_init(|| {
         let mut cfg = SidecarConfig::default();
-        if let Ok(content) = std::env::var("NIHIL_CFG") {
+        if let Ok(content) = std::env::var("NIXIE_CFG") {
             for pair in content.split("/") {
                 let mut iter = pair.split(":");
                 if let Some(key) = iter.next()
@@ -73,7 +73,7 @@ pub(crate) fn sidecar_config() -> &'static SidecarConfig {
             if cfg.log_level >= 2 {
                 eprintln!(
                     "{} Sidecar inited with {:?}",
-                    colored::Colorize::green("NIHIL-INFO"),
+                    colored::Colorize::green("NIXIE-INFO"),
                     cfg
                 );
             }

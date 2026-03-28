@@ -8,7 +8,7 @@ mod storage_buffer;
 use std::sync::Arc;
 
 pub use hostmem_buffer::HostMemBufferManager;
-use nihil_common::{GlobalDeviceId, shm::PhysicalMemoryHandleId};
+use nixie_common::{GlobalDeviceId, shm::PhysicalMemoryHandleId};
 use serde::{Deserialize, Serialize};
 pub use shm_buffer::ShmBufferManager;
 pub use storage_buffer::StorageBufferManager;
@@ -23,7 +23,7 @@ pub struct BufferId {
 
 impl BufferId {
     pub fn get_allocation_count(&self) -> AllocationCount {
-        AllocationCount(self.size.div_ceil(nihil_common::MIN_ALLOCATION_SIZE as u32))
+        AllocationCount(self.size.div_ceil(nixie_common::MIN_ALLOCATION_SIZE as u32))
     }
 }
 

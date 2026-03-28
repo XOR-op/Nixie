@@ -5,7 +5,7 @@ use std::{
 };
 
 use itertools::Itertools;
-use nihil_common::{
+use nixie_common::{
     GlobalDeviceId, MigrationArgs, MigrationResponse, ProcessLocalDeviceId, general::pretty_size,
     rpc::SidecarClient, shm::PhysicalMemoryHandleId,
 };
