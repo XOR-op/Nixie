@@ -12,7 +12,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::comm::update_gpu_memory_free;
 use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
-use crate::memory::{deallocate_list, get_max_allocation_size, populate_entry};
+use crate::memory::{deallocate_list, get_max_allocation_size, global_tracker, populate_entry};
 use crate::schedule::{LaunchType, SCHED_CTL, require_reserved_memory};
 use crate::utils::get_device;
 use crate::{GENERIC_DATA, check_cu_err, warn_eprintln};
@@ -87,6 +87,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                 .unwrap()
                 .insert(unsafe { *dev_ptr } as u64, size as u64);
             CURRENT_ALLOCATION_SIZE.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
+            global_tracker().insert(unsafe { *dev_ptr } as u64, size as u64);
         }
         return res;
     }
@@ -162,6 +163,8 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         }
         CURRENT_ALLOCATION_SIZE
             .fetch_add(rounded_up_size as u64, std::sync::atomic::Ordering::Relaxed);
+        // in AddrTracker we track user-specified range instead of the actual allocated range
+        global_tracker().insert(unsafe { *dev_ptr } as u64, size as u64);
         require_reserved_memory(CUDA_CONTROL_PLANE_RESERVATION_SIZE, device_id);
     }
     res
@@ -227,6 +230,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
                     freed_memory: released_handles,
                 });
             }
+            global_tracker().remove(dev_ptr as u64);
             return cudaError_enum::CUDA_SUCCESS;
         }
     }
