@@ -39,7 +39,9 @@ fn device_limit_to_string(limit: &DeviceLimit, device_memory_mb: &[usize]) -> St
             r,
             device_memory_mb
                 .iter()
-                .map(|mb| nixie_common::general::pretty_size(*mb as u64 * 1024 * 1024))
+                .map(|mb| nixie_common::general::pretty_size(
+                    ((*mb as u64 * 1024 * 1024) as f64 * r) as u64
+                ))
                 .collect::<Vec<_>>()
                 .join(",")
         ),
@@ -57,7 +59,9 @@ fn device_limit_to_string(limit: &DeviceLimit, device_memory_mb: &[usize]) -> St
                     r,
                     device_memory_mb
                         .get(dev_id.0 as usize)
-                        .map(|mb| nixie_common::general::pretty_size(*mb as u64 * 1024 * 1024))
+                        .map(|mb| nixie_common::general::pretty_size(
+                            ((*mb as u64 * 1024 * 1024) as f64 * r) as u64
+                        ))
                         .unwrap_or_else(|| "unknown".to_string())
                 ),
                 DeviceLimitEntry::Absolute(b) => nixie_common::general::pretty_size(*b),

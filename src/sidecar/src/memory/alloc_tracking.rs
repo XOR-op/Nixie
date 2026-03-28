@@ -3,7 +3,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use crate::warn_eprintln;
+use crate::{debug_eprintln, warn_eprintln};
 
 #[derive(Debug, Clone)]
 pub struct AllocRecord {
@@ -28,7 +28,7 @@ impl AllocTracker {
         if let Some((&left_ptr, left_record)) = tracker.range(..=dev_ptr).next_back()
             && left_ptr + left_record.size > dev_ptr
         {
-            warn_eprintln!(
+            debug_eprintln!(
                 "Warning: Overlapping device pointer detected: new ({:#x}, size {}) overlaps with existing ({:#x}, size {})",
                 dev_ptr,
                 size,
