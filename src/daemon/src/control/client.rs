@@ -494,14 +494,12 @@ impl ControlClient {
             .get_config(tarpc::context::current())
             .await
             .map_err(|e| ClientError::ClientRpc("update_config, failed to get", e))?;
-        if let Some(device_threshold) = args.device_threshold {
-            if (0.0..=1.0).contains(&device_threshold) {
-                config.device_threshold = device_threshold;
-            } else {
-                return Err(ClientError::Args(
-                    "device_threshold must be in [0, 1]".to_string(),
-                ));
-            }
+        if let Some(spec) = args.device_limit {
+            let limit =
+                crate::control::parse::parse_device_limit(&spec).map_err(ClientError::Args)?;
+            crate::control::parse::validate_device_limit(&limit, &config.device_memory_mb)
+                .map_err(ClientError::Args)?;
+            config.device_limit = limit;
         }
         if let Some(schedule_cooldown) = args.schedule_cooldown {
             if schedule_cooldown == 0 {

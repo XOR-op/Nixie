@@ -64,9 +64,9 @@ struct UpdateConfigArgs {
     /// Set schedule cooldown in ms
     #[arg(short = 'c', long)]
     pub schedule_cooldown: Option<u32>,
-    /// Set device threshold
-    #[arg(short = 't', long)]
-    pub device_threshold: Option<f64>,
+    /// Set device memory limit spec (e.g. "g:0.95", "g:31g", "g:31g/3:24g")
+    #[arg(short = 'l', long)]
+    pub device_limit: Option<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -79,9 +79,9 @@ struct DaemonArgs {
     /// Set host memory size (e.g., "32g", "1024m")
     #[arg(long, value_parser = parse_size, visible_aliases = ["host", "ram","paged"])]
     pub hostmem: Option<u64>,
-    /// Set device memory usage ratio (0.0 - 1.0)
-    #[arg(long)]
-    pub device_ratio: Option<f64>,
+    /// Set device memory limit spec (e.g. "g:0.95", "g:31g", "g:31g/3:24g")
+    #[arg(long, visible_aliases = ["dlimit"], short = 'l')]
+    pub device_limit: Option<String>,
     /// Enable auto prefetching
     #[arg(long, default_value = "true")]
     pub auto_prefetch: Option<bool>,
@@ -195,7 +195,7 @@ fn main() {
         let cli_config = CliConfig {
             shmem_size: args.shmem,
             hostmem_size: args.hostmem,
-            device_threshold: args.device_ratio,
+            device_limit: args.device_limit,
             automatic_prefetch: args.auto_prefetch,
         };
         if let Err(e) = init_config(args.config_path, cli_config) {

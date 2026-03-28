@@ -50,8 +50,10 @@ pub(super) fn get_allowed_devices_mem(
             device::get(dev_id).map_err(|e| DaemonError::Cuda("get device", e.0))?;
         let mem = unsafe { device::total_mem(device_handle) }
             .map_err(|e| DaemonError::Cuda("get total memory", e.0))?;
-        let mem = (mem as f64 * config.device_threshold) as usize;
-        mem_info.insert(GlobalDeviceId(dev_id), mem as u64);
+        let mem = config
+            .device_limit
+            .get_bytes(GlobalDeviceId(dev_id), mem as u64);
+        mem_info.insert(GlobalDeviceId(dev_id), mem);
     }
     Ok(mem_info)
 }
