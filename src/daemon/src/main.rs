@@ -346,10 +346,8 @@ fn run_command(args: RunArgs) {
         }
     };
 
-    let mut env_vars: Vec<(&str, String)> = vec![(
-        "LD_PRELOAD".into(),
-        sidecar_path.to_string_lossy().into_owned(),
-    )];
+    let mut env_vars: Vec<(&str, String)> =
+        vec![("LD_PRELOAD", sidecar_path.to_string_lossy().into_owned())];
 
     // Set CUDA_VISIBLE_DEVICES if provided
     if let Some(device) = args.device {

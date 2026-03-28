@@ -274,7 +274,8 @@ impl nixie_common::rpc::Daemon for DaemonServer {
             rpc_data_tx: state.rpc_data_tx,
         });
         let mapped_mem_sizes = {
-            let mem_size = crate::runtime::get_allowed_devices_mem().ok()?;
+            let config = crate::config::load_config();
+            let mem_size = crate::runtime::get_allowed_devices_mem(&config).ok()?;
             mem_size
                 .into_iter()
                 .filter_map(|(dev_id, size)| {
@@ -284,6 +285,14 @@ impl nixie_common::rpc::Daemon for DaemonServer {
                 })
                 .collect::<Vec<_>>()
         };
+        tracing::info!(
+            "Client[pid={}] VRAM limit: {:?}",
+            peer_pid,
+            mapped_mem_sizes
+                .iter()
+                .map(|(dev_id, size)| format!("{} ({} MB)", dev_id.0, size / 1024 / 1024))
+                .collect::<Vec<_>>()
+        );
         Some(HandshakeResponse {
             available_vram_sizes: mapped_mem_sizes,
             buffer_shm_path: state.buffer_shmem_path,

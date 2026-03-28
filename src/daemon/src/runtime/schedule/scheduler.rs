@@ -255,14 +255,12 @@ impl Scheduler {
         let control = self.list.write().await;
         let config = load_config();
         let mut swap_out = None;
-        if mem_req.is_some() {
+        if let Some(mem_req) = &mem_req {
             tracing::debug!(
                 "Process {} requests memory: {}",
                 incoming_pid,
                 nixie_common::general::pretty_size(
                     mem_req
-                        .as_ref()
-                        .unwrap()
                         .mem_req
                         .iter()
                         .map(|v| v.1.iter().sum::<u64>())

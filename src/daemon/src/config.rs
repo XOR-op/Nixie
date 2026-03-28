@@ -88,6 +88,26 @@ pub fn load_config() -> Arc<Config> {
         .clone()
 }
 
+pub fn infer_default_config() -> Config {
+    let nvml = crate::staticly::get_nvml();
+    let devices = nvml.device_count().unwrap_or(0);
+    let mut device_memory_mb = Vec::with_capacity(devices as usize);
+    for i in 0..devices {
+        let device = nvml.device_by_index(i).unwrap();
+        let memory = device.memory_info().unwrap();
+        device_memory_mb.push(memory.total as usize / 1024 / 1024);
+    }
+    Config {
+        shmem_size_mb: 32 * 1024,
+        hostmem_size_mb: 32 * 1024,
+        device_memory_mb,
+        device_threshold: 0.95,
+        schedule_cooldown: None,
+        automatic_prefetch: true,
+        preallocate_hostmem: false,
+    }
+}
+
 pub fn init_config(config_path: Option<PathBuf>, cli_config: CliConfig) -> Result<(), DaemonError> {
     let nvml = crate::staticly::get_nvml();
     let devices = nvml
@@ -103,17 +123,8 @@ pub fn init_config(config_path: Option<PathBuf>, cli_config: CliConfig) -> Resul
             .map_err(|e| DaemonError::Nvml("memory_info", e))?;
         device_memory_mb.push(memory.total as usize / 1024 / 1024);
     }
-    // default value
-    let mut config = Config {
-        shmem_size_mb: 32 * 1024,
-        hostmem_size_mb: 32 * 1024,
-        device_memory_mb,
-        device_threshold: 0.95,
-        schedule_cooldown: None,
-        automatic_prefetch: true,
-        preallocate_hostmem: false,
-    };
 
+    let mut config = infer_default_config();
     // Apply file config first
     if let Some(config_path) = config_path {
         let config_content = std::fs::read_to_string(config_path)
