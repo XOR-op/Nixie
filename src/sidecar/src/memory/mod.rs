@@ -1,4 +1,5 @@
 mod alloc_tracking;
+mod async_pool;
 mod streaming;
 use std::{collections::HashMap, num::NonZeroU32};
 
@@ -16,6 +17,7 @@ use crate::{
     schedule::{LaunchType, SCHED_CTL},
 };
 pub use alloc_tracking::global_tracker;
+pub(crate) use async_pool::{CachedBlock, async_pool};
 pub use streaming::{MEMORY_MIGRATION_CTL, init_memory_migration_ctl};
 
 pub(super) fn default_alloc_prop(device: i32) -> CUmemAllocationProp {

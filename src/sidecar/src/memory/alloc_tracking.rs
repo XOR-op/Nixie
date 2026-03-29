@@ -3,12 +3,16 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use nixie_common::ProcessLocalDeviceId;
+
 use crate::{debug_eprintln, warn_eprintln};
 
 #[derive(Debug, Clone)]
 pub struct AllocRecord {
     pub dev_ptr: u64,
     pub size: u64,
+    pub alloc_size: u64,
+    pub device: ProcessLocalDeviceId,
 }
 
 pub struct AllocTracker {
@@ -22,7 +26,7 @@ impl AllocTracker {
         }
     }
 
-    pub fn insert(&self, dev_ptr: u64, size: u64) {
+    pub fn insert(&self, dev_ptr: u64, size: u64, alloc_size: u64, device: ProcessLocalDeviceId) {
         let mut tracker = self.tracker.lock().unwrap();
         // first check for overlaps in left neighbor
         if let Some((&left_ptr, left_record)) = tracker.range(..=dev_ptr).next_back()
@@ -36,7 +40,15 @@ impl AllocTracker {
                 left_record.size
             );
         }
-        tracker.insert(dev_ptr, AllocRecord { dev_ptr, size });
+        tracker.insert(
+            dev_ptr,
+            AllocRecord {
+                dev_ptr,
+                size,
+                alloc_size,
+                device,
+            },
+        );
     }
 
     pub fn remove(&self, dev_ptr: u64) {
@@ -47,6 +59,11 @@ impl AllocTracker {
                 dev_ptr
             );
         }
+    }
+
+    pub fn find_exact(&self, dev_ptr: u64) -> Option<AllocRecord> {
+        let tracker = self.tracker.lock().unwrap();
+        tracker.get(&dev_ptr).cloned()
     }
 
     #[allow(unused)]

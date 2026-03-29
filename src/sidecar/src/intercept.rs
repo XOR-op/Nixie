@@ -1,4 +1,4 @@
-use cudarc::driver::sys::{CUstream, cudaError_enum};
+use cudarc::driver::sys::{CUevent_flags_enum, CUstream, cudaError_enum};
 use nix::libc::{self, RTLD_NEXT, c_char, c_int, dlsym};
 use nix::sys::stat::mode_t;
 use nixie_common::shm::{AllocationEntry, PhysicalMemoryHandleId};
@@ -12,7 +12,10 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::comm::update_gpu_memory_free;
 use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
-use crate::memory::{deallocate_list, get_max_allocation_size, global_tracker, populate_entry};
+use crate::memory::{
+    CachedBlock, async_pool, deallocate_list, get_max_allocation_size, global_tracker,
+    populate_entry,
+};
 use crate::schedule::{LaunchType, SCHED_CTL, require_reserved_memory};
 use crate::utils::get_device;
 use crate::{GENERIC_DATA, check_cu_err, warn_eprintln};
@@ -60,6 +63,17 @@ pub(crate) fn cuda_mem_get_info_impl() -> (usize, usize) {
 static SMALL_ALLOCATION: Mutex<BTreeMap<u64, u64>> = Mutex::new(BTreeMap::new());
 static CURRENT_ALLOCATION_SIZE: AtomicU64 = AtomicU64::new(0);
 
+/// Synchronize and free a list of cached blocks released from the pool.
+fn free_cached_blocks(blocks: Vec<CachedBlock>) {
+    for block in blocks {
+        unsafe {
+            cudarc::driver::sys::cuEventSynchronize(block.event);
+            cudarc::driver::sys::cuEventDestroy_v2(block.event);
+        }
+        cudaFree(block.ptr as *mut libc::c_void);
+    }
+}
+
 #[allow(non_snake_case)]
 #[unsafe(no_mangle)]
 pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cudaError_enum {
@@ -87,7 +101,12 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                 .unwrap()
                 .insert(unsafe { *dev_ptr } as u64, size as u64);
             CURRENT_ALLOCATION_SIZE.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
-            global_tracker().insert(unsafe { *dev_ptr } as u64, size as u64);
+            global_tracker().insert(
+                unsafe { *dev_ptr } as u64,
+                size as u64,
+                size as u64,
+                ProcessLocalDeviceId(device_id),
+            );
         }
         return res;
     }
@@ -163,8 +182,12 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         }
         CURRENT_ALLOCATION_SIZE
             .fetch_add(rounded_up_size as u64, std::sync::atomic::Ordering::Relaxed);
-        // in AddrTracker we track user-specified range instead of the actual allocated range
-        global_tracker().insert(unsafe { *dev_ptr } as u64, size as u64);
+        global_tracker().insert(
+            unsafe { *dev_ptr } as u64,
+            size as u64,
+            rounded_up_size as u64,
+            ProcessLocalDeviceId(device_id),
+        );
         require_reserved_memory(CUDA_CONTROL_PLANE_RESERVATION_SIZE, device_id);
     }
     res
@@ -177,6 +200,32 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     static FREE_FN: OnceLock<CudaFreeType> = OnceLock::new();
     generate_init_fn!(CudaFreeType, cr"cudaFree");
     let free_func = FREE_FN.get_or_init(init_fn);
+
+    // Check if this pointer is cached in the async pool
+    {
+        let block = {
+            let mut pool = async_pool().lock().unwrap();
+            // Search all devices since we don't know which device this ptr belongs to
+            let mut found = None;
+            for dev in 0..MAX_GPUS {
+                if let Some(block) =
+                    pool.remove_by_ptr(dev_ptr as u64, ProcessLocalDeviceId(dev as i32))
+                {
+                    found = Some(block);
+                    break;
+                }
+            }
+            found
+        };
+        if let Some(block) = block {
+            // Sync the event to ensure GPU is done, then destroy it
+            unsafe {
+                cudarc::driver::sys::cuEventSynchronize(block.event);
+                cudarc::driver::sys::cuEventDestroy_v2(block.event);
+            }
+            // Fall through to normal cudaFree logic below — entries are still in tables
+        }
+    }
 
     // first check if is non-managed allocation
     if let Some(size) = SMALL_ALLOCATION.lock().unwrap().remove(&(dev_ptr as u64)) {
@@ -245,23 +294,107 @@ pub extern "C" fn cudaMallocAsync(
     stream: CUstream,
 ) -> cudaError_enum {
     init_cuda_env();
+    let device_id = get_device();
 
-    // sync and call standard cudaMalloc
-    let err = unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
-    if err != cudaError_enum::CUDA_SUCCESS {
-        return err;
+    SCHED_CTL.launch_allowed(LaunchType::Malloc);
+
+    // Compute effective size (same rounding as cudaMalloc)
+    let effective_size = if size >= MIN_ALLOCATION_SIZE {
+        (size + MIN_ALLOCATION_SIZE - 1) & !(MIN_ALLOCATION_SIZE - 1)
+    } else {
+        size
+    };
+
+    // Try the async pool first — only returns blocks whose events have completed
+    {
+        let mut pool = async_pool().lock().unwrap();
+        if let Some(block) = pool.try_alloc(effective_size, ProcessLocalDeviceId(device_id)) {
+            // Event is already completed (cuEventQuery succeeded in try_alloc), just destroy it
+            unsafe { cudarc::driver::sys::cuEventDestroy_v2(block.event) };
+            unsafe { *dev_ptr = block.ptr as *mut libc::c_void };
+            return cudaError_enum::CUDA_SUCCESS;
+        }
     }
-    cudaMalloc(dev_ptr, size)
+
+    // No cached block available — fall through to cudaMalloc after synchronization
+    let res = unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+    if res != cudaError_enum::CUDA_SUCCESS {
+        return res;
+    }
+    let result = cudaMalloc(dev_ptr, size);
+
+    // On OOM: release cached blocks and retry
+    if result == cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY {
+        let blocks = {
+            let mut pool = async_pool().lock().unwrap();
+            pool.release_cached(device_id)
+        };
+        if !blocks.is_empty() {
+            free_cached_blocks(blocks);
+            return cudaMalloc(dev_ptr, size);
+        }
+    }
+
+    result
 }
 
 #[allow(non_snake_case)]
 #[unsafe(no_mangle)]
 pub extern "C" fn cudaFreeAsync(dev_ptr: *mut libc::c_void, stream: CUstream) -> cudaError_enum {
-    let err = unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
-    if err != cudaError_enum::CUDA_SUCCESS {
-        return err;
+    const MAX_ASYNC_CACHE_SIZE: u64 = 256 * 1024 * 1024;
+    if dev_ptr.is_null() {
+        return cudaError_enum::CUDA_SUCCESS;
     }
-    cudaFree(dev_ptr)
+
+    let ptr = dev_ptr as u64;
+
+    // Look up the actual allocation size
+    let record = match global_tracker().find_exact(dev_ptr as u64) {
+        Some(info) => info,
+        None => return cudaError_enum::CUDA_ERROR_INVALID_VALUE,
+    };
+
+    // For allocation that is too large, free directly without caching
+    if record.alloc_size > MAX_ASYNC_CACHE_SIZE {
+        unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+        return cudaFree(dev_ptr);
+    }
+
+    // Create and record an event on the stream to track when prior work completes
+    let mut event: cudarc::driver::sys::CUevent = std::ptr::null_mut();
+    let err = unsafe {
+        cudarc::driver::sys::cuEventCreate(
+            &mut event,
+            CUevent_flags_enum::CU_EVENT_DISABLE_TIMING as u32,
+        )
+    };
+    if err != cudaError_enum::CUDA_SUCCESS {
+        // Fallback: synchronize stream and do regular free
+        unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+        return cudaFree(dev_ptr);
+    }
+
+    let err = unsafe { cudarc::driver::sys::cuEventRecord(event, stream) };
+    if err != cudaError_enum::CUDA_SUCCESS {
+        unsafe { cudarc::driver::sys::cuEventDestroy_v2(event) };
+        unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+        return cudaFree(dev_ptr);
+    }
+
+    // Cache the block in the pool — no stats changes, block stays tracked as allocated
+    {
+        let mut pool = async_pool().lock().unwrap();
+        pool.cache_free(
+            CachedBlock {
+                ptr,
+                actual_size: record.alloc_size as usize,
+                event,
+            },
+            record.device,
+        );
+    }
+
+    cudaError_enum::CUDA_SUCCESS
 }
 
 #[allow(unused)]
