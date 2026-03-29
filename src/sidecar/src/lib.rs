@@ -9,6 +9,7 @@ use std::{ffi::CString, sync::OnceLock};
 use utils::set_device;
 
 mod comm;
+mod cu_api;
 mod env_config;
 mod init;
 mod intercept;
@@ -34,7 +35,7 @@ impl CuStreamWrapper {
         set_device(device);
         let mut stream = std::ptr::null_mut();
         let res = unsafe {
-            cudarc::driver::sys::cuStreamCreate(
+            cu_api::cuStreamCreate(
                 &mut stream,
                 cudarc::driver::sys::CUstream_flags_enum::CU_STREAM_NON_BLOCKING as u32,
             )

@@ -18,7 +18,7 @@ use crate::memory::{
 };
 use crate::schedule::{LaunchType, SCHED_CTL, require_reserved_memory};
 use crate::utils::get_device;
-use crate::{GENERIC_DATA, check_cu_err, warn_eprintln};
+use crate::{GENERIC_DATA, check_cu_err, cu_api, warn_eprintln};
 
 #[macro_export]
 macro_rules! generate_init_fn_as {
@@ -67,8 +67,8 @@ static CURRENT_ALLOCATION_SIZE: AtomicU64 = AtomicU64::new(0);
 fn free_cached_blocks(blocks: Vec<CachedBlock>) {
     for block in blocks {
         unsafe {
-            cudarc::driver::sys::cuEventSynchronize(block.event);
-            cudarc::driver::sys::cuEventDestroy_v2(block.event);
+            cu_api::cuEventSynchronize(block.event);
+            cu_api::cuEventDestroy_v2(block.event);
         }
         cudaFree(block.ptr as *mut libc::c_void);
     }
@@ -114,7 +114,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
     // round up the size to the nearest multiple of MIN_ALLOCATION_SIZE
     let rounded_up_size = (size + MIN_ALLOCATION_SIZE - 1) & !(MIN_ALLOCATION_SIZE - 1);
     let res = unsafe {
-        cudarc::driver::sys::cuMemAddressReserve(
+        cu_api::cuMemAddressReserve(
             dev_ptr as *mut _,
             rounded_up_size,
             MIN_ALLOCATION_SIZE,
@@ -220,8 +220,8 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
         if let Some(block) = block {
             // Sync the event to ensure GPU is done, then destroy it
             unsafe {
-                cudarc::driver::sys::cuEventSynchronize(block.event);
-                cudarc::driver::sys::cuEventDestroy_v2(block.event);
+                cu_api::cuEventSynchronize(block.event);
+                cu_api::cuEventDestroy_v2(block.event);
             }
             // Fall through to normal cudaFree logic below — entries are still in tables
         }
@@ -310,14 +310,14 @@ pub extern "C" fn cudaMallocAsync(
         let mut pool = async_pool().lock().unwrap();
         if let Some(block) = pool.try_alloc(effective_size, ProcessLocalDeviceId(device_id)) {
             // Event is already completed (cuEventQuery succeeded in try_alloc), just destroy it
-            unsafe { cudarc::driver::sys::cuEventDestroy_v2(block.event) };
+            unsafe { cu_api::cuEventDestroy_v2(block.event) };
             unsafe { *dev_ptr = block.ptr as *mut libc::c_void };
             return cudaError_enum::CUDA_SUCCESS;
         }
     }
 
     // No cached block available — fall through to cudaMalloc after synchronization
-    let res = unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+    let res = unsafe { cu_api::cuStreamSynchronize(stream) };
     if res != cudaError_enum::CUDA_SUCCESS {
         return res;
     }
@@ -356,28 +356,28 @@ pub extern "C" fn cudaFreeAsync(dev_ptr: *mut libc::c_void, stream: CUstream) ->
 
     // For allocation that is too large, free directly without caching
     if record.alloc_size > MAX_ASYNC_CACHE_SIZE {
-        unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+        unsafe { cu_api::cuStreamSynchronize(stream) };
         return cudaFree(dev_ptr);
     }
 
     // Create and record an event on the stream to track when prior work completes
     let mut event: cudarc::driver::sys::CUevent = std::ptr::null_mut();
     let err = unsafe {
-        cudarc::driver::sys::cuEventCreate(
+        cu_api::cuEventCreate(
             &mut event,
             CUevent_flags_enum::CU_EVENT_DISABLE_TIMING as u32,
         )
     };
     if err != cudaError_enum::CUDA_SUCCESS {
         // Fallback: synchronize stream and do regular free
-        unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+        unsafe { cu_api::cuStreamSynchronize(stream) };
         return cudaFree(dev_ptr);
     }
 
-    let err = unsafe { cudarc::driver::sys::cuEventRecord(event, stream) };
+    let err = unsafe { cu_api::cuEventRecord(event, stream) };
     if err != cudaError_enum::CUDA_SUCCESS {
-        unsafe { cudarc::driver::sys::cuEventDestroy_v2(event) };
-        unsafe { cudarc::driver::sys::cuStreamSynchronize(stream) };
+        unsafe { cu_api::cuEventDestroy_v2(event) };
+        unsafe { cu_api::cuStreamSynchronize(stream) };
         return cudaFree(dev_ptr);
     }
 
@@ -492,7 +492,7 @@ pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaErr
     init_cuda_env();
     let mut device_id = 0;
     check_cu_err!(
-        unsafe { cudarc::driver::sys::cuCtxGetDevice(&mut device_id as *mut _) },
+        unsafe { cu_api::cuCtxGetDevice(&mut device_id as *mut _) },
         "get device"
     );
     let res = mem_get_info_func(free, total);

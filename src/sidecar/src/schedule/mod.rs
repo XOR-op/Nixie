@@ -11,8 +11,9 @@ use nixie_common::{
 use stats::LaunchStats;
 
 use crate::{
-    check_cu_err, debug_eprintln, env_config::sidecar_config, intercept::cuda_mem_get_info_impl,
-    intercept_launch::is_during_capture, set_device, warn_eprintln,
+    check_cu_err, cu_api, debug_eprintln, env_config::sidecar_config,
+    intercept::cuda_mem_get_info_impl, intercept_launch::is_during_capture, set_device,
+    warn_eprintln,
 };
 
 mod stats;
@@ -107,18 +108,12 @@ impl Scheduler {
                 allow_running.program_state = ProgramState::Paused;
                 let mut dev_count = 0;
                 unsafe {
-                    check_cu_err!(
-                        cudarc::driver::sys::cuDeviceGetCount(&mut dev_count),
-                        "get device count"
-                    )
+                    check_cu_err!(cu_api::cuDeviceGetCount(&mut dev_count), "get device count")
                 };
                 for i in 0..dev_count {
                     set_device(i);
                     unsafe {
-                        check_cu_err!(
-                            cudarc::driver::sys::cuCtxSynchronize(),
-                            "synchronize all contexts"
-                        )
+                        check_cu_err!(cu_api::cuCtxSynchronize(), "synchronize all contexts")
                     };
                 }
             }

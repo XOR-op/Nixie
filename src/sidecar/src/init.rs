@@ -4,7 +4,7 @@ use nixie_common::shm_buffer::ShmBuffer;
 
 use crate::comm::init::{COMM, init_comm};
 use crate::memory::{MEMORY_MIGRATION_CTL, init_memory_migration_ctl};
-use crate::{GenericData, check_cu_err, set_device, shm_buf, warn_eprintln};
+use crate::{GenericData, check_cu_err, cu_api, set_device, shm_buf, warn_eprintln};
 
 pub(crate) fn should_have_initialized() -> GenericData {
     panic!("GENERIC_DATA should already be initialized by init_comm");
@@ -25,7 +25,7 @@ pub(crate) fn init_cuda_env() {
     let mut guard = FIRST_TIME.lock().unwrap();
     if *guard {
         let mut cur_device = std::ptr::null_mut();
-        let error = unsafe { cudarc::driver::sys::cuCtxGetCurrent(&mut cur_device) };
+        let error = unsafe { cu_api::cuCtxGetCurrent(&mut cur_device) };
         if error == cudaError_enum::CUDA_SUCCESS {
             if cur_device.is_null() {
                 set_device(0);
@@ -37,9 +37,9 @@ pub(crate) fn init_cuda_env() {
     }
     *guard = true;
     let mut dev_cnt = 0;
-    let res = unsafe { cudarc::driver::sys::cuDeviceGetCount(&mut dev_cnt) };
+    let res = unsafe { cu_api::cuDeviceGetCount(&mut dev_cnt) };
     if res == cudaError_enum::CUDA_ERROR_NOT_INITIALIZED {
-        check_cu_err!(unsafe { cudarc::driver::sys::cuInit(0) }, "initialize CUDA");
+        check_cu_err!(unsafe { cu_api::cuInit(0) }, "initialize CUDA");
         set_device(0);
         crate::debug_eprintln!("CUDA initialized successfully");
     } else if res == cudaError_enum::CUDA_SUCCESS {
@@ -88,7 +88,7 @@ fn init_mapped_gpu_memory() {
         let shm_buf_ptr = global_buf.at_offset(0, 1).unwrap();
         let size = global_buf.size();
         check_cu_err!(
-            cudarc::driver::sys::cuMemHostRegister_v2(
+            cu_api::cuMemHostRegister_v2(
                 shm_buf_ptr as *mut nix::libc::c_void,
                 size,
                 cudarc::driver::sys::CU_MEMHOSTALLOC_PORTABLE,

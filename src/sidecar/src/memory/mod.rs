@@ -13,7 +13,7 @@ use nixie_common::{
 };
 
 use crate::{
-    check_cu_err,
+    check_cu_err, cu_api,
     schedule::{LaunchType, SCHED_CTL},
 };
 pub use alloc_tracking::global_tracker;
@@ -113,7 +113,7 @@ pub(super) fn alloc_for_mem_handle(
 ) -> Result<(), cudaError_enum> {
     let mut cu_handle = 0u64;
     let res = unsafe {
-        cudarc::driver::sys::cuMemCreate(
+        cu_api::cuMemCreate(
             &mut cu_handle as *mut _,
             handle.size,
             alloc_prop as *const _,
@@ -130,21 +130,12 @@ pub(super) fn alloc_for_mem_handle(
 
 pub(super) fn map_mem_handle(handle: &PhysicalMemoryHandle, access_desc: &CUmemAccessDesc) {
     check_cu_err!(
-        unsafe {
-            cudarc::driver::sys::cuMemMap(handle.addr, handle.size, 0, handle.cu_handle.unwrap(), 0)
-        },
+        unsafe { cu_api::cuMemMap(handle.addr, handle.size, 0, handle.cu_handle.unwrap(), 0) },
         "Failed to map memory"
     );
 
     check_cu_err!(
-        unsafe {
-            cudarc::driver::sys::cuMemSetAccess(
-                handle.addr,
-                handle.size,
-                access_desc as *const _,
-                1,
-            )
-        },
+        unsafe { cu_api::cuMemSetAccess(handle.addr, handle.size, access_desc as *const _, 1) },
         "Failed to set memory access"
     );
 }
@@ -152,13 +143,13 @@ pub(super) fn map_mem_handle(handle: &PhysicalMemoryHandle, access_desc: &CUmemA
 pub(super) fn unmap_and_release_mem_handle(handle: &PhysicalMemoryHandle) {
     // unmap first, where the access will be invalidated automatically
     check_cu_err!(
-        unsafe { cudarc::driver::sys::cuMemUnmap(handle.addr, handle.size) },
+        unsafe { cu_api::cuMemUnmap(handle.addr, handle.size) },
         "Failed to unmap memory"
     );
 
     // then release physical allocation
     check_cu_err!(
-        unsafe { cudarc::driver::sys::cuMemRelease(handle.cu_handle.unwrap()) },
+        unsafe { cu_api::cuMemRelease(handle.cu_handle.unwrap()) },
         "Failed to release memory"
     );
 }
@@ -170,13 +161,13 @@ pub(crate) fn deallocate_list(start_idx: NonZeroU32, handle_list: &mut HandleLis
         if handle.on_gpu {
             // unmap first, where the access will be invalidated automatically
             check_cu_err!(
-                unsafe { cudarc::driver::sys::cuMemUnmap(handle.addr, handle.size) },
+                unsafe { cu_api::cuMemUnmap(handle.addr, handle.size) },
                 "Failed to unmap memory"
             );
 
             // then release physical allocation
             check_cu_err!(
-                unsafe { cudarc::driver::sys::cuMemRelease(handle.cu_handle.unwrap()) },
+                unsafe { cu_api::cuMemRelease(handle.cu_handle.unwrap()) },
                 "Failed to release memory"
             );
             handle.cu_handle = None;

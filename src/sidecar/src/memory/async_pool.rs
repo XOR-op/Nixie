@@ -4,6 +4,8 @@ use std::sync::{Mutex, OnceLock};
 use cudarc::driver::sys::{CUevent, cudaError_enum};
 use nixie_common::{MAX_GPUS, ProcessLocalDeviceId};
 
+use crate::cu_api;
+
 pub(crate) struct CachedBlock {
     pub ptr: u64,
     pub actual_size: usize,
@@ -72,7 +74,7 @@ impl AsyncPool {
             // Check front of deque first (oldest = most likely completed)
             let mut found_idx = None;
             for (idx, block) in deque.iter().enumerate() {
-                let query_result = unsafe { cudarc::driver::sys::cuEventQuery(block.event) };
+                let query_result = unsafe { cu_api::cuEventQuery(block.event) };
                 if query_result == cudaError_enum::CUDA_SUCCESS {
                     found_idx = Some(idx);
                     break;

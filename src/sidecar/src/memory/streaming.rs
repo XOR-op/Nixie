@@ -8,7 +8,7 @@ use nixie_common::{MAX_GPUS, MigrationArgs, MigrationResponse};
 
 use crate::init::should_have_initialized;
 use crate::memory::{default_alloc_prop, map_mem_handle, unmap_and_release_mem_handle};
-use crate::{CuStreamWrapper, GENERIC_DATA, check_cu_err, set_device, warn_eprintln};
+use crate::{CuStreamWrapper, GENERIC_DATA, check_cu_err, cu_api, set_device, warn_eprintln};
 use crate::{debug_eprintln, global_shm_buffer};
 
 use super::default_access_desc;
@@ -28,7 +28,7 @@ impl MemoryMigrationControl {
         let device_cnt = unsafe {
             let mut count = 0;
             check_cu_err!(
-                cudarc::driver::sys::cuDeviceGetCount(&mut count),
+                cu_api::cuDeviceGetCount(&mut count),
                 "Failed to get device count"
             );
             count
@@ -93,7 +93,7 @@ impl StreamingMemoryMigrator {
         let mut event = std::ptr::null_mut();
         check_cu_err!(
             unsafe {
-                cudarc::driver::sys::cuEventCreate(
+                cu_api::cuEventCreate(
                     &mut event,
                     cudarc::driver::sys::CUevent_flags_enum::CU_EVENT_DISABLE_TIMING as u32,
                 )
@@ -109,7 +109,7 @@ impl StreamingMemoryMigrator {
             // allocate physical memory
             let mut cu_handle = 0u64;
             let res = unsafe {
-                cudarc::driver::sys::cuMemCreate(
+                cu_api::cuMemCreate(
                     &mut cu_handle,
                     total_size,
                     &default_alloc_prop(self.device_id),
@@ -138,7 +138,7 @@ impl StreamingMemoryMigrator {
             for (base, size) in args.host_buffer_offset.iter().zip(args.size.iter()) {
                 check_cu_err!(
                     unsafe {
-                        cudarc::driver::sys::cuMemcpyHtoDAsync_v2(
+                        cu_api::cuMemcpyHtoDAsync_v2(
                             virtual_addr + accu_offset,
                             match get_host_buffer_ptr(*base, *size) {
                                 Some(x) => x as *const _,
@@ -153,7 +153,7 @@ impl StreamingMemoryMigrator {
                 accu_offset += *size as u64;
             }
             check_cu_err!(
-                unsafe { cudarc::driver::sys::cuEventRecord(event, self.h2d_stream.0) },
+                unsafe { cu_api::cuEventRecord(event, self.h2d_stream.0) },
                 "Failed to record CUDA event for h2d copy"
             );
             // send request to worker thread
@@ -196,7 +196,7 @@ impl StreamingMemoryMigrator {
                 };
                 check_cu_err!(
                     unsafe {
-                        cudarc::driver::sys::cuMemcpyDtoHAsync_v2(
+                        cu_api::cuMemcpyDtoHAsync_v2(
                             host_buffer_ptr as *mut _,
                             virtual_addr + accu_offset,
                             *size as usize,
@@ -208,7 +208,7 @@ impl StreamingMemoryMigrator {
                 accu_offset += *size as u64;
             }
             check_cu_err!(
-                unsafe { cudarc::driver::sys::cuEventRecord(event, self.d2h_stream.0) },
+                unsafe { cu_api::cuEventRecord(event, self.d2h_stream.0) },
                 "Failed to record CUDA event for d2h copy"
             );
             // send request to worker thread
@@ -234,11 +234,11 @@ impl StreamingMemoryMigrator {
         {
             // wait for the event to complete
             check_cu_err!(
-                unsafe { cudarc::driver::sys::cuEventSynchronize(event.0) },
+                unsafe { cu_api::cuEventSynchronize(event.0) },
                 "Failed to synchronize CUDA event"
             );
             check_cu_err!(
-                unsafe { cudarc::driver::sys::cuEventDestroy_v2(event.0) },
+                unsafe { cu_api::cuEventDestroy_v2(event.0) },
                 "Failed to destroy CUDA event"
             );
             let response = if is_valid {
