@@ -1,8 +1,12 @@
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{
+    generate,
+    shells::{Bash, Fish, Zsh},
+};
 use colored::Colorize;
 use control::{client::ControlClient, parse::parse_move_ops};
 
@@ -37,6 +41,7 @@ macro_rules! check_error {
 
 #[derive(Debug, Parser)]
 struct PrefetchArgs {
+    /// Move operations in the form `<pid>:<src>-><dest>=<size>` where `<pid>` is a PID like `1234` or an index like `idx3` / `i3`
     #[arg(value_parser = parse_move_ops)]
     pub move_ops: std::vec::Vec<MoveOperation>, // qualify as std::vec::Vec to make clap happy; see https://github.com/clap-rs/clap/issues/4808
 }
@@ -71,6 +76,7 @@ struct UpdateConfigArgs {
 
 #[derive(Debug, Parser)]
 struct DaemonArgs {
+    /// Path to a Nixie config file
     #[arg(short, long)]
     pub config_path: Option<PathBuf>,
     /// Set shared memory size (e.g., "32g", "1024m")
@@ -105,9 +111,13 @@ enum StatusCommand {
 
 #[derive(Clone, Copy, Debug, Subcommand)]
 enum SetPriorityLevel {
+    /// Set priority to interactive
     Interactive,
+    /// Set priority to low-interactive
     LowInteractive,
+    /// Set priority to batch
     Batch,
+    /// Set priority to background
     Background,
 }
 
@@ -124,12 +134,14 @@ impl SetPriorityLevel {
 
 #[derive(Debug, Parser)]
 struct PriorityTargetArgs {
+    /// Process selector: PID like `1234` or tracked index like `idx3` / `i3`
     #[arg(short, long)]
     pid: String,
 }
 
 #[derive(Debug, Parser)]
 struct PrioritySetArgs {
+    /// Process selector: PID like `1234` or tracked index like `idx3` / `i3`
     #[arg(short, long)]
     pid: String,
     #[clap(subcommand)]
@@ -146,7 +158,7 @@ enum PriorityArgs {
 
 #[derive(Debug, Parser)]
 struct HistoryArgs {
-    /// Process ID to show history for
+    /// Process selector: PID like `1234` or tracked index like `idx3` / `i3`
     #[arg(short, long)]
     pid: String,
 }
@@ -159,21 +171,42 @@ struct RunArgs {
     /// Arguments for the command
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
-    /// Set CUDA_VISIBLE_DEVICES (e.g., "0", "0,1", "all")
+    /// Set CUDA_VISIBLE_DEVICES (e.g., "0", "0,1", uuids)
     #[arg(short = 'd', long)]
     device: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Subcommand)]
+enum CompletionShell {
+    /// Generate a Bash completion script
+    Bash,
+    /// Generate a Zsh completion script
+    Zsh,
+    /// Generate a Fish completion script
+    Fish,
+}
+
 #[derive(Debug, Parser)]
-#[clap(name = "nixie", about = "", version = env!("CARGO_PKG_VERSION"))]
+/// Control the Nixie daemon and managed processes
+#[clap(name = "nixie", version = env!("CARGO_PKG_VERSION"))]
 enum Args {
+    /// Start the Nixie daemon
     Daemon(DaemonArgs),
+    /// Move process buffers between memory locations
     Prefetch(PrefetchArgs),
+    /// Show runtime status and process information
     Status(StatusArgs),
+    /// Manage process priority
     #[clap(subcommand)]
     Priority(PriorityArgs),
+    /// Generate shell completion scripts
+    #[clap(subcommand)]
+    Completion(CompletionShell),
+    /// Show process history
     History(HistoryArgs),
+    /// Run a command under Nixie sidecar injection
     Run(RunArgs),
+    /// Show and update configuration
     #[clap(subcommand)]
     Config(ConfigArgs),
 }
@@ -204,35 +237,52 @@ fn parse_pid_or_exit(pid: &str) -> ProcArgs {
         .unwrap()
 }
 
+fn generate_completion(shell: CompletionShell) {
+    let mut cmd = Args::command();
+    let mut stdout = io::stdout();
+    match shell {
+        CompletionShell::Bash => generate(Bash, &mut cmd, "nixie", &mut stdout),
+        CompletionShell::Zsh => generate(Zsh, &mut cmd, "nixie", &mut stdout),
+        CompletionShell::Fish => generate(Fish, &mut cmd, "nixie", &mut stdout),
+    }
+}
+
 fn main() {
     let args: Args = Args::parse();
-    if let Args::Daemon(args) = args {
-        crate::logging::init_tracing();
-        tracing::info!("Starting daemon...");
-        if unsafe { cudarc::driver::sys::cuInit(0) }
-            != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS
-        {
-            tracing::error!("Failed to initialize CUDA");
+    let args = match args {
+        Args::Completion(shell) => {
+            generate_completion(shell);
             return;
         }
-        let cli_config = CliConfig {
-            shmem_size: args.shmem,
-            hostmem_size: args.hostmem,
-            device_limit: args.device_limit,
-            automatic_prefetch: args.auto_prefetch,
-        };
-        if let Err(e) = init_config(args.config_path, cli_config) {
-            tracing::error!("Failed to init config: {}", e);
-            return;
+        Args::Daemon(args) => {
+            crate::logging::init_tracing();
+            tracing::info!("Starting daemon...");
+            if unsafe { cudarc::driver::sys::cuInit(0) }
+                != cudarc::driver::sys::cudaError_enum::CUDA_SUCCESS
+            {
+                tracing::error!("Failed to initialize CUDA");
+                return;
+            }
+            let cli_config = CliConfig {
+                shmem_size: args.shmem,
+                hostmem_size: args.hostmem,
+                device_limit: args.device_limit,
+                automatic_prefetch: args.auto_prefetch,
+            };
+            if let Err(e) = init_config(args.config_path, cli_config) {
+                tracing::error!("Failed to init config: {}", e);
+                return;
+            }
+            let config = crate::config::load_config();
+            let runtime = runtime::Daemon::new(
+                config.shmem_size_mb * 1024 * 1024,
+                config.hostmem_size_mb * 1024 * 1024,
+            );
+            runtime.run();
+            std::process::exit(0);
         }
-        let config = crate::config::load_config();
-        let runtime = runtime::Daemon::new(
-            config.shmem_size_mb * 1024 * 1024,
-            config.hostmem_size_mb * 1024 * 1024,
-        );
-        runtime.run();
-        std::process::exit(0);
-    }
+        args => args,
+    };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -306,7 +356,7 @@ fn main() {
             Args::Run(args) => {
                 run_command(args);
             }
-            Args::Daemon(_) => unreachable!(),
+            Args::Completion(_) | Args::Daemon(_) => unreachable!(),
         };
     });
 }
