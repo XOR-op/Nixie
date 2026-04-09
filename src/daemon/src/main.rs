@@ -42,7 +42,7 @@ struct PrefetchArgs {
 }
 
 #[derive(Debug, Parser)]
-struct ListArgs {
+struct ProcessArgs {
     /// Show detailed information
     #[arg(short, long, default_value = "false")]
     pub verbose: bool,
@@ -88,7 +88,7 @@ struct DaemonArgs {
 }
 
 #[derive(Debug, Parser)]
-struct UsageArgs {
+struct StatusArgs {
     /// Show detailed information
     #[arg(short, long, default_value = "false")]
     pub verbose: bool,
@@ -113,25 +113,30 @@ impl SetPriorityLevel {
     }
 }
 
-#[derive(Debug, Subcommand)]
-enum SetPriorityOption {
-    /// Unset priority to dynamic
-    Unset,
-    /// Set priority to fixed level
-    #[clap(subcommand)]
-    Set(SetPriorityLevel),
+#[derive(Debug, Parser)]
+struct PriorityTargetArgs {
+    #[arg(short, long)]
+    pid: String,
 }
 
 #[derive(Debug, Parser)]
-struct SetPriorityArgs {
+struct PrioritySetArgs {
     #[arg(short, long)]
     pid: String,
     #[clap(subcommand)]
-    option: SetPriorityOption,
+    level: SetPriorityLevel,
+}
+
+#[derive(Debug, Subcommand)]
+enum PriorityArgs {
+    /// Unset priority to dynamic
+    Unset(PriorityTargetArgs),
+    /// Set priority to fixed level
+    Set(PrioritySetArgs),
 }
 
 #[derive(Debug, Parser)]
-struct ShowHistoryArgs {
+struct HistoryArgs {
     /// Process ID to show history for
     #[arg(short, long)]
     pid: String,
@@ -155,10 +160,11 @@ struct RunArgs {
 enum Args {
     Daemon(DaemonArgs),
     Prefetch(PrefetchArgs),
-    List(ListArgs),
-    Usage(UsageArgs),
-    SetPriority(SetPriorityArgs),
-    ShowHistory(ShowHistoryArgs),
+    Process(ProcessArgs),
+    Status(StatusArgs),
+    #[clap(subcommand)]
+    Priority(PriorityArgs),
+    History(HistoryArgs),
     Run(RunArgs),
     #[clap(subcommand)]
     Config(ConfigArgs),
@@ -179,6 +185,15 @@ impl ProcArgs {
             idx: None,
         }
     }
+}
+
+fn parse_pid_or_exit(pid: &str) -> ProcArgs {
+    parse_pid(pid)
+        .map_err(|e| {
+            eprintln!("{}: {}", "Error".red(), e);
+            std::process::exit(1);
+        })
+        .unwrap()
 }
 
 fn main() {
@@ -220,7 +235,7 @@ fn main() {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 client.prefetch(args).await.unwrap();
             }
-            Args::List(args) => {
+            Args::Process(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 if args.json {
                     if args.verbose {
@@ -246,40 +261,34 @@ fn main() {
                     }
                 }
             }
-            Args::SetPriority(args) => {
+            Args::Priority(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
-                let pid = parse_pid(&args.pid)
-                    .map_err(|e| {
-                        eprintln!("{}: {}", "Error".red(), e);
-                        std::process::exit(1);
-                    })
-                    .unwrap();
-                match args.option {
-                    SetPriorityOption::Unset => {
+                match args {
+                    PriorityArgs::Unset(args) => {
+                        let pid = parse_pid_or_exit(&args.pid);
                         client
                             .set_priority(pid, control::SetPriorityLevel::FixToDynamic)
                             .await
                             .unwrap();
                     }
-                    SetPriorityOption::Set(level) => {
+                    PriorityArgs::Set(args) => {
+                        let pid = parse_pid_or_exit(&args.pid);
                         client
-                            .set_priority(pid, control::SetPriorityLevel::Set(level.to_fixed()))
+                            .set_priority(
+                                pid,
+                                control::SetPriorityLevel::Set(args.level.to_fixed()),
+                            )
                             .await
                             .unwrap();
                     }
                 }
             }
-            Args::ShowHistory(args) => {
+            Args::History(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
-                let pid = parse_pid(&args.pid)
-                    .map_err(|e| {
-                        eprintln!("{}: {}", "Error".red(), e);
-                        std::process::exit(1);
-                    })
-                    .unwrap();
+                let pid = parse_pid_or_exit(&args.pid);
                 client.show_history(pid).await.unwrap();
             }
-            Args::Usage(args) => {
+            Args::Status(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 client.data_details(true, args.verbose).await.unwrap();
             }
