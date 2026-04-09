@@ -88,10 +88,19 @@ struct DaemonArgs {
 }
 
 #[derive(Debug, Parser)]
+#[command(args_conflicts_with_subcommands = true)]
 struct StatusArgs {
     /// Show detailed information
     #[arg(short, long, default_value = "false")]
     pub verbose: bool,
+    #[clap(subcommand)]
+    pub command: Option<StatusCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+enum StatusCommand {
+    /// Show process information
+    Process(ProcessArgs),
 }
 
 #[derive(Clone, Copy, Debug, Subcommand)]
@@ -160,7 +169,6 @@ struct RunArgs {
 enum Args {
     Daemon(DaemonArgs),
     Prefetch(PrefetchArgs),
-    Process(ProcessArgs),
     Status(StatusArgs),
     #[clap(subcommand)]
     Priority(PriorityArgs),
@@ -235,21 +243,6 @@ fn main() {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 client.prefetch(args).await.unwrap();
             }
-            Args::Process(args) => {
-                let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
-                if args.json {
-                    if args.verbose {
-                        eprintln!(
-                            "{}",
-                            "Error: JSON output does not support verbose mode".red()
-                        );
-                        std::process::exit(1);
-                    }
-                    client.list_processes_json().await.unwrap();
-                } else {
-                    client.list_processes(args.verbose).await.unwrap();
-                }
-            }
             Args::Config(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
                 match args {
@@ -290,7 +283,25 @@ fn main() {
             }
             Args::Status(args) => {
                 let client = check_error!(ControlClient::new(control::CONTROL_PATH).await);
-                client.data_details(true, args.verbose).await.unwrap();
+                match args.command {
+                    Some(StatusCommand::Process(args)) => {
+                        if args.json {
+                            if args.verbose {
+                                eprintln!(
+                                    "{}",
+                                    "Error: JSON output does not support verbose mode".red()
+                                );
+                                std::process::exit(1);
+                            }
+                            client.list_processes_json().await.unwrap();
+                        } else {
+                            client.list_processes(args.verbose).await.unwrap();
+                        }
+                    }
+                    None => {
+                        client.data_details(true, args.verbose).await.unwrap();
+                    }
+                }
             }
             Args::Run(args) => {
                 run_command(args);
