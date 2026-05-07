@@ -7,6 +7,11 @@ edition = "2024"
 
 [lib]
 
+[features]
+default = ["cuda-system"]
+cuda-system = ["cudarc/cuda-version-from-build-system", "cudarc/dynamic-linking"]
+ci-testing = ["cudarc/cuda-13000", "cudarc/fallback-dynamic-loading"]
+
 [dependencies]
 nix.workspace = true
 tarpc.workspace = true

@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+#[cfg(all(feature = "cuda-system", feature = "ci-testing"))]
+compile_error!("features `cuda-system` and `ci-testing` are mutually exclusive");
+
 use std::{io, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand};

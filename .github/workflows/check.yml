@@ -41,6 +41,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: check
+          args: --no-default-features --features ci-testing
 
   lints:
     name: Lints
@@ -67,7 +68,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: -- -D warnings
+          args: --no-default-features --features ci-testing -- -D warnings
 
   test:
     name: Test Suite
@@ -87,3 +88,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
+          args: --no-default-features --features ci-testing

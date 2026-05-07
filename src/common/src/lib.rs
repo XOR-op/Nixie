@@ -1,3 +1,6 @@
+#[cfg(all(feature = "cuda-system", feature = "ci-testing"))]
+compile_error!("features `cuda-system` and `ci-testing` are mutually exclusive");
+
 use serde::{Deserialize, Serialize};
 
 mod constant;
