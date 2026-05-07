@@ -1,6 +1,15 @@
-<h1>Nixie</h1>
+<h1 align="center">Nixie</h1>
 
----
+<p align="center">
+<a href="https://github.com/XOR-op/nixie/actions">
+<img src="https://img.shields.io/github/actions/workflow/status/XOR-op/nixie/check.yml" alt="GitHub Actions">
+</a>
+<a href="./LICENSE">
+<img src="https://img.shields.io/github/license/XOR-op/nixie" alt="License">
+</a>
+</a>
+</p>
+
 
 Nixie is an efficient service for transparent GPU multiplexing without worrying about insufficient VRAM/DRAM capacity on Linux. 
 
@@ -10,7 +19,6 @@ Our highlighted features include:
 - Low task switching latency
 - Configurable maximum memory size depending on user needs.
 
----
 
 ## Getting Started
 
