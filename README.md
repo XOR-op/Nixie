@@ -1,36 +1,57 @@
-# Nixie
+<h1>Nixie</h1>
 
 ---
 
-## Build
+Nixie is an efficient service for transparent GPU multiplexing without worrying about insufficient VRAM/DRAM capacity on Linux. 
+
+Our highlighted features include:
+- Optimizing for modern large AI models.
+- Transparent GPU multiplexing, supporting popular applications like llama.cpp, SGLang, ComfyUI and more out of the box.
+- Low task switching latency
+- Configurable maximum memory size depending on user needs.
+
+---
+
+## Getting Started
+
+### Installation
 
 Prerequisites:
 - Rust (>=1.90 stable)
 
 Build the project with:
 ```bash
+git clone https://github.com/XOR-op/nixie
+cd nixie
 cargo build --release
 ```
 
-## Usage
 
-Run the compiled binary:
-```bash
-./target/release/nixie daemon
-```
-to start the daemon.
 
-For application, use:
+### Launch Applications With Nixie
+
+First, we need to start Nixie daemon:
 ```bash
-LD_PRELOAD=<REPLACE_WITH_THIS_PATH>/target/release/libnixiesidecar.so <your_application>
+nixie daemon
 ```
 
-Check with:
+To configure the capacity of memory used, run with
 ```bash
-./target/release/nixie list 
+nixie daemon --shmem <pinned-memory-size> --hostmem <paged-memory-size>
+# For example, to use 16GB of pinned memory and 32GB of paged memory:
+nixie daemon --shmem 16g --hostmem 32g
 ```
 
-More details can be found with:
+Then, we can launch applications with Nixie:
 ```bash
-./target/release/nixie --help
+nixie run <app-name> <app-args>
 ```
+
+To specify which GPU to use, assuming we use GPU 0:
+```bash
+nixie run -d 0 <app-name> <app-args>
+```
+
+### CLI Reference
+
+See [CLI Reference](./docs/cli.md) for more details on the available commands and options.
