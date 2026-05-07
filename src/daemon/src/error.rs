@@ -7,8 +7,6 @@ use crate::runtime::migration::BufferId;
 pub enum NixieError {
     #[error("Daemon: {0}")]
     Daemon(#[from] DaemonError),
-    #[error("Uvm: {0}")]
-    Uvm(#[from] UvmError),
     #[error("Client: {0}")]
     Client(#[from] ClientError),
 }
