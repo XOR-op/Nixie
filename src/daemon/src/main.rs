@@ -383,6 +383,15 @@ fn find_sidecar_path() -> Option<PathBuf> {
         return Some(alt_path);
     }
 
+    let local_path = env::var("HOME")
+        .ok()
+        .map(|home| PathBuf::from(home).join(".local/lib").join(sidecar_name));
+    if let Some(local_path) = local_path
+        && local_path.exists()
+    {
+        return Some(local_path);
+    }
+
     // Check LD_LIBRARY_PATH
     if let Ok(ld_library_path) = env::var("LD_LIBRARY_PATH") {
         for lib_path in ld_library_path.split(':') {
