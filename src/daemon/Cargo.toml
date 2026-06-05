@@ -6,8 +6,21 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-cuda-system = ["nixie_common/cuda-system", "cudarc/cuda-version-from-build-system", "cudarc/dynamic-linking"]
-ci-testing = ["nixie_common/ci-testing", "cudarc/cuda-13000", "cudarc/fallback-dynamic-loading"]
+cuda-system = [
+    "nixie_common/cuda-system",
+    "cudarc/cuda-version-from-build-system",
+    "cudarc/dynamic-linking",
+]
+cuda-12 = [
+    "nixie_common/cuda-12",
+    "cudarc/cuda-12000",
+    "cudarc/fallback-dynamic-loading",
+]
+cuda-13 = [
+    "nixie_common/cuda-13",
+    "cudarc/cuda-13000",
+    "cudarc/fallback-dynamic-loading",
+]
 profiling = []
 default = ["cuda-system"]
 

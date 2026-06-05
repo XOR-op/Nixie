@@ -1,24 +1,24 @@
 on:
   push:
     branches:
-      - '*'
+      - "*"
     paths-ignore:
-      - '.github/**'
-      - 'assets/**'
-      - 'docs/**'
-      - 'examples/**'
-      - 'README.md'
-      - 'LICENSE'
+      - ".github/**"
+      - "assets/**"
+      - "docs/**"
+      - "examples/**"
+      - "README.md"
+      - "LICENSE"
   pull_request:
     branches:
-      - 'main'
+      - "main"
     paths-ignore:
-      - '.github/**'
-      - 'assets/**'
-      - 'docs/**'
-      - 'examples/**'
-      - 'README.md'
-      - 'LICENSE'
+      - ".github/**"
+      - "assets/**"
+      - "docs/**"
+      - "examples/**"
+      - "README.md"
+      - "LICENSE"
 
 name: check
 
@@ -41,7 +41,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --no-default-features --features ci-testing
+          args: --no-default-features --features cuda-13
 
   lints:
     name: Lints
@@ -68,7 +68,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --no-default-features --features ci-testing -- -D warnings
+          args: --no-default-features --features cuda-13 -- -D warnings
 
   test:
     name: Test Suite
@@ -88,4 +88,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features ci-testing
+          args: --no-default-features --features cuda-13

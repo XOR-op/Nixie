@@ -1,7 +1,19 @@
 #![allow(dead_code)]
 
-#[cfg(all(feature = "cuda-system", feature = "ci-testing"))]
-compile_error!("features `cuda-system` and `ci-testing` are mutually exclusive");
+#[cfg(all(
+    not(feature = "cuda-system"),
+    not(feature = "cuda-12"),
+    not(feature = "cuda-13")
+))]
+compile_error!(
+    "one of the following features must be enabled: `cuda-system`, `cuda-12`, `cuda-13`"
+);
+#[cfg(all(feature = "cuda-system", feature = "cuda-12"))]
+compile_error!("features `cuda-system` and `cuda-12` are mutually exclusive");
+#[cfg(all(feature = "cuda-system", feature = "cuda-13"))]
+compile_error!("features `cuda-system` and `cuda-13` are mutually exclusive");
+#[cfg(all(feature = "cuda-12", feature = "cuda-13"))]
+compile_error!("features `cuda-12` and `cuda-13` are mutually exclusive");
 
 use std::{io, path::PathBuf};
 
