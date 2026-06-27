@@ -60,8 +60,14 @@ pub(crate) fn cuda_mem_get_info_impl() -> (usize, usize) {
     (avail, total)
 }
 
-static SMALL_ALLOCATION: Mutex<BTreeMap<u64, u64>> = Mutex::new(BTreeMap::new());
-static CURRENT_ALLOCATION_SIZE: AtomicU64 = AtomicU64::new(0);
+/// Maps a small-allocation pointer to the device it lives on and its size, so
+/// the per-device counter can be decremented correctly on free.
+static SMALL_ALLOCATION: Mutex<BTreeMap<u64, (i32, u64)>> = Mutex::new(BTreeMap::new());
+/// Currently allocated bytes, tracked per process-local device.
+static CURRENT_ALLOCATION_SIZE: [AtomicU64; MAX_GPUS] = {
+    const ZERO: AtomicU64 = AtomicU64::new(0);
+    [ZERO; MAX_GPUS]
+};
 
 /// Synchronize and free a list of cached blocks released from the pool.
 fn free_cached_blocks(blocks: Vec<CachedBlock>) {
@@ -85,7 +91,8 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
 
     // check against size limit
     let device_id = get_device();
-    if CURRENT_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Relaxed) + size as u64
+    if CURRENT_ALLOCATION_SIZE[device_id as usize].load(std::sync::atomic::Ordering::Relaxed)
+        + size as u64
         > get_max_allocation_size(device_id)
     {
         return cudaError_enum::CUDA_ERROR_OUT_OF_MEMORY;
@@ -99,8 +106,9 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
             SMALL_ALLOCATION
                 .lock()
                 .unwrap()
-                .insert(unsafe { *dev_ptr } as u64, size as u64);
-            CURRENT_ALLOCATION_SIZE.fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
+                .insert(unsafe { *dev_ptr } as u64, (device_id, size as u64));
+            CURRENT_ALLOCATION_SIZE[device_id as usize]
+                .fetch_add(size as u64, std::sync::atomic::Ordering::Relaxed);
             global_tracker().insert(
                 unsafe { *dev_ptr } as u64,
                 size as u64,
@@ -180,7 +188,7 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
                 device_id
             );
         }
-        CURRENT_ALLOCATION_SIZE
+        CURRENT_ALLOCATION_SIZE[device_id as usize]
             .fetch_add(rounded_up_size as u64, std::sync::atomic::Ordering::Relaxed);
         global_tracker().insert(
             unsafe { *dev_ptr } as u64,
@@ -228,8 +236,9 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
     }
 
     // first check if is non-managed allocation
-    if let Some(size) = SMALL_ALLOCATION.lock().unwrap().remove(&(dev_ptr as u64)) {
-        CURRENT_ALLOCATION_SIZE.fetch_sub(size, std::sync::atomic::Ordering::Relaxed);
+    if let Some((device_id, size)) = SMALL_ALLOCATION.lock().unwrap().remove(&(dev_ptr as u64)) {
+        CURRENT_ALLOCATION_SIZE[device_id as usize]
+            .fetch_sub(size, std::sync::atomic::Ordering::Relaxed);
         return free_func(dev_ptr);
     }
 
@@ -271,7 +280,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
                 cur_index = handle.next_handle_idx;
                 table.handle_list.free_handle_by_raw_idx(index);
             }
-            CURRENT_ALLOCATION_SIZE
+            CURRENT_ALLOCATION_SIZE[possible_dev]
                 .fetch_sub(entry.len as u64, std::sync::atomic::Ordering::Relaxed);
             table.entry.remove(entry_idx);
             if !released_handles.is_empty() {
@@ -500,8 +509,9 @@ pub extern "C" fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> cudaErr
         return res;
     }
     // override free size
-    let available_size = get_max_allocation_size(device_id)
-        .saturating_sub(CURRENT_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Relaxed));
+    let available_size = get_max_allocation_size(device_id).saturating_sub(
+        CURRENT_ALLOCATION_SIZE[device_id as usize].load(std::sync::atomic::Ordering::Relaxed),
+    );
     unsafe {
         *free = available_size as usize;
     }
