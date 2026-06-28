@@ -433,6 +433,19 @@ pub extern "C" fn cudaMemcpy(
     let memcpy_func = MEMCPY_FN.get_or_init(init_fn);
     SCHED_CTL.launch_allowed(LaunchType::Transfer(size));
     SCHED_CTL.record_blocking_transfer_start();
+    let _guard = CudaContextGuard::new();
+    if let Some(device) = match kind {
+        CudaMemcpyKind::HostToDevice => {
+            global_tracker().find_and(dst as u64, |record| record.device)
+        }
+        CudaMemcpyKind::DeviceToHost => {
+            global_tracker().find_and(src as u64, |record| record.device)
+        }
+        _ => None,
+    } {
+        // ensure VMM-backed memory can be accessed correctly
+        set_device(device.0);
+    }
     let res = memcpy_func(dst, src, size, kind);
     SCHED_CTL.record_blocking_transfer_end();
     res
