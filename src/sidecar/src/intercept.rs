@@ -64,10 +64,7 @@ pub(crate) fn cuda_mem_get_info_impl() -> (usize, usize) {
 /// the per-device counter can be decremented correctly on free.
 static SMALL_ALLOCATION: Mutex<BTreeMap<u64, (i32, u64)>> = Mutex::new(BTreeMap::new());
 /// Currently allocated bytes, tracked per process-local device.
-static CURRENT_ALLOCATION_SIZE: [AtomicU64; MAX_GPUS] = {
-    const ZERO: AtomicU64 = AtomicU64::new(0);
-    [ZERO; MAX_GPUS]
-};
+static CURRENT_ALLOCATION_SIZE: [AtomicU64; MAX_GPUS] = [const { AtomicU64::new(0) }; MAX_GPUS];
 
 /// Synchronize and free a list of cached blocks released from the pool.
 fn free_cached_blocks(blocks: Vec<CachedBlock>) {
@@ -244,7 +241,8 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
 
     let running_allowed = SCHED_CTL.get_running_is_allowed();
 
-    for possible_dev in 0..MAX_GPUS {
+    for (possible_dev, cur_alloc_size) in CURRENT_ALLOCATION_SIZE.iter().enumerate().take(MAX_GPUS)
+    {
         let mut table_guard = GENERIC_DATA
             .get_or_init(should_have_initialized)
             .lock(possible_dev);
@@ -280,8 +278,7 @@ pub extern "C" fn cudaFree(dev_ptr: *mut libc::c_void) -> cudaError_enum {
                 cur_index = handle.next_handle_idx;
                 table.handle_list.free_handle_by_raw_idx(index);
             }
-            CURRENT_ALLOCATION_SIZE[possible_dev]
-                .fetch_sub(entry.len as u64, std::sync::atomic::Ordering::Relaxed);
+            cur_alloc_size.fetch_sub(entry.len as u64, std::sync::atomic::Ordering::Relaxed);
             table.entry.remove(entry_idx);
             if !released_handles.is_empty() {
                 update_gpu_memory_free(GpuMemoryFreeUpdate {
