@@ -86,7 +86,6 @@ pub(crate) fn get_device() -> i32 {
 }
 
 // restore the context when dropped
-#[allow(unused)]
 pub(crate) struct CudaContextGuard {
     ctx_ptr: cudarc::driver::sys::CUcontext,
     // mark as !Send
@@ -94,7 +93,6 @@ pub(crate) struct CudaContextGuard {
 }
 
 impl CudaContextGuard {
-    #[allow(unused)]
     pub fn new() -> Self {
         let mut cu_ctx = std::ptr::null_mut();
         let res = unsafe { cu_api::cuCtxGetCurrent(&mut cu_ctx) };

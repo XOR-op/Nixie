@@ -17,7 +17,7 @@ use crate::memory::{
     populate_entry,
 };
 use crate::schedule::{LaunchType, SCHED_CTL, require_reserved_memory};
-use crate::utils::get_device;
+use crate::utils::{CudaContextGuard, get_device, set_device};
 use crate::{GENERIC_DATA, check_cu_err, cu_api, warn_eprintln};
 
 #[macro_export]
@@ -468,6 +468,20 @@ pub extern "C" fn cudaMemcpyAsync(
         }
         _ => {}
     }
+    let _guard = CudaContextGuard::new();
+    if let Some(device) = match kind {
+        CudaMemcpyKind::HostToDevice => {
+            global_tracker().find_and(dst as u64, |record| record.device)
+        }
+        CudaMemcpyKind::DeviceToHost => {
+            global_tracker().find_and(src as u64, |record| record.device)
+        }
+        _ => None,
+    } {
+        // ensure VMM-backed memory can be accessed correctly
+        set_device(device.0);
+    }
+
     let res = memcpy_async_func(dst, src, size, kind, stream);
     match kind {
         CudaMemcpyKind::HostToDevice | CudaMemcpyKind::DeviceToHost => {

@@ -77,7 +77,6 @@ impl AllocTracker {
             .cloned()
     }
 
-    #[allow(unused)]
     pub fn find_and<F, R>(&self, dev_ptr: u64, f: F) -> Option<R>
     where
         F: FnOnce(&mut AllocRecord) -> R,
