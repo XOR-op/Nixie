@@ -20,14 +20,29 @@ pub use alloc_tracking::global_tracker;
 pub(crate) use async_pool::{CachedBlock, async_pool};
 pub use streaming::{MEMORY_MIGRATION_CTL, init_memory_migration_ctl};
 
+fn mem_location(device: i32) -> CUmemLocation {
+    cfg_if::cfg_if! {
+        if #[cfg(nixie_cuda_geq_13_2)] {
+            CUmemLocation {
+                type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
+                __bindgen_anon_1: cudarc::driver::sys::CUmemLocation_st__bindgen_ty_1 {
+                    id: device,
+                },
+            }
+        } else {
+            CUmemLocation {
+                type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
+                id: device,
+            }
+        }
+    }
+}
+
 pub(super) fn default_alloc_prop(device: i32) -> CUmemAllocationProp {
     CUmemAllocationProp {
         type_: CUmemAllocationType::CU_MEM_ALLOCATION_TYPE_PINNED,
         requestedHandleTypes: CUmemAllocationHandleType::CU_MEM_HANDLE_TYPE_NONE,
-        location: CUmemLocation {
-            type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
-            id: device,
-        },
+        location: mem_location(device),
         win32HandleMetaData: std::ptr::null_mut(),
         allocFlags: unsafe { std::mem::zeroed() },
     }
@@ -35,10 +50,7 @@ pub(super) fn default_alloc_prop(device: i32) -> CUmemAllocationProp {
 
 pub(super) fn default_access_desc(device: i32) -> CUmemAccessDesc {
     CUmemAccessDesc {
-        location: CUmemLocation {
-            type_: CUmemLocationType::CU_MEM_LOCATION_TYPE_DEVICE,
-            id: device,
-        },
+        location: mem_location(device),
         flags: cudarc::driver::sys::CUmemAccess_flags::CU_MEM_ACCESS_FLAGS_PROT_READWRITE,
     }
 }
