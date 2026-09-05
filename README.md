@@ -28,6 +28,8 @@ Our highlighted features include:
 - Low task switching latency
 - Configurable maximum memory size depending on user needs.
 
+Check our [paper](https://www.usenix.org/conference/osdi26/presentation/xu-yechen) for technical details.
+
 ## Getting Started
 
 ### Installation
@@ -75,3 +77,15 @@ nixie run -d 0 <app-name> <app-args>
 ### CLI Reference
 
 See [CLI Reference](./docs/cli.md) for more details on the available commands and options.
+
+## Citation
+If you find Nixie useful, please consider citing our research work:
+```bibtex
+@inproceedings{xu2026nixie,
+  title={Nixie: Efficient, Transparent Temporal Multiplexing for Consumer $\{$GPUs$\}$},
+  author={Xu, Yechen and Wang, Yifei and Ren, Nathanael and Chen, Yiran and Zhuo, Danyang},
+  booktitle={20th USENIX Symposium on Operating Systems Design and Implementation (OSDI 26)},
+  pages={2085--2101},
+  year={2026}
+}
+```
