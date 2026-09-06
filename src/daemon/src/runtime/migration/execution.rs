@@ -9,7 +9,10 @@ use nixie_common::{
     GlobalDeviceId, MigrationArgs, MigrationResponse, ProcessLocalDeviceId, general::pretty_size,
     rpc::SidecarClient, shm::PhysicalMemoryHandleId,
 };
-use tokio::sync::{mpsc, watch};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinSet,
+};
 
 use crate::{
     error::HybridBufferError,
@@ -29,7 +32,7 @@ use crate::{
     },
 };
 
-use super::{BufferId, ShmBufferManager};
+use super::{AllocationCount, BufferId, ShmBufferManager};
 
 macro_rules! warn_on_send_error {
     ($res:expr) => {
@@ -915,20 +918,22 @@ pub(super) async fn shm_to_backend_transfer(
         };
         check_location(&buf_id, expected_location, location);
     }
-    // prevent false positive warning
+    // Includes both claimed and completed evictions, so a space request cannot
+    // select a buffer that a parallel copy still owns.
     let mut evicted_history = HashSet::new();
-    let mut planned_transfer_completed = false;
+    let mut pending_copies = JoinSet::new();
+    let mut planned_transfer_dispatched = false;
     // Handle any remaining buffers that were not found
     while !(next_shm_handling.is_empty() && req_for_shm_rx.is_closed()) {
-        if next_shm_handling.is_empty() && !planned_transfer_completed {
-            planned_transfer_completed = true;
-            tracing::trace!("Planned shm to backend migration completed");
+        if next_shm_handling.is_empty() && !planned_transfer_dispatched {
+            planned_transfer_dispatched = true;
+            tracing::trace!("All planned shm to backend copies dispatched");
         }
         tokio::select! {
             biased;
             _ = cancel_rx.changed() => {
                 tracing::info!("Cancellation received; aborting shm to backend migration task");
-                return;
+                break;
             }
             res = out_data_ready_rx.recv(), if !next_shm_handling.is_empty() => {
                 match res {
@@ -940,8 +945,9 @@ pub(super) async fn shm_to_backend_transfer(
                             &shm_buffer_mgr,
                             &hostmem_buffer_mgr,
                             &storage_buffer_mgr,
-                            &evicted_history,
-                        ).await;
+                            &mut evicted_history,
+                            &mut pending_copies,
+                        );
                     }
                     None => continue,
                 }
@@ -959,6 +965,7 @@ pub(super) async fn shm_to_backend_transfer(
                         &excluding_list,
                         &req_for_shm_rx,
                         &mut evicted_history,
+                        &mut pending_copies,
                     ).await;
                     }
                     None => continue,
@@ -967,31 +974,45 @@ pub(super) async fn shm_to_backend_transfer(
 
         }
     }
+    // Even on cancellation, copies must finish before the next migration can
+    // reuse their SHM blocks. Observe failures only after draining all copies.
+    let mut copy_error = None;
+    while let Some(result) = pending_copies.join_next().await {
+        if let Err(error) = result {
+            copy_error.get_or_insert(error);
+        }
+    }
+    if let Some(error) = copy_error {
+        panic!("SHM to backend copy task failed: {error}");
+    }
     tracing::trace!(
         "Shm to backend migration completed with {} extra moves",
         extra_move
     );
 }
 
-async fn handle_unfinished_shm_entry(
+#[allow(clippy::too_many_arguments)]
+fn handle_unfinished_shm_entry(
     buf_id: BufferId,
     expected_location: BufferLocation,
     next_shm_handling: &mut HashMap<BufferId, BufferLocation>,
     shm_buffer_mgr: &Arc<ShmBufferManager>,
     hostmem_buffer_mgr: &Arc<HostMemBufferManager>,
     storage_buffer_mgr: &Arc<StorageBufferManager>,
-    evicted_history: &HashSet<BufferId>,
+    evicted_history: &mut HashSet<BufferId>,
+    pending_copies: &mut JoinSet<AllocationCount>,
 ) {
     if let Some(expected_location) = next_shm_handling.remove(&buf_id) {
-        if evicted_history.contains(&buf_id) {
+        if !evicted_history.insert(buf_id.clone()) {
             // already being transferred or have been transferred; skip
             return;
         }
         let shm_buffer_mgr = shm_buffer_mgr.clone();
         let hostmem_buffer_mgr = hostmem_buffer_mgr.clone();
         let storage_buffer_mgr = storage_buffer_mgr.clone();
-        // spawn for multithreading
-        tokio::spawn(async move {
+        // Claim before spawning: the worker can receive a space request before
+        // this task starts running on another runtime thread.
+        pending_copies.spawn(async move {
             let location = panic_on_error!(
                 shm_to_backend_transfer_inner(
                     &buf_id,
@@ -1003,6 +1024,7 @@ async fn handle_unfinished_shm_entry(
                 .await
             );
             check_location(&buf_id, expected_location, location);
+            buf_id.get_allocation_count()
         });
     } else if !evicted_history.contains(&buf_id) {
         tracing::warn!(
@@ -1024,6 +1046,7 @@ async fn handle_buffer_request(
     excluding_list: &HashSet<i32>,
     req_rx: &RequestForSpaceRx,
     evicted_history: &mut HashSet<BufferId>,
+    pending_copies: &mut JoinSet<AllocationCount>,
 ) {
     let mut remaining_count = req.count();
     while remaining_count.0 > 0 {
@@ -1033,6 +1056,14 @@ async fn handle_buffer_request(
                 && !in_transfer.load(std::sync::atomic::Ordering::Relaxed)
                 && !evicted_history.contains(buf_id)
         }) else {
+            // All eligible buffers may already be claimed by parallel copies.
+            // Wait for their releases instead of copying them again or leaving
+            // the GPU requester waiting forever without a notification.
+            if let Some(result) = pending_copies.join_next().await {
+                let released = result.expect("SHM to backend copy task failed");
+                remaining_count.0 = remaining_count.0.saturating_sub(released.0);
+                continue;
+            }
             if matches!(req, ShmBufferRequest::FromBackend(_)) {
                 // incoming space is limited and should be back pressured to GPU soon
                 req_rx.notify_backend(ShmRequestRxResp::BusyWait);
@@ -1262,5 +1293,183 @@ fn check_location(buffer_id: &BufferId, expected: BufferLocation, actual: Buffer
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{ffi::CString, num::NonZeroU32, time::Duration};
+
+    use nixie_common::{MAX_ALLOCATION_SIZE, MIN_ALLOCATION_SIZE};
+
+    use super::*;
+    use crate::runtime::migration::channel::create_out_data_ready_channel;
+
+    struct TestBuffers {
+        data: DataManagerHandle,
+        _dir: tempfile::TempDir,
+    }
+
+    impl TestBuffers {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let name = format!(
+                "/nixie-copy-test-{}-{}",
+                std::process::id(),
+                dir.path().file_name().unwrap().to_str().unwrap()
+            );
+            let shm = Arc::new(ShmBufferManager::new(&name, 4 * MAX_ALLOCATION_SIZE).unwrap());
+            // These tests need only the mapping, not a name accessible to a sidecar.
+            let name = CString::new(name).unwrap();
+            assert_eq!(unsafe { nix::libc::shm_unlink(name.as_ptr()) }, 0);
+            Self {
+                data: DataManagerHandle {
+                    shm,
+                    hostmem: Arc::new(HostMemBufferManager::new(4 * MIN_ALLOCATION_SIZE, 0, false)),
+                    storage: Arc::new(
+                        StorageBufferManager::new(&dir.path().join("spill")).unwrap(),
+                    ),
+                },
+                _dir: dir,
+            }
+        }
+
+        fn fill(&self, id: &BufferId, value: u8) {
+            let guard = self.data.shm.try_reserve(id).unwrap();
+            let mut slices = unsafe { get_buffer_ref_mut(&self.data.shm, guard.blocks()) };
+            for slice in &mut slices {
+                slice.fill(value);
+            }
+        }
+    }
+
+    fn buffer_id(device: i32) -> BufferId {
+        BufferId {
+            pid: 123,
+            device_id: GlobalDeviceId(device),
+            block_id: PhysicalMemoryHandleId::new(1, NonZeroU32::new(1).unwrap()),
+            size: 4096,
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_copies_are_claimed_before_space_reclamation() {
+        let env = TestBuffers::new();
+        let ids = [buffer_id(0), buffer_id(1)];
+        let mut planned = ids
+            .iter()
+            .cloned()
+            .map(|id| (id, BufferLocation::HostMem))
+            .collect();
+        let mut claimed = HashSet::new();
+        let mut copies = JoinSet::new();
+        let free_before = env.data.shm.free_blocks_count();
+        for (idx, id) in ids.iter().enumerate() {
+            env.fill(id, idx as u8 + 1);
+            handle_unfinished_shm_entry(
+                id.clone(),
+                BufferLocation::HostMem,
+                &mut planned,
+                &env.data.shm,
+                &env.data.hostmem,
+                &env.data.storage,
+                &mut claimed,
+                &mut copies,
+            );
+        }
+        // On this current-thread runtime neither copy has run yet. Both must
+        // already be claimed, while remaining independently scheduled tasks.
+        assert_eq!(copies.len(), 2);
+        assert!(ids.iter().all(|id| claimed.contains(id)));
+        assert!(ids.iter().all(|id| env.data.shm.get_buffer(id).is_some()));
+        let (_tx, rx) = create_request_for_space_channel();
+        let mut extra_move = 0;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            handle_buffer_request(
+                ShmBufferRequest::FromGPU(AllocationCount(2)),
+                &mut extra_move,
+                &mut planned,
+                &env.data.shm,
+                &env.data.hostmem,
+                &env.data.storage,
+                &HashSet::new(),
+                &rx,
+                &mut claimed,
+                &mut copies,
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(extra_move, 0);
+        assert!(copies.is_empty());
+        assert_eq!(env.data.shm.free_blocks_count(), free_before);
+        assert_eq!(env.data.hostmem.free_blocks_count(), AllocationCount(2));
+        for (idx, id) in ids.iter().enumerate() {
+            let mut bytes = vec![0; id.size as usize];
+            env.data.hostmem.load_to(id, &mut bytes).unwrap();
+            assert!(bytes.iter().all(|&byte| byte == idx as u8 + 1));
+        }
+    }
+
+    async fn check_worker_waits_for_copies(cancel: bool) {
+        let env = TestBuffers::new();
+        let ids = [buffer_id(0), buffer_id(1)];
+        let plan: HashMap<_, _> = ids
+            .iter()
+            .cloned()
+            .map(|id| (id, BufferLocation::Storage))
+            .collect();
+        let (out_txs, out_rx) =
+            create_out_data_ready_channel(&[GlobalDeviceId(0), GlobalDeviceId(1)], plan.clone());
+        let (space_tx, space_rx) = create_request_for_space_channel();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let mut worker = Box::pin(shm_to_backend_transfer(
+            HashSet::new(),
+            plan,
+            out_rx,
+            env.data.shm.clone(),
+            env.data.hostmem.clone(),
+            env.data.storage.clone(),
+            space_rx,
+            cancel_rx,
+        ));
+        // The GPU buffers have not arrived, so the initial scan must queue them.
+        assert!(futures::poll!(&mut worker).is_pending());
+        for (idx, id) in ids.iter().enumerate() {
+            env.fill(id, idx as u8 + 1);
+            out_txs[&id.device_id].send(id.clone()).unwrap();
+        }
+        // Queue both copies without giving their tasks a chance to run yet.
+        assert!(futures::poll!(&mut worker).is_pending());
+        if cancel {
+            cancel_tx.send(true).unwrap();
+        } else {
+            drop(space_tx);
+        }
+        // Completion and cancellation must both wait for the queued disk copies.
+        assert!(futures::poll!(&mut worker).is_pending());
+        tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .unwrap();
+        for (idx, id) in ids.iter().enumerate() {
+            assert!(env.data.shm.get_buffer(id).is_none());
+            let mut bytes = vec![0; id.size as usize];
+            env.data
+                .storage
+                .load_to_vectored(id, &mut [IoSliceMut::new(&mut bytes)])
+                .unwrap();
+            assert!(bytes.iter().all(|&byte| byte == idx as u8 + 1));
+        }
+    }
+
+    #[tokio::test]
+    async fn shm_worker_waits_for_parallel_disk_copies() {
+        check_worker_waits_for_copies(false).await;
+    }
+
+    #[tokio::test]
+    async fn shm_worker_drains_parallel_copies_on_cancellation() {
+        check_worker_waits_for_copies(true).await;
     }
 }
