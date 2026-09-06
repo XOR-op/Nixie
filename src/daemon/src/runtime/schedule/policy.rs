@@ -408,7 +408,7 @@ impl ScheduleQueue {
                 *acc.entry(level).or_insert(0u32) += 1;
                 acc
             });
-        for (_, client) in self.clients.iter_mut() {
+        for client in self.clients.values_mut() {
             if active.is_some_and(|(pid, _)| pid == client.pid()) {
                 client.update_if_active();
                 // is the active process
@@ -475,7 +475,7 @@ impl ScheduleQueue {
 
     fn reset_all_priorities(&mut self) -> bool {
         let mut changed = false;
-        for (_, client) in self.clients.iter_mut() {
+        for client in self.clients.values_mut() {
             if matches!(client.priority(), Priority::Dynamic { .. }) {
                 if client.priority().level() != PriorityLevel::Interactive {
                     changed = true;

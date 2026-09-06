@@ -493,7 +493,7 @@ where
                 );
                 return None;
             }
-            for (being_removed, _) in removed.iter() {
+            for being_removed in removed.keys() {
                 eviction_candiates.remove(being_removed);
             }
 
