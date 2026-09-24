@@ -6,7 +6,7 @@ use cudarc::driver::sys::cudaError_enum;
 use nixie_common::general::{CallParameter, CallReturnChannel};
 use nixie_common::{MAX_GPUS, MigrationArgs, MigrationResponse};
 
-use crate::init::should_have_initialized;
+use crate::init::{init_mapped_gpu_memory, should_have_initialized};
 use crate::memory::{default_alloc_prop, map_mem_handle, unmap_and_release_mem_handle};
 use crate::{CuStreamWrapper, GENERIC_DATA, check_cu_err, cu_api, set_device, warn_eprintln};
 use crate::{debug_eprintln, global_shm_buffer};
@@ -20,7 +20,7 @@ pub fn init_memory_migration_ctl() -> MemoryMigrationControl {
 }
 
 pub struct MemoryMigrationControl {
-    migrators: Mutex<Vec<StreamingMemoryMigrator>>,
+    migrators: Mutex<Vec<Option<StreamingMemoryMigrator>>>,
 }
 
 impl MemoryMigrationControl {
@@ -33,10 +33,43 @@ impl MemoryMigrationControl {
             );
             count
         };
-        let migrators = (0..device_cnt).map(StreamingMemoryMigrator::new).collect();
+        let migrators = (0..device_cnt).map(|_| None).collect();
         Self {
             migrators: Mutex::new(migrators),
         }
+    }
+
+    pub fn init_device(&self, device_id: i32) {
+        let mut migrators = self.migrators.lock().unwrap();
+        migrators[device_id as usize]
+            .get_or_insert_with(|| StreamingMemoryMigrator::new(device_id));
+    }
+
+    pub fn with_device_reset(&self, reset: impl FnOnce() -> cudaError_enum) -> cudaError_enum {
+        // Exclude new submissions and finish queued transfers before a reset can
+        // remove the shared host registration, including copies on other GPUs.
+        let migrators = self.migrators.lock().unwrap();
+        let mut context = std::ptr::null_mut();
+        check_cu_err!(
+            unsafe { cu_api::cuCtxGetCurrent(&mut context) },
+            "get context before device reset"
+        );
+        for migrator in migrators.iter().flatten() {
+            set_device(migrator.device_id);
+            check_cu_err!(
+                unsafe { cu_api::cuStreamSynchronize(migrator.d2h_stream.0) },
+                "finish d2h copies before device reset"
+            );
+            check_cu_err!(
+                unsafe { cu_api::cuStreamSynchronize(migrator.h2d_stream.0) },
+                "finish h2d copies before device reset"
+            );
+        }
+        check_cu_err!(
+            unsafe { cu_api::cuCtxSetCurrent(context) },
+            "restore context before device reset"
+        );
+        reset()
     }
 
     pub fn migrate(&self, task: CallParameter<MigrationArgs, MigrationResponse>) {
@@ -45,7 +78,10 @@ impl MemoryMigrationControl {
         if device_id < 0 || device_id >= MAX_GPUS as i32 {
             warn_eprintln!("Invalid device ID: {}", device_id);
         }
-        migrators[device_id as usize].migrate(task);
+        migrators[device_id as usize]
+            .as_mut()
+            .expect("Migration streams must be initialized before allocating memory")
+            .migrate(task);
     }
 }
 
@@ -89,6 +125,8 @@ impl StreamingMemoryMigrator {
     pub fn migrate(&mut self, args: CallParameter<MigrationArgs, MigrationResponse>) {
         let (args, ret_chan) = args.into_parts();
         set_device(self.device_id);
+        // A reset of the registration's owner can happen after the last malloc.
+        init_mapped_gpu_memory();
         let total_size = args.size.iter().map(|&s| s as usize).sum::<usize>();
         let mut event = std::ptr::null_mut();
         check_cu_err!(

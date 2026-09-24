@@ -11,7 +11,9 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Mutex, OnceLock};
 
 use crate::comm::update_gpu_memory_free;
-use crate::init::{init_all_entrypoint, init_cuda_env, should_have_initialized};
+use crate::init::{
+    init_all_entrypoint, init_cuda_env, init_memory_for_device, should_have_initialized,
+};
 use crate::memory::{
     CachedBlock, async_pool, deallocate_list, get_max_allocation_size, global_tracker,
     populate_entry,
@@ -58,6 +60,16 @@ pub(crate) fn cuda_mem_get_info_impl() -> (usize, usize) {
         "GET_MEM_INFO"
     );
     (avail, total)
+}
+
+#[allow(non_snake_case)]
+#[unsafe(no_mangle)]
+pub extern "C" fn cudaDeviceReset() -> cudaError_enum {
+    type CudaDeviceResetType = extern "C" fn() -> cudaError_enum;
+    static DEVICE_RESET_FN: OnceLock<CudaDeviceResetType> = OnceLock::new();
+    generate_init_fn!(CudaDeviceResetType, cr"cudaDeviceReset");
+    let reset_func = DEVICE_RESET_FN.get_or_init(init_fn);
+    crate::init::reset_cuda_device(|| reset_func())
 }
 
 /// Maps a small-allocation pointer to the device it lives on and its size, so
@@ -115,6 +127,8 @@ pub extern "C" fn cudaMalloc(dev_ptr: *mut *mut libc::c_void, size: usize) -> cu
         }
         return res;
     }
+
+    init_memory_for_device(device_id);
 
     // round up the size to the nearest multiple of MIN_ALLOCATION_SIZE
     let rounded_up_size = (size + MIN_ALLOCATION_SIZE - 1) & !(MIN_ALLOCATION_SIZE - 1);
