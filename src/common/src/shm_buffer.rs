@@ -62,7 +62,8 @@ impl ShmBuffer {
     /// # Safety
     /// The caller must ensure the shm buffer is valid
     pub unsafe fn at_offset(&self, offset: u64, size: usize) -> Option<*mut u8> {
-        if offset + size as u64 > self.shm_size as u64 {
+        let end = offset.checked_add(size as u64)?;
+        if end > self.shm_size as u64 {
             return None;
         }
         Some((self.shm_addr + offset) as *mut u8)
@@ -78,9 +79,31 @@ impl Drop for ShmBuffer {
         unsafe {
             libc::munmap(self.shm_addr as *mut libc::c_void, self.shm_size);
             libc::close(self.shm_fd);
-            if self.is_creator {
-                libc::shm_unlink(self.shm_path.as_ptr() as *const i8);
+            if self.is_creator
+                && let Ok(path) = std::ffi::CString::new(self.shm_path.as_str())
+            {
+                libc::shm_unlink(path.as_ptr());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn at_offset_bounds() {
+        let name = format!("/nixie-test-at-offset-{}", std::process::id());
+        let buf = ShmBuffer::new(&name, 4096, true).expect("create shm");
+        unsafe {
+            assert!(buf.at_offset(0, 4096).is_some());
+            assert!(buf.at_offset(0, 4097).is_none());
+            assert!(buf.at_offset(4096, 1).is_none());
+            assert!(
+                buf.at_offset(u64::MAX, 16).is_none(),
+                "wrapping offset accepted"
+            );
         }
     }
 }
